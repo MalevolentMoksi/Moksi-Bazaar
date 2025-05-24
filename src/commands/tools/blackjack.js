@@ -2,12 +2,12 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
-const games = new Map(); // in‐memory active games
+const games = new Map(); // active games keyed by userId
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('blackjack')
-    .setDescription('Play a game of blackjack or beg for cash')
+    .setDescription('Play blackjack, beg for cash, or check your balance')
     .addSubcommand(sub =>
       sub
         .setName('start')
@@ -15,159 +15,182 @@ module.exports = {
         .addIntegerOption(opt =>
           opt
             .setName('bet')
-            .setDescription('Amount to bet')
-            .setRequired(true)))
+            .setDescription('Amount to wager')
+            .setRequired(true)
+        )
+    )
     .addSubcommand(sub =>
       sub
         .setName('hit')
-        .setDescription('Draw another card'))
+        .setDescription('Draw another card')
+    )
     .addSubcommand(sub =>
       sub
         .setName('stand')
-        .setDescription('End your turn and let the dealer play'))
+        .setDescription('Finish your turn and let the dealer play')
+    )
     .addSubcommand(sub =>
       sub
         .setName('beg')
-        .setDescription('Get $100 if you are broke')),
-      
+        .setDescription('If you have $0, get $100 to play again')
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName('balance')
+        .setDescription('Check your current balance')
+    ),
+
   async execute(interaction) {
-    const userId   = interaction.user.id;
-    const mention  = interaction.user.toString();
-    const sub      = interaction.options.getSubcommand();
+    const userId  = interaction.user.id;
+    const mention = interaction.user.toString();
+    const sub     = interaction.options.getSubcommand();
     const drawCard = () => Math.floor(Math.random() * 11) + 1;
 
-    // — Beg for cash if broke —
-    if (sub === 'beg') {
-      let bal = await getBalance(userId);
-      if (bal > 0) {
-        return interaction.reply({
-          content: `${mention}, you still have $${bal}. You can only beg if you have $0.`,
-          ephemeral: true
-        });
-      }
-      bal = 100;
-      await updateBalance(userId, bal);
-      return interaction.reply(`${mention}, you have been given $100. Your new balance is $${bal}.`);
-    }
-
-    // — Start a new game —
-    if (sub === 'start') {
-      if (games.has(userId)) {
-        return interaction.reply({
-          content: `${mention}, you already have an active game! Use /blackjack hit or stand.`,
-          ephemeral: true
-        });
+    try {
+      // — Beg for cash if broke —
+      if (sub === 'beg') {
+        const bal = await getBalance(userId);
+        if (bal > 0) {
+          return interaction.reply({
+            content: `${mention}, you still have $${bal}. You can only beg if your balance is $0.`,
+            ephemeral: true
+          });
+        }
+        await updateBalance(userId, 100);
+        return interaction.reply(`${mention}, you have been given $100. Your new balance is $100.`);
       }
 
-      const bet = interaction.options.getInteger('bet');
-      let bal   = await getBalance(userId);
-
-      if (bet <= 0) {
-        return interaction.reply({ content: `${mention}, your bet must be greater than 0.`, ephemeral: true });
-      }
-      if (bet > bal) {
-        return interaction.reply({ content: `${mention}, you only have $${bal} to bet.`, ephemeral: true });
+      // — Check balance anytime —
+      if (sub === 'balance') {
+        const bal = await getBalance(userId);
+        return interaction.reply({ content: `${mention}, your current balance is $${bal}.`, ephemeral: true });
       }
 
-      // Deduct bet up front
-      bal -= bet;
-      await updateBalance(userId, bal);
+      // — Start a new game —
+      if (sub === 'start') {
+        if (games.has(userId)) {
+          return interaction.reply({
+            content: `${mention}, you already have an active game! Use /blackjack hit or /blackjack stand.`,
+            ephemeral: true
+          });
+        }
 
-      // Deal initial hands
-      const playerCards = [drawCard(), drawCard()];
-      const dealerCards = [drawCard(), drawCard()];
+        const bet = interaction.options.getInteger('bet');
+        let bal   = await getBalance(userId);
 
-      // Store game state
-      games.set(userId, { bet, bal, playerCards, dealerCards });
+        if (bet <= 0) {
+          return interaction.reply({ content: `${mention}, your bet must be > 0.`, ephemeral: true });
+        }
+        if (bet > bal) {
+          return interaction.reply({ content: `${mention}, you only have $${bal} to bet.`, ephemeral: true });
+        }
 
-      const playerSum = playerCards.reduce((a,b) => a + b, 0);
-      return interaction.reply(
-        `${mention}, game started with a $${bet} bet!\n` +
-        `Your hand: [${playerCards.join(', ')}] (total ${playerSum}).\n` +
-        `Dealer shows: [${dealerCards[0]}, ?]\n` +
-        `Use /blackjack hit or /blackjack stand.`
-      );
-    }
+        // Deduct bet immediately
+        bal -= bet;
+        await updateBalance(userId, bal);
 
-    // From here on, must have an active game
-    if (!games.has(userId)) {
-      return interaction.reply({
-        content: `${mention}, you have no active game. Use /blackjack start first.`,
-        ephemeral: true
-      });
-    }
+        // Deal initial cards
+        const playerCards = [drawCard(), drawCard()];
+        const dealerCards = [drawCard(), drawCard()];
+        games.set(userId, { bet, bal, playerCards, dealerCards });
 
-    // Pull and update the in‐memory game
-    const game = games.get(userId);
-    let { bet, bal, playerCards, dealerCards } = game;
-
-    // — Hit: draw a card for player —
-    if (sub === 'hit') {
-      const card     = drawCard();
-      playerCards.push(card);
-      const playerSum = playerCards.reduce((a,b) => a + b, 0);
-
-      if (playerSum > 21) {
-        // Player busts → game over
-        games.delete(userId);
+        const playerSum = playerCards.reduce((a,b) => a + b, 0);
         return interaction.reply(
-          `${mention}, you drew a ${card} for [${playerCards.join(', ')}] (total ${playerSum}) and busted!\n` +
-          `You lose your bet of $${bet}. Your balance remains $${bal}.`
+          `${mention}, you’ve bet $${bet}.\n` +
+          `Your hand: [${playerCards.join(', ')}] (total ${playerSum}).\n` +
+          `Dealer shows: [${dealerCards[0]}, ?]\n` +
+          `Use /blackjack hit or /blackjack stand.`
         );
       }
 
-      // Still alive
-      return interaction.reply(
-        `${mention}, you drew a ${card}. Your hand: [${playerCards.join(', ')}] (total ${playerSum}).\n` +
-        `Use /blackjack hit or /blackjack stand.`
-      );
-    }
+      // For hit/stand, ensure an active game exists
+      if (!games.has(userId)) {
+        return interaction.reply({
+          content: `${mention}, you have no active game. Start one with /blackjack start <bet>.`,
+          ephemeral: true
+        });
+      }
 
-    // — Stand: dealer plays out, resolve —
-    if (sub === 'stand') {
-      let dealerSum = dealerCards.reduce((a,b) => a + b, 0);
+      // Pull game state
+      const game = games.get(userId);
+      let { bet, bal, playerCards, dealerCards } = game;
 
-      // Dealer hits until 17+
-      while (dealerSum < 17) {
+      // — Hit: draw one for the player —
+      if (sub === 'hit') {
         const card = drawCard();
-        dealerCards.push(card);
-        dealerSum += card;
+        playerCards.push(card);
+        const playerSum = playerCards.reduce((a,b) => a + b, 0);
+
+        if (playerSum > 21) {
+          games.delete(userId);
+          return interaction.reply(
+            `${mention}, you drew a ${card}. Your hand: [${playerCards.join(', ')}] (total ${playerSum}) and busted!\n` +
+            `You lose your bet of $${bet}. Your balance remains $${bal}.`
+          );
+        }
+
+        return interaction.reply(
+          `${mention}, you drew a ${card}. Your hand: [${playerCards.join(', ')}] (total ${playerSum}).\n` +
+          `Use /blackjack hit or /blackjack stand.`
+        );
       }
 
-      const playerSum = playerCards.reduce((a,b) => a + b, 0);
-      let resultMsg, payout;
+      // — Stand: resolve the hand —
+      if (sub === 'stand') {
+        let dealerSum = dealerCards.reduce((a,b) => a + b, 0);
+        // Dealer hits to 17+
+        while (dealerSum < 17) {
+          const c = drawCard();
+          dealerCards.push(c);
+          dealerSum += c;
+        }
 
-      // Check for player's blackjack on initial deal
-      if (playerCards.length === 2 && playerSum === 21) {
-        payout    = Math.floor(bet * 2.5);
-        resultMsg = `Blackjack! You win $${payout}.`;
-      }
-      // Standard win/lose/push
-      else if (playerSum > 21) {
-        resultMsg = `Bust—dealer wins. You lose $${bet}.`;
-      } else if (dealerSum > 21 || playerSum > dealerSum) {
-        payout    = bet * 2;
-        resultMsg = `You win $${payout}!`;
-      } else if (playerSum === dealerSum) {
-        payout    = bet;
-        resultMsg = `Push—your $${bet} is returned.`;
-      } else {
-        resultMsg = `Dealer wins. You lose $${bet}.`;
-      }
+        const playerSum = playerCards.reduce((a,b) => a + b, 0);
+        let payout = 0, resultMsg;
 
-      // Apply payout if any
-      if (payout) {
+        // Blackjack on initial deal
+        if (playerCards.length === 2 && playerSum === 21) {
+          payout    = Math.floor(bet * 2.5);
+          resultMsg = `Blackjack! You win $${payout}.`;
+        }
+        // Bust
+        else if (playerSum > 21) {
+          resultMsg = `Bust—dealer wins. You lose $${bet}.`;
+        }
+        // Player wins
+        else if (dealerSum > 21 || playerSum > dealerSum) {
+          payout    = bet * 2;
+          resultMsg = `You win $${payout}!`;
+        }
+        // Push
+        else if (playerSum === dealerSum) {
+          payout    = bet;
+          resultMsg = `Push—your $${bet} is returned.`;
+        }
+        // Dealer wins
+        else {
+          resultMsg = `Dealer wins. You lose $${bet}.`;
+        }
+
+        // Update balance
         bal += payout;
-      }
-      await updateBalance(userId, bal);
-      games.delete(userId);
+        await updateBalance(userId, bal);
+        games.delete(userId);
 
-      return interaction.reply(
-        `${mention}, final hands:\n` +
-        `• You: [${playerCards.join(', ')}] (total ${playerSum})\n` +
-        `• Dealer: [${dealerCards.join(', ')}] (total ${dealerSum})\n` +
-        `${resultMsg} Your new balance is $${bal}.`
-      );
+        return interaction.reply(
+          `${mention}, final hands:\n` +
+          `• You:   [${playerCards.join(', ')}] (total ${playerSum})\n` +
+          `• Dealer:[${dealerCards.join(', ')}] (total ${dealerSum})\n` +
+          `${resultMsg} Your new balance is $${bal}.`
+        );
+      }
+
+    } catch (err) {
+      console.error('Blackjack command error:', err);
+      return interaction.reply({
+        content: `${mention}, something went wrong. Please try again later.`,
+        ephemeral: true
+      });
     }
   }
 };
