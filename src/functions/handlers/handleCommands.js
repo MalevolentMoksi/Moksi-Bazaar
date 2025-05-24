@@ -19,16 +19,30 @@ module.exports = (client) => {
         }
 
         const clientId = '1368610037186035794';
+        const guildId = process.env.GUILD_ID;
         const rest = new REST({ version: '9' }).setToken(process.env.TOKEN);
         try {
-            console.log('Started refreshing application (/) commands.');
+            console.log('🔄 Registering global application (/) commands...');
             await rest.put(
-            Routes.applicationCommands(clientId),
-            { body: commandArray }
+                Routes.applicationCommands(clientId),
+                { body: commandArray }
             );
-            console.log('Successfully reloaded application (/) commands.');
+            console.log('✅ Successfully registered global commands.');
         } catch (error) {
-            console.error(error);
+            console.error('❌ Global registration failed:', error);
+        }
+
+        if (guildId) {
+            try {
+                console.log(`🔄 Registering guild commands for dev server (${guildId})...`);
+                await rest.put(
+                    Routes.applicationGuildCommands(clientId, guildId),
+                    { body: commandArray }
+                );
+                console.log('✅ Successfully registered dev guild commands.');
+            } catch (error) {
+                console.error('❌ Guild registration failed:', error);
+            }
         }
     }
 }
