@@ -7,6 +7,12 @@ const client = new Client({ intents: GatewayIntentBits.Guilds });
 client.commands = new Collection();
 // client.colour = "";
 client.commandArray = [];
+client.events        = new Collection();
+
+
+require('./functions/handlers/handleCommands')(client);
+require('./functions/handlers/handleEvents')(client);
+
 
 const functionFolders = fs.readdirSync('./src/functions');
 for (const folder of functionFolders) {
