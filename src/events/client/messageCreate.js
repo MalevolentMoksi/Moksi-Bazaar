@@ -2,41 +2,46 @@
 module.exports = {
   name: 'messageCreate',
   async execute(message, client) {
-    // 1) Ignore bots & wrong prefix
+    // 1) ignore bots & non‐.blackjack messages
     if (message.author.bot) return;
     const prefix = '.blackjack';
-    if (!message.content.toLowerCase().startsWith(prefix)) return;
+    const content = message.content.trim();
+    if (!content.toLowerCase().startsWith(prefix)) return;
 
-    // 2) Parse subcommand + arg
-    const [ , sub = '' , arg = '' ] = message.content
-      .trim()
-      .slice(prefix.length)
-      .trim()
-      .split(/\s+/);
+    // 2) split into [subcommand, arg]
+    //    e.g. ".blackjack play 50" → ["play","50"]
+    const parts = content.slice(prefix.length).trim().split(/\s+/);
+    const rawSub = parts[0]?.toLowerCase() || 'start';
+    const arg    = parts[1];
 
-    const subcommand = sub.toLowerCase() || 'start';
+    // 3) map old "play" → new "start"
+    const sub = rawSub === 'play' ? 'start' : rawSub;
 
-    // 3) Build a “pseudo‐interaction”
+    // 4) build a pseudo-interaction that matches your slash handler
     const interaction = {
       user: message.author,
-      // toString on a User mention works same as interaction.user.toString()
       options: {
-        getSubcommand: () => subcommand,
+        getSubcommand: () => sub,
         getInteger: (name) => {
-          const n = parseInt(arg, 10);
-          return isNaN(n) ? null : n;
+          // only "bet" is used
+          if (name === 'bet') {
+            const n = parseInt(arg, 10);
+            return isNaN(n) ? null : n;
+          }
+          return null;
         }
       },
-      reply: (content) => message.channel.send(content)
+      // reply exactly like slash would, but publicly
+      reply: (resp) => message.channel.send(resp)
     };
 
-    // 4) Lookup the slash‐command handler and call it
+    // 5) dispatch to your existing /blackjack command
     const cmd = client.commands.get('blackjack');
     if (!cmd) return;
     try {
       await cmd.execute(interaction, client);
     } catch (err) {
-      console.error('Prefix‐cmd error:', err);
+      console.error('Prefix‐command error:', err);
       message.channel.send(`⚠️ Something went wrong: ${err.message}`);
     }
   }
