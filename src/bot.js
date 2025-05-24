@@ -17,3 +17,10 @@ for (const folder of functionFolders) {
 client.handleEvents();
 client.handleCommands();
 client.login(process.env.TOKEN);
+
+const { init } = require('./utils/db');
+client.once('ready', async () => {
+  await init();
+  console.log('✅ Database initialized, balances table is ready.');
+  // ... any other ready logic
+});
