@@ -1,55 +1,54 @@
 // src/functions/handlers/handleCommands.js
-const fs         = require('fs');
-const path       = require('path');
-const { REST }   = require('@discordjs/rest');
+const fs = require('fs');
+const path = require('path');
+const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord-api-types/v9');
 
 module.exports = (client) => {
   client.handleCommands = async () => {
-    // 1️⃣ Load and serialize all your slash commands
+    // 1. Gather all commands
     const commands = [];
     const commandsPath = path.join(__dirname, '..', '..', 'commands');
-    for (const folder of fs.readdirSync(commandsPath)) {
-      const folderPath = path.join(commandsPath, folder);
-      if (!fs.lstatSync(folderPath).isDirectory()) continue;
-      for (const file of fs.readdirSync(folderPath).filter(f => f.endsWith('.js'))) {
-        const cmd = require(path.join(folderPath, file));
-        if (cmd.data && cmd.execute) {
-          client.commands.set(cmd.data.name, cmd);
-          commands.push(cmd.data.toJSON());
+    for (const category of fs.readdirSync(commandsPath)) {
+      const categoryPath = path.join(commandsPath, category);
+      if (!fs.lstatSync(categoryPath).isDirectory()) continue;
+      for (const file of fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'))) {
+        const command = require(path.join(categoryPath, file));
+        if (command.data && command.execute) {
+          client.commands.set(command.data.name, command);
+          commands.push(command.data.toJSON());
         }
       }
     }
 
-    // allow either name — Railway is using TOKEN, your local .env might use DISCORD_TOKEN
-    const token = process.env.TOKEN;
-
+    // 2. Read env-vars (Railway uses TOKEN; locally you might use DISCORD_TOKEN)
+    const token    = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
     const clientId = process.env.CLIENT_ID;
-
     if (!token) {
-      console.error('❌ Missing DISCORD_TOKEN — commands will not register.');
+      console.error('❌ Missing TOKEN / DISCORD_TOKEN env var — commands will not register.');
       return;
     }
     if (!clientId) {
-      console.error('❌ Missing CLIENT_ID — commands will not register.');
+      console.error('❌ Missing CLIENT_ID env var — commands will not register.');
       return;
     }
 
-    // 2️⃣ Create one REST instance with your token
+    // 3. Create one REST instance with your token
     const rest = new REST({ version: '9' }).setToken(token);
 
-    // 3️⃣ Once we're ready, push the commands in *every* guild
+    // 4. On ready, push commands to every guild
     client.once('ready', async () => {
+      console.log(`Logged in as ${client.user.tag}. Registering ${commands.length} commands…`);
       for (const guild of client.guilds.cache.values()) {
-        console.log(`🔄 Registering commands in guild ${guild.id} (${guild.name})…`);
         try {
+          console.log(`🔄 Registering commands in guild ${guild.id} (${guild.name})…`);
           await rest.put(
             Routes.applicationGuildCommands(clientId, guild.id),
             { body: commands }
           );
           console.log(`✅ Commands registered in ${guild.name}`);
-        } catch (err) {
-          console.error(`❌ Failed to register in ${guild.id}:`, err);
+        } catch (error) {
+          console.error(`❌ Failed to register in ${guild.id}:`, error);
         }
       }
     });
