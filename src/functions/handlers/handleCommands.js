@@ -21,8 +21,11 @@ module.exports = (client) => {
       }
     }
 
-    const token    = process.env.DISCORD_TOKEN;
-    const clientId = process.env.CLIENT_ID;
+    // allow either name — Railway is using TOKEN, your local .env might use DISCORD_TOKEN
+    const token = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
+
+    const clientId = process.env.CLIENT_ID ?? process.env.CLIENT_ID_FALLBACK;
+
     if (!token) {
       console.error('❌ Missing DISCORD_TOKEN — commands will not register.');
       return;
