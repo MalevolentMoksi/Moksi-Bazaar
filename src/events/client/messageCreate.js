@@ -2,46 +2,49 @@
 module.exports = {
   name: 'messageCreate',
   async execute(message, client) {
-    // 1) ignore bots & non‐.blackjack messages
+    // Ignore bots
     if (message.author.bot) return;
-    const prefix = '.blackjack';
+
     const content = message.content.trim();
-    if (!content.toLowerCase().startsWith(prefix)) return;
+    // Only handle messages starting with "."
+    if (!content.startsWith('.')) return;
 
-    // 2) split into [subcommand, arg]
-    //    e.g. ".blackjack play 50" → ["play","50"]
-    const parts = content.slice(prefix.length).trim().split(/\s+/);
-    const rawSub = parts[0]?.toLowerCase() || 'start';
-    const arg    = parts[1];
+    // Split into [cmdName, subcommand, arg, ...]
+    // e.g. ".bj play 50" → ["bj","play","50"]
+    const parts = content.slice(1).split(/\s+/);
+    const cmdName = parts[0].toLowerCase();
+    const rawSub = parts[1]?.toLowerCase() || 'start';
+    const arg    = parts[2];
 
-    // 3) map old "play" → new "start"
-    const sub = rawSub === 'play' ? 'start' : rawSub;
+    // Try to find a matching command
+    const cmd = client.commands.get(cmdName);
+    if (!cmd) return;
 
-    // 4) build a pseudo-interaction that matches your slash handler
+    // Map old ".bj play" → sub "start"
+    const sub = (cmdName === 'bj' && rawSub === 'play') ? 'start' : rawSub;
+
+    // Build a pseudo-interaction for your slash‐style handlers
     const interaction = {
       user: message.author,
       options: {
         getSubcommand: () => sub,
-        getInteger: (name) => {
-          // only "bet" is used
+        getInteger: name => {
           if (name === 'bet') {
             const n = parseInt(arg, 10);
-            return isNaN(n) ? null : n;
+            return Number.isNaN(n) ? null : n;
           }
           return null;
         }
       },
-      // reply exactly like slash would, but publicly
-      reply: (resp) => message.channel.send(resp)
+      // Reply publicly
+      reply: resp => message.channel.send(resp)
     };
 
-    // 5) dispatch to your existing /blackjack command
-    const cmd = client.commands.get('blackjack');
-    if (!cmd) return;
+    // Dispatch
     try {
-      await cmd.execute(interaction, client);
+      await cmd.execute(interaction);
     } catch (err) {
-      console.error('Prefix‐command error:', err);
+      console.error('Prefix-command error:', err);
       message.channel.send(`⚠️ Something went wrong: ${err.message}`);
     }
   }
