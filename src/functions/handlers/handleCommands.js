@@ -6,7 +6,7 @@ const { Routes } = require('discord-api-types/v9');
 
 module.exports = (client) => {
   client.handleCommands = async () => {
-    // 1️⃣ Load every command from src/commands/*/*
+    // load all commands as before…
     const commands = [];
     const commandsPath = path.join(__dirname, '..', '..', 'commands');
     for (const category of fs.readdirSync(commandsPath)) {
@@ -21,43 +21,42 @@ module.exports = (client) => {
       }
     }
 
-    // 2️⃣ Build a REST client
     const token = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
     if (!token) {
-      console.error('❌ Missing DISCORD_TOKEN / TOKEN — skipping slash-registration.');
+      console.error('❌ Missing DISCORD_TOKEN/TOKEN — skipping registration');
       return;
     }
     const rest = new REST({ version: '9' }).setToken(token);
 
-    // 3️⃣ As soon as the bot is ready…
     client.once('ready', async () => {
-      // derive appId from env or from the logged-in user
       const appId = process.env.CLIENT_ID ?? client.user.id;
-      console.log(`Logged in as ${client.user.tag} (appId=${appId})`);
+      console.log(`🔑 App ID: ${appId}`);
 
-      // 🔥 Purge *all* global commands
+      // 1️⃣ Fetch existing global commands…
+      let globalCmds = [];
       try {
-        console.log('🗑 Clearing all global slash-commands…');
-        await rest.put(
-          Routes.applicationCommands(appId),
-          { body: [] }
-        );
-        console.log('✅ Global commands cleared.');
+        globalCmds = await rest.get(Routes.applicationCommands(appId));
       } catch (err) {
-        console.error('❌ Failed to clear global commands:', err);
+        console.error('❌ Could not fetch global commands:', err);
       }
 
-      // 🔄 Register every command in each guild (instant `/` availability)
+      // 2️⃣ Delete each one individually
+      await Promise.all(globalCmds.map(cmd =>
+        rest.delete(Routes.applicationCommand(appId, cmd.id))
+           .then(() => console.log(`🗑 Deleted global /${cmd.name}`))
+           .catch(err => console.error(`❌ Failed to delete /${cmd.name}:`, err))
+      ));
+
+      // 3️⃣ Now re-register all of your local commands _per guild_ for instant availability
       for (const guild of client.guilds.cache.values()) {
         try {
-          console.log(`🔄 Registering ${commands.length} commands in ${guild.name} (${guild.id})…`);
           await rest.put(
             Routes.applicationGuildCommands(appId, guild.id),
             { body: commands }
           );
-          console.log(`✅ Done in ${guild.name}`);
+          console.log(`✅ Registered ${commands.length} commands in ${guild.name}`);
         } catch (err) {
-          console.error(`❌ Failed in ${guild.id}:`, err);
+          console.error(`❌ Failed guild‐register in ${guild.id}:`, err);
         }
       }
     });
