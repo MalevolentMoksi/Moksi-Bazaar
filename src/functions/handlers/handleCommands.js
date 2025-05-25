@@ -6,7 +6,7 @@ const { Routes } = require('discord-api-types/v9');
 
 module.exports = (client) => {
   client.handleCommands = async () => {
-    // 1️⃣ Gather all commands from src/commands/**/*
+    // 1️⃣ Load every command from src/commands/*/*
     const commands = [];
     const commandsPath = path.join(__dirname, '..', '..', 'commands');
     for (const category of fs.readdirSync(commandsPath)) {
@@ -21,44 +21,43 @@ module.exports = (client) => {
       }
     }
 
-    // 2️⃣ Read your bot token & app ID
-    const token    = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
-    const appId    = process.env.CLIENT_ID;
-    if (!token || !appId) {
-      console.error('❌ Missing TOKEN / DISCORD_TOKEN or CLIENT_ID — commands will not register.');
+    // 2️⃣ Build a REST client
+    const token = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
+    if (!token) {
+      console.error('❌ Missing DISCORD_TOKEN / TOKEN — skipping slash-registration.');
       return;
     }
-
-    // 3️⃣ Create one REST instance with your token
     const rest = new REST({ version: '9' }).setToken(token);
 
-    // 4️⃣ Once ready...
+    // 3️⃣ As soon as the bot is ready…
     client.once('ready', async () => {
-      console.log(`Logged in as ${client.user.tag} (appId=${appId}).`);
+      // derive appId from env or from the logged-in user
+      const appId = process.env.CLIENT_ID ?? client.user.id;
+      console.log(`Logged in as ${client.user.tag} (appId=${appId})`);
 
-      // 🔥 Clear all *global* commands
+      // 🔥 Purge *all* global commands
       try {
-        console.log('🗑️  Clearing all global slash-commands…');
+        console.log('🗑 Clearing all global slash-commands…');
         await rest.put(
           Routes.applicationCommands(appId),
           { body: [] }
         );
-        console.log('✅ Global slash-commands cleared.');
+        console.log('✅ Global commands cleared.');
       } catch (err) {
         console.error('❌ Failed to clear global commands:', err);
       }
 
-      // 🔄 Register commands *per-guild* for instant availability
+      // 🔄 Register every command in each guild (instant `/` availability)
       for (const guild of client.guilds.cache.values()) {
         try {
-          console.log(`🔄 Registering ${commands.length} commands in guild ${guild.name} (${guild.id})…`);
+          console.log(`🔄 Registering ${commands.length} commands in ${guild.name} (${guild.id})…`);
           await rest.put(
             Routes.applicationGuildCommands(appId, guild.id),
             { body: commands }
           );
-          console.log(`✅ Registered in ${guild.name}`);
-        } catch (error) {
-          console.error(`❌ Failed to register in ${guild.id}:`, error);
+          console.log(`✅ Done in ${guild.name}`);
+        } catch (err) {
+          console.error(`❌ Failed in ${guild.id}:`, err);
         }
       }
     });
