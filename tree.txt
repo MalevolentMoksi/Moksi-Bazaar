@@ -1,0 +1,192 @@
+C:.
+├───.vs
+│   └───Moksi's Bazaar
+│       ├───copilot-chat
+│       │   └───d8bf09d1
+│       │       └───sessions
+│       ├───CopilotIndices
+│       │   └───17.14.698.11175
+│       ├───FileContentIndex
+│       └───v17
+├───node_modules
+│   ├───@discordjs
+│   │   ├───builders
+│   │   │   └───dist
+│   │   ├───collection
+│   │   │   └───dist
+│   │   ├───formatters
+│   │   │   └───dist
+│   │   ├───rest
+│   │   │   └───dist
+│   │   │       └───strategies
+│   │   ├───util
+│   │   │   └───dist
+│   │   └───ws
+│   │       └───dist
+│   ├───@sapphire
+│   │   ├───async-queue
+│   │   │   └───dist
+│   │   │       ├───cjs
+│   │   │       ├───esm
+│   │   │       └───iife
+│   │   ├───shapeshift
+│   │   │   └───dist
+│   │   │       ├───cjs
+│   │   │       ├───esm
+│   │   │       └───iife
+│   │   └───snowflake
+│   │       └───dist
+│   │           ├───cjs
+│   │           ├───esm
+│   │           └───iife
+│   ├───@types
+│   │   ├───node
+│   │   │   ├───assert
+│   │   │   ├───compatibility
+│   │   │   ├───dns
+│   │   │   ├───fs
+│   │   │   ├───readline
+│   │   │   ├───stream
+│   │   │   ├───timers
+│   │   │   └───ts5.6
+│   │   └───ws
+│   ├───@vladfrangu
+│   │   └───async_event_emitter
+│   │       └───dist
+│   ├───ansi-styles
+│   ├───chalk
+│   │   └───source
+│   ├───color-convert
+│   ├───color-name
+│   ├───discord-api-types
+│   │   ├───gateway
+│   │   ├───payloads
+│   │   │   ├───v10
+│   │   │   │   └───_interactions
+│   │   │   │       └───_applicationCommands
+│   │   │   │           └───_chatInput
+│   │   │   ├───v6
+│   │   │   ├───v8
+│   │   │   │   └───_interactions
+│   │   │   │       └───_applicationCommands
+│   │   │   │           └───_chatInput
+│   │   │   └───v9
+│   │   │       └───_interactions
+│   │   │           └───_applicationCommands
+│   │   │               └───_chatInput
+│   │   ├───rest
+│   │   │   ├───v10
+│   │   │   ├───v6
+│   │   │   ├───v8
+│   │   │   └───v9
+│   │   ├───rpc
+│   │   ├───utils
+│   │   └───voice
+│   ├───discord.js
+│   │   ├───node_modules
+│   │   │   ├───@discordjs
+│   │   │   │   └───collection
+│   │   │   │       └───dist
+│   │   │   └───@sapphire
+│   │   │       └───snowflake
+│   │   │           └───dist
+│   │   │               ├───cjs
+│   │   │               ├───esm
+│   │   │               └───iife
+│   │   ├───src
+│   │   │   ├───client
+│   │   │   │   ├───actions
+│   │   │   │   ├───voice
+│   │   │   │   └───websocket
+│   │   │   │       └───handlers
+│   │   │   ├───errors
+│   │   │   ├───managers
+│   │   │   ├───sharding
+│   │   │   ├───structures
+│   │   │   │   └───interfaces
+│   │   │   └───util
+│   │   └───typings
+│   ├───dotenv
+│   │   └───lib
+│   ├───fast-deep-equal
+│   │   └───es6
+│   ├───has-flag
+│   ├───lodash
+│   │   └───fp
+│   ├───lodash.snakecase
+│   ├───magic-bytes.js
+│   │   └───dist
+│   │       └───model
+│   ├───pg
+│   │   ├───esm
+│   │   └───lib
+│   │       ├───crypto
+│   │       └───native
+│   ├───pg-cloudflare
+│   │   ├───dist
+│   │   ├───esm
+│   │   └───src
+│   ├───pg-connection-string
+│   │   └───esm
+│   ├───pg-int8
+│   ├───pg-pool
+│   │   └───esm
+│   ├───pg-protocol
+│   │   ├───dist
+│   │   ├───esm
+│   │   └───src
+│   │       ├───testing
+│   │       └───types
+│   ├───pg-types
+│   │   ├───lib
+│   │   └───test
+│   ├───pgpass
+│   │   └───lib
+│   ├───postgres-array
+│   ├───postgres-bytea
+│   ├───postgres-date
+│   ├───postgres-interval
+│   ├───split2
+│   ├───supports-color
+│   ├───ts-mixer
+│   │   └───dist
+│   │       ├───cjs
+│   │       ├───esm
+│   │       └───types
+│   ├───tslib
+│   │   └───modules
+│   ├───undici
+│   │   ├───docs
+│   │   │   └───docs
+│   │   │       ├───api
+│   │   │       └───best-practices
+│   │   ├───lib
+│   │   │   ├───api
+│   │   │   ├───core
+│   │   │   ├───dispatcher
+│   │   │   ├───handler
+│   │   │   ├───interceptor
+│   │   │   ├───llhttp
+│   │   │   ├───mock
+│   │   │   ├───util
+│   │   │   └───web
+│   │   │       ├───cache
+│   │   │       ├───cookies
+│   │   │       ├───eventsource
+│   │   │       ├───fetch
+│   │   │       ├───fileapi
+│   │   │       └───websocket
+│   │   ├───scripts
+│   │   └───types
+│   ├───undici-types
+│   ├───ws
+│   │   └───lib
+│   └───xtend
+└───src
+    ├───commands
+    │   └───tools
+    ├───events
+    │   └───client
+    ├───functions
+    │   └───handlers
+    └───utils
