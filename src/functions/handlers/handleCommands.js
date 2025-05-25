@@ -21,30 +21,42 @@ module.exports = (client) => {
       }
     }
 
-    // 2️⃣ Read your bot token (Railway uses TOKEN; locally you might use DISCORD_TOKEN)
-    const token = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
-    if (!token) {
-      console.error('❌ Missing TOKEN / DISCORD_TOKEN env var — commands will not register.');
+    // 2️⃣ Read your bot token & app ID
+    const token    = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
+    const appId    = process.env.CLIENT_ID;
+    if (!token || !appId) {
+      console.error('❌ Missing TOKEN / DISCORD_TOKEN or CLIENT_ID — commands will not register.');
       return;
     }
 
     // 3️⃣ Create one REST instance with your token
     const rest = new REST({ version: '9' }).setToken(token);
 
-    // 4️⃣ Once ready, register commands in every guild
+    // 4️⃣ Once ready...
     client.once('ready', async () => {
-      // derive your application ID from the logged-in user if no env var
-      const appId = process.env.CLIENT_ID ?? client.user.id;
-      console.log(`Logged in as ${client.user.tag} (appId=${appId}). Registering ${commands.length} commands…`);
+      console.log(`Logged in as ${client.user.tag} (appId=${appId}).`);
 
+      // 🔥 Clear all *global* commands
+      try {
+        console.log('🗑️  Clearing all global slash-commands…');
+        await rest.put(
+          Routes.applicationCommands(appId),
+          { body: [] }
+        );
+        console.log('✅ Global slash-commands cleared.');
+      } catch (err) {
+        console.error('❌ Failed to clear global commands:', err);
+      }
+
+      // 🔄 Register commands *per-guild* for instant availability
       for (const guild of client.guilds.cache.values()) {
         try {
-          console.log(`🔄 Registering commands in guild ${guild.id} (${guild.name})…`);
+          console.log(`🔄 Registering ${commands.length} commands in guild ${guild.name} (${guild.id})…`);
           await rest.put(
             Routes.applicationGuildCommands(appId, guild.id),
             { body: commands }
           );
-          console.log(`✅ Commands registered in ${guild.name}`);
+          console.log(`✅ Registered in ${guild.name}`);
         } catch (error) {
           console.error(`❌ Failed to register in ${guild.id}:`, error);
         }
