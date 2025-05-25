@@ -6,7 +6,7 @@ module.exports = {
     .setName('currency')
     .setDescription('Beg for cash or check your balance')
     .addSubcommand(sub =>
-      sub.setName('beg').setDescription('Get random cash when you have $0')
+      sub.setName('beg').setDescription('Get down on your knees and beg for cash')
     )
     .addSubcommand(sub =>
       sub.setName('balance').setDescription('Check your current balance')
