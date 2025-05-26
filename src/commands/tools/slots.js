@@ -51,8 +51,8 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       `${preview[6]} ${preview[7]} ${preview[8]}`;
     spinEmbed.data.fields[2].value = grid;
     // show the *potential* new balance immediately
-    resultEmbed.setFooter({
-      text: `Balance: $${(balanceAfterBet + payout).toFixed(2)}`
+    spinEmbed.setFooter({
+      text: `Balance: $${balanceAfterBet.toFixed(2)}`
     });
 
     await msg.edit({ embeds: [spinEmbed] });
