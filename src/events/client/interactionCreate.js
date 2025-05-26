@@ -16,6 +16,10 @@ module.exports = {
                     ephemeral: true
                 });
             }
+        } else if (interaction.isButton()) {
+            // Acknowledge the click so Discord doesn't timeout.
+            // The collector attached in your command will then fire.
+            return interaction.deferUpdate();
         }
     }
 }
