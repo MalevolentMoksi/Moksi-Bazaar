@@ -204,6 +204,7 @@ function attachCollector(msg, userId, mention) {
     const againCollector = i.message.createMessageComponentCollector({
       componentType: ComponentType.Button,
       time: 60000,
+      max: 1,    // ← stop after one click
       filter: btn =>
         btn.user.id === userId &&
         btn.customId === `playagain_${userId}`
