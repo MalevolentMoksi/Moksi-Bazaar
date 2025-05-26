@@ -133,16 +133,8 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       }
     );
 
-  // always add “Play Again”
-  const row = new ActionRowBuilder()
-    .addComponents(
-      new ButtonBuilder()
-        .setCustomId('play_again')
-        .setLabel('Play Again')
-        .setStyle(ButtonStyle.Success)
-    );
-
-  // only if you have a win do we add double/collect
+  // Decide initial buttons: on a win, only Double & Collect; on a loss, only Play Again
+  const row = new ActionRowBuilder();
   if (payout > 0) {
     row.addComponents(
       new ButtonBuilder()
@@ -154,8 +146,14 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
         .setLabel('Collect')
         .setStyle(ButtonStyle.Primary)
     );
+  } else {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('play_again')
+        .setLabel('Play Again')
+        .setStyle(ButtonStyle.Success)
+    );
   }
-
   await msg.edit({ embeds: [resultEmbed], components: [row] });
 
   // — Step 7) Collector for all three buttons —
@@ -212,9 +210,16 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       : '💥 You busted! You get nothing.';
 
     resultEmbed.setFooter({ text: `New balance: $${finalBalance.toFixed(2)}` });
-    // disable all buttons
-    row.components.forEach(b => b.setDisabled(true));
-    await i.update({ embeds: [resultEmbed], components: [row] });
+
+    // After resolving a win, swap in only "Play Again"
+    const againRow = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('play_again')
+          .setLabel('Play Again')
+          .setStyle(ButtonStyle.Success)
+      );
+    await i.update({ embeds: [resultEmbed], components: [againRow] });
   });
 }
 
