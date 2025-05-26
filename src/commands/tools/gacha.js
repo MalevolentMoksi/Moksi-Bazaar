@@ -27,9 +27,14 @@ module.exports = {
         ephemeral: false
       });
     }
+
     // Set a random cooldown between 2 and 10 minutes (in ms)
     const randomCooldown = (Math.floor(Math.random() * (10 - 2 + 1)) + 2) * 60 * 1000;
     cooldowns.set(userId, { last: now, cooldown: randomCooldown });
+
+    // Compute next availability for embed
+    const nextMins = Math.floor(randomCooldown / 1000 / 60);
+    const nextSecs = Math.floor((randomCooldown / 1000) % 60);
 
     // Define rarities with weights, embed colors, and reward ranges
     const tiers = [
@@ -67,12 +72,17 @@ module.exports = {
       Legendary: '🐉'  // Dragon
     };
 
-    // Build and send an embed result with dynamic emoji
+    // Build and send an embed result with dynamic emoji and cooldown info
     const emoji = emojis[chosen.name] || '🎁';
     const embed = new EmbedBuilder()
       .setTitle(`${emoji} ${chosen.name} Loot Box`)
       .setColor(chosen.color)
-      .setDescription(`You won **$${reward}**!\nYour new balance is **$${updated}**.`);
+      .setDescription(`You won **$${reward}**!\nYour new balance is **$${updated}**.`)
+      .addFields({
+        name: 'Next Loot Box',
+        value: `Available in **${nextMins}m ${nextSecs}s**`,
+        inline: false
+      });
 
     await interaction.reply({ embeds: [embed] });
   }
