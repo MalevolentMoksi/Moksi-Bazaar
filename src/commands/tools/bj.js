@@ -42,6 +42,147 @@ const calculateTotal = (cards) => {
 
 const isBlackjack = (cards) => cards.length === 2 && calculateTotal(cards) === 21;
 
+/**
+ * Kick off a fresh blackjack hand for userId with bet amount.
+ * Returns the Message (so we can hook a collector on it).
+ */
+async function startHand(interaction, userId, bet, mention) {
+  let bal = await getBalance(userId);
+  bal -= bet;
+  await updateBalance(userId, bal);
+
+  const playerCards = [drawCard(), drawCard()];
+  const dealerCards = [drawCard(), drawCard()];
+  games.set(userId, { bet, bal, playerCards, dealerCards, doubled: false, firstAction: true });
+
+  const actionRow = new ActionRowBuilder()
+    .addComponents(
+      new ButtonBuilder().setCustomId(`hit_${userId}`).setLabel('Hit').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`stand_${userId}`).setLabel('Stand').setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`double_${userId}`)
+        .setLabel(`Double ($${bet})`)
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(bal < bet)
+    );
+
+  return interaction.reply({
+    content:
+      `${mention}, wagered $${bet}.\n` +
+      `**Your hand:** [${playerCards.map(c=>c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
+      `**Dealer shows:** [${dealerCards[0].display}, ?]`,
+    components: [actionRow],
+    fetchReply: true
+  });
+}
+
+/**
+ * Attach button collector to handle game interactions
+ */
+function attachCollector(msg, userId, mention) {
+  const collector = msg.createMessageComponentCollector({
+    componentType: ComponentType.Button,
+    time: 120000,
+    filter: (i) => i.user.id === userId
+  });
+
+  collector.on('collect', async i => {
+    await i.deferUpdate();
+    let game = games.get(userId);
+    if (!game) return;
+
+    let { bet, bal, playerCards, dealerCards, doubled, firstAction } = game;
+
+    // Double
+    if (i.customId === `double_${userId}` && !doubled && firstAction) {
+      if (bal < bet) return i.followUp({ content: `${mention}, insufficient funds to double.`, ephemeral: true });
+      bal -= bet;
+      await updateBalance(userId, bal);
+      bet *= 2;
+      doubled = true;
+      playerCards.push(drawCard());
+      firstAction = false;
+      playDealer(dealerCards);
+    }
+
+    // Hit
+    else if (i.customId === `hit_${userId}`) {
+      playerCards.push(drawCard());
+      firstAction = false;
+      actionRow.components[2].setDisabled(true); // disable double after first hit
+      if (calculateTotal(playerCards) <= 21) {
+        games.set(userId, { bet, bal, playerCards, dealerCards, doubled, firstAction });
+        return i.editReply({
+          content:
+            `${mention}, drew ${playerCards[playerCards.length - 1].display}.\n` +
+            `**Your hand:** [${playerCards.map((c) => c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
+            `**Dealer shows:** [${dealerCards[0].display}, ?]`,
+          components: [actionRow]
+        });
+      }
+    }
+
+    // Stand or bust or double resolution path (common)
+    if (i.customId === `stand_${userId}` || calculateTotal(playerCards) > 21 || doubled) {
+      playDealer(dealerCards);
+    }
+
+    const playerTotal = calculateTotal(playerCards);
+    const dealerTotal = calculateTotal(dealerCards);
+    let payout = 0;
+    let result;
+    if (playerTotal > 21) {
+      result = `Bust — you lose $${bet}.`;
+    } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
+      payout = bet * 2;
+      result = `You win $${payout}!`;
+    } else if (playerTotal === dealerTotal) {
+      payout = bet;
+      result = `Push — $${bet} returned.`;
+    } else {
+      result = `Dealer wins — you lose $${bet}.`;
+    }
+
+    bal += payout;
+    await updateBalance(userId, bal);
+    games.delete(userId);
+    actionRow.components.forEach(b => b.setDisabled(true));
+
+    const playAgainRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`playagain_${userId}`)
+        .setLabel('Play Again')
+        .setStyle(ButtonStyle.Success)
+    );
+
+    await i.editReply({
+      content:
+        `${mention}, **Final Hands**\n` +
+        `• You: [${playerCards.map((c) => c.display).join(', ')}] (${playerTotal})\n` +
+        `• Dealer: [${dealerCards.map((c) => c.display).join(', ')}] (${dealerTotal})\n` +
+        `${result} Balance: $${bal}.`,
+      components: [playAgainRow]
+    });
+
+    const againCollector = i.message.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: 60000,
+      filter: btn => btn.user.id === userId && btn.customId === `playagain_${userId}`
+    });
+
+    againCollector.on('collect', async btn => {
+      await btn.deferUpdate();
+      let currentBal = await getBalance(userId);
+      if (currentBal < bet) {
+        return btn.followUp({ content: `❌ You need $${bet} to play again, you have $${currentBal}.`, ephemeral: true });
+      }
+      games.delete(userId);
+      await startHand(btn, userId, bet, mention);
+      attachCollector(btn.message, userId, mention);
+    });
+  });
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('bj')
@@ -68,154 +209,11 @@ module.exports = {
     // Validate bet
     const bet = interaction.options.getInteger('bet');
     let bal = await getBalance(userId);
-    if (bet <= 0) return interaction.reply({ content: `${mention}, bet must be > 0.`, ephemeral: true });
-    if (bet > bal) return interaction.reply({ content: `${mention}, insufficient funds.`, ephemeral: true });
-
-    // Debit bet
-    bal -= bet;
-    await updateBalance(userId, bal);
-
-    // Deal
-    const playerCards = [drawCard(), drawCard()];
-    const dealerCards = [drawCard(), drawCard()];
-    games.set(userId, { bet, bal, playerCards, dealerCards, doubled: false, firstAction: true });
-
-    const playerBJ = isBlackjack(playerCards);
-    const dealerBJ = isBlackjack(dealerCards);
-
-    if (playerBJ || dealerBJ) {
-      let payout = 0;
-      let msg;
-      if (playerBJ && dealerBJ) {
-        payout = bet;
-        msg = 'Push — both blackjack.';
-      } else if (playerBJ) {
-        payout = bet + Math.floor(bet * 1.5);
-        msg = `Blackjack! You win $${payout - bet}.`;
-      } else {
-        msg = `Dealer blackjack — you lose $${bet}.`;
-      }
-      bal += payout;
-      await updateBalance(userId, bal);
-      games.delete(userId);
-      return interaction.reply({
-        content:
-          `${mention}, **Final Hands**\n` +
-          `• You: [${playerCards.map((c) => c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
-          `• Dealer: [${dealerCards.map((c) => c.display).join(', ')}] (${calculateTotal(dealerCards)})\n` +
-          `${msg} Balance: $${bal}.`
-      });
+    if (bet <= 0 || bet > bal) {
+      return interaction.reply({ content: `${mention}, invalid bet.`, ephemeral: true });
     }
 
-    // Build buttons
-    const actionRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`hit_${userId}`).setLabel('Hit').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`stand_${userId}`).setLabel('Stand').setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`double_${userId}`)
-        .setLabel(`Double ($${bet})`)
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(bal < bet)
-    );
-
-    const reply = await interaction.reply({
-      content:
-        `${mention}, wagered $${bet}.\n` +
-        `**Your hand:** [${playerCards.map((c) => c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
-        `**Dealer shows:** [${dealerCards[0].display}, ?]`,
-      components: [actionRow],
-      fetchReply: true
-    });
-
-    const collector = reply.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: 120000,
-      filter: (i) => i.user.id === userId
-    });
-
-    // Helper: finish dealer hand (stand on every 17)
-    const playDealer = (dCards) => {
-      while (calculateTotal(dCards) < 17) {
-        dCards.push(drawCard());
-      }
-    };
-
-    collector.on('collect', async (i) => {
-      await i.deferUpdate();
-      let game = games.get(userId);
-      if (!game) return;
-
-      let { bet, bal, playerCards, dealerCards, doubled, firstAction } = game;
-
-      // Double
-      if (i.customId === `double_${userId}` && !doubled && firstAction) {
-        if (bal < bet) return i.followUp({ content: `${mention}, insufficient funds to double.`, ephemeral: true });
-        bal -= bet;
-        await updateBalance(userId, bal);
-        bet *= 2;
-        doubled = true;
-        playerCards.push(drawCard());
-        firstAction = false;
-        playDealer(dealerCards);
-      }
-
-      // Hit
-      else if (i.customId === `hit_${userId}`) {
-        playerCards.push(drawCard());
-        firstAction = false;
-        actionRow.components[2].setDisabled(true); // disable double after first hit
-        if (calculateTotal(playerCards) <= 21) {
-          games.set(userId, { bet, bal, playerCards, dealerCards, doubled, firstAction });
-          return i.editReply({
-            content:
-              `${mention}, drew ${playerCards[playerCards.length - 1].display}.\n` +
-              `**Your hand:** [${playerCards.map((c) => c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
-              `**Dealer shows:** [${dealerCards[0].display}, ?]`,
-            components: [actionRow]
-          });
-        }
-      }
-
-      // Stand or bust or double resolution path (common)
-      if (i.customId === `stand_${userId}` || calculateTotal(playerCards) > 21 || doubled) {
-        playDealer(dealerCards);
-      }
-
-      const playerTotal = calculateTotal(playerCards);
-      const dealerTotal = calculateTotal(dealerCards);
-      let payout = 0;
-      let result;
-      if (playerTotal > 21) {
-        result = `Bust — you lose $${bet}.`;
-      } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
-        payout = bet * 2;
-        result = `You win $${payout}!`;
-      } else if (playerTotal === dealerTotal) {
-        payout = bet;
-        result = `Push — $${bet} returned.`;
-      } else {
-        result = `Dealer wins — you lose $${bet}.`;
-      }
-
-      bal += payout;
-      await updateBalance(userId, bal);
-      games.delete(userId);
-      actionRow.components.forEach((b) => b.setDisabled(true));
-
-      return i.editReply({
-        content:
-          `${mention}, **Final Hands**\n` +
-          `• You: [${playerCards.map((c) => c.display).join(', ')}] (${playerTotal})\n` +
-          `• Dealer: [${dealerCards.map((c) => c.display).join(', ')}] (${dealerTotal})\n` +
-          `${result} Balance: $${bal}.`,
-        components: [actionRow]
-      });
-    });
-
-    collector.on('end', () => {
-      const game = games.get(userId);
-      if (!game) return; // already finished
-      games.delete(userId);
-    });
+    const msg = await startHand(interaction, userId, bet, mention);
+    attachCollector(msg, userId, mention);
   }
 };
