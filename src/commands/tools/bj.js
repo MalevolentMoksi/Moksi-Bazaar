@@ -53,7 +53,6 @@ async function startHand(interaction, userId, bet, mention) {
 
   const playerCards = [drawCard(), drawCard()];
   const dealerCards = [drawCard(), drawCard()];
-  games.set(userId, { bet, bal, playerCards, dealerCards, doubled: false, firstAction: true });
 
   const actionRow = new ActionRowBuilder()
     .addComponents(
@@ -65,6 +64,17 @@ async function startHand(interaction, userId, bet, mention) {
         .setStyle(ButtonStyle.Danger)
         .setDisabled(bal < bet)
     );
+
+  // Store actionRow with game state
+  games.set(userId, {
+    bet,
+    bal,
+    playerCards,
+    dealerCards,
+    doubled: false,
+    firstAction: true,
+    actionRow // Add actionRow to game state
+  });
 
   return interaction.reply({
     content:
@@ -91,7 +101,8 @@ function attachCollector(msg, userId, mention) {
     let game = games.get(userId);
     if (!game) return;
 
-    let { bet, bal, playerCards, dealerCards, doubled, firstAction } = game;
+    // Destructure actionRow along with other game state
+    let { bet, bal, playerCards, dealerCards, doubled, firstAction, actionRow } = game;
 
     // Double
     if (i.customId === `double_${userId}` && !doubled && firstAction) {
@@ -111,7 +122,8 @@ function attachCollector(msg, userId, mention) {
       firstAction = false;
       actionRow.components[2].setDisabled(true); // disable double after first hit
       if (calculateTotal(playerCards) <= 21) {
-        games.set(userId, { bet, bal, playerCards, dealerCards, doubled, firstAction });
+        // Include actionRow in updated game state
+        games.set(userId, { bet, bal, playerCards, dealerCards, doubled, firstAction, actionRow });
         return i.editReply({
           content:
             `${mention}, drew ${playerCards[playerCards.length - 1].display}.\n` +
