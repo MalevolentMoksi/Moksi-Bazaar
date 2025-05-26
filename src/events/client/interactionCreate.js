@@ -18,12 +18,9 @@ module.exports = {
                 });
             }
         } else if (interaction.isButton()) {
-            try {
-                // Acknowledge the button click immediately to prevent timeout
-                await interaction.deferUpdate();
-            } catch (error) {
-                console.error('Failed to acknowledge button click:', error);
-            }
+            // let the individual command's collector call deferUpdate()/update()
+            // so we don't double‐ack and we don't swallow the event.
+            return;
         }
     }
 };
