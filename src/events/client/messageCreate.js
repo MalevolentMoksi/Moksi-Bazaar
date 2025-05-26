@@ -12,7 +12,19 @@ module.exports = {
     // Split into [cmdName, subcommand, arg1, arg2, ...]
     // e.g. ".roulette number 1,2,3 50" → ["roulette","number","1,2,3","50"]
     const parts = content.slice(1).split(/\s+/);
-    const cmdName = parts[0].toLowerCase();
+    
+    // First token after "." (e.g. ".r" → "r")
+    const rawCmd = parts[0].toLowerCase();
+
+    // ---- simple alias map --------------------------------------------------
+    // keys: what the user types   values: the real slash-command name
+    const aliasMap = {
+      r: 'roulette',   // ".r"  -> ".roulette"
+      bj: 'bj'         // keep ".bj" as is (already used below)
+      // add more aliases here as needed
+    };
+
+    const cmdName = aliasMap[rawCmd] ?? rawCmd;
     const rawSub = parts[1]?.toLowerCase() || 'start';
 
     // Try to find a matching command
