@@ -166,60 +166,53 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     if (i.user.id !== userId) {
       return i.reply({ content: '❌ Not your game!', ephemeral: true });
     }
-    if (collected) return;  // guard double-handles
+    if (collected) return;
     collected = true;
     collector.stop();
 
-    // ── PLAY AGAIN ──
-    if (i.customId === 'play_again') {
-      // re-check balance
-      const currentBal = await getBalance(userId);
-      if (currentBal < bet) {
-        return i.reply({ content: `❌ You need $${bet} to play again, you have $${currentBal}.`, ephemeral: true });
+    try {
+      if (i.customId === 'play_again') {
+        const currentBal = await getBalance(userId);
+        if (currentBal < bet) {
+          return i.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
+        }
+        const newBalAfterBet = currentBal - bet;
+        await updateBalance(userId, newBalAfterBet);
+        row.components.forEach(b => b.setDisabled(true));
+        await i.update({ components: [row] });
+        return handleSpin(msg, spinEmbed, bet, userId, newBalAfterBet);
       }
-      // deduct again
-      const newBalAfterBet = currentBal - bet;
-      await updateBalance(userId, newBalAfterBet);
 
-      // clear buttons while spinning
-      row.components.forEach(b => b.setDisabled(true));
-      await i.update({ components: [row] });
-
-      // recurse into another spin
-      return handleSpin(msg, spinEmbed, bet, userId, newBalAfterBet);
-    }
-
-    // ── DOUBLE-UP or COLLECT ──
-    if (i.customId === 'double') {
-      // 50/50 chance: randomInt(0,2) yields 0 or 1
-      if (crypto.randomInt(0, 2) === 1) {
-        payout *= 2;
-      } else {
-        payout = 0;
+      if (i.customId === 'double') {
+        payout = crypto.randomInt(0, 2) === 1 ? payout * 2 : 0;
       }
-    }
-    // compute & write final balance
-    const finalBalance = balanceAfterBet + payout;
-    await updateBalance(userId, finalBalance);
 
-    // update embed text
-    resultEmbed.data.fields[4].value = payout > 0
-      ? (i.customId === 'double'
-        ? `🎉 You ${payout > lineWin + freeWin ? 'doubled' : 'busted'} to **$${payout.toFixed(2)}**!`
-        : `💰 You collected **$${payout.toFixed(2)}**.`)
-      : '💥 You busted! You get nothing.';
+      const finalBalance = balanceAfterBet + payout;
+      await updateBalance(userId, finalBalance);
 
-    resultEmbed.setFooter({ text: `New balance: $${finalBalance.toFixed(2)}` });
+      resultEmbed.data.fields[4].value = payout > 0
+        ? (i.customId === 'double'
+          ? `🎉 You ${payout > lineWin + freeWin ? 'doubled' : 'busted'} to **$${payout.toFixed(2)}**!`
+          : `💰 You collected **$${payout.toFixed(2)}**.`)
+        : '💥 You busted! You get nothing.';
 
-    // After resolving a win, swap in only "Play Again"
-    const againRow = new ActionRowBuilder()
-      .addComponents(
+      resultEmbed.setFooter({ text: `New balance: $${finalBalance.toFixed(2)}` });
+
+      const againRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('play_again')
           .setLabel('Play Again')
           .setStyle(ButtonStyle.Success)
       );
-    await i.update({ embeds: [resultEmbed], components: [againRow] });
+
+      await i.update({ embeds: [resultEmbed], components: [againRow] });
+
+    } catch (err) {
+      console.error('❌ Button handler crashed:', err);
+      try {
+        await i.reply({ content: '⚠️ Something went wrong while processing your choice.', ephemeral: true });
+      } catch {}
+    }
   });
 }
 
