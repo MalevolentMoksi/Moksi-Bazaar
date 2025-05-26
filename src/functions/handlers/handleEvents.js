@@ -27,10 +27,12 @@ module.exports = (client) => {
         console.warn(`Skipping bad event file: ${filePath}`);
         continue;
       }
+
+      // Ensure both interaction and client are passed to execute
       if (event.once) {
-        client.once(event.name, (...args) => event.execute(...args, client));
+        client.once(event.name, async (...args) => await event.execute(...args, client));
       } else {
-        client.on(event.name, (...args) => event.execute(...args, client));
+        client.on(event.name, async (...args) => await event.execute(...args, client));
       }
       console.log(`Loaded event ${event.name} from ${path.relative(process.cwd(), filePath)}`);
     }

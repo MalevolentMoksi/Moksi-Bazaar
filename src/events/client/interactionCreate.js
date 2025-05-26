@@ -17,9 +17,12 @@ module.exports = {
                 });
             }
         } else if (interaction.isButton()) {
-            // Acknowledge the click so Discord doesn't timeout.
-            // The collector attached in your command will then fire.
-            return interaction.deferUpdate();
+            try {
+                // Acknowledge the button click immediately to prevent timeout
+                await interaction.deferUpdate();
+            } catch (error) {
+                console.error('Failed to acknowledge button click:', error);
+            }
         }
     }
-}
+};
