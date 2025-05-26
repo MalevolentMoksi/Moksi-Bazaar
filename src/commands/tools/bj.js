@@ -89,10 +89,14 @@ async function startHand(interaction, userId, bet, mention) {
     `**Your hand:** [${playerCards.map(c=>c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
     `**Dealer shows:** [${dealerCards[0].display}, ?]`;
 
-  if (interaction.isButton()) {
+  const isBtn = typeof interaction.isButton === 'function' && interaction.isButton();
+  if (isBtn) {
+    // update in-place for button clicks
     await interaction.update({ content, components: [actionRow] });
     return interaction.message;
   } else {
+    // reply (slash or prefix) for new games
+    // note: fetchReply is used by real slash interactions only
     return interaction.reply({ content, components: [actionRow], fetchReply: true });
   }
 }
