@@ -9,12 +9,11 @@ module.exports = {
     // Only handle messages starting with "."
     if (!content.startsWith('.')) return;
 
-    // Split into [cmdName, subcommand, arg, ...]
-    // e.g. ".bj play 50" → ["bj","play","50"]
+    // Split into [cmdName, subcommand, arg1, arg2, ...]
+    // e.g. ".roulette number 1,2,3 50" → ["roulette","number","1,2,3","50"]
     const parts = content.slice(1).split(/\s+/);
     const cmdName = parts[0].toLowerCase();
     const rawSub = parts[1]?.toLowerCase() || 'start';
-    const arg    = parts[2];
 
     // Try to find a matching command
     const cmd = client.commands.get(cmdName);
@@ -29,9 +28,26 @@ module.exports = {
       options: {
         getSubcommand: () => sub,
         getInteger: name => {
+          // Blackjack uses 'bet'
           if (name === 'bet') {
-            const n = parseInt(arg, 10);
+            const n = parseInt(parts[2], 10);
             return Number.isNaN(n) ? null : n;
+          }
+          // Roulette uses 'amount' in the 4th position
+          if (name === 'amount') {
+            const n = parseInt(parts[3], 10);
+            return Number.isNaN(n) ? null : n;
+          }
+          return null;
+        },
+        getString: name => {
+          // Roulette 'number' subcommand passes a comma list
+          if (name === 'numbers') {
+            return parts[2] || null;
+          }
+          // Roulette 'color' subcommand passes the color
+          if (name === 'color') {
+            return parts[2] || null;
           }
           return null;
         }

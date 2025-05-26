@@ -64,7 +64,7 @@ module.exports = {
         ? 'red'
         : 'black';
 
-    // Determine payout
+    // Determine payout (total return, including original stake)
     let payout = 0;
     let betDescription = '';
 
@@ -76,32 +76,36 @@ module.exports = {
       const uniqueNumbers = [...new Set(guessedNumbers)];
 
       if (uniqueNumbers.length === 0) {
-        return interaction.reply({ content: '❌ Please provide at least one valid number between 0 and 36.', ephemeral: true });
+        return interaction.reply({
+          content: '❌ Please provide at least one valid number between 0 and 36.',
+          ephemeral: true
+        });
       }
 
       const betPerNumber = betAmount / uniqueNumbers.length;
       if (uniqueNumbers.includes(outcome)) {
-        payout = betPerNumber * 35;
+        // Straight-up number pays 35:1, so total return = bet * 36
+        payout = betPerNumber * 36;
       }
       betDescription = `Numbers: ${uniqueNumbers.join(', ')}`;
 
     } else {
       const guessColor = interaction.options.getString('color');
       if (guessColor === 'green') {
-        // Betting on green (0) pays 35:1
-        if (outcome === 0) payout = betAmount * 35;
+        // Green (0) pays 35:1 -> total return = bet * 36
+        if (outcome === 0) payout = betAmount * 36;
       } else if (guessColor === outcomeColor) {
-        // Red/Black pays 1:1
-        payout = betAmount;
+        // Red/Black pays 1:1 -> total return = bet * 2
+        payout = betAmount * 2;
       }
       betDescription = `Color: ${guessColor}`;
     }
 
-    // Compute new balance and update DB
+    // Update balance
     finalBalance += payout;
     await updateBalance(userId, finalBalance);
 
-    // Emoji for roulette outcome
+    // Emoji for outcome
     const colorEmoji = outcomeColor === 'red'
       ? '🔴'
       : outcomeColor === 'black'
@@ -118,11 +122,12 @@ module.exports = {
       )
       .addFields(
         { name: 'Result', value: `${colorEmoji} **${outcome}** (${outcomeColor})`, inline: true },
-        { name: 'Bet',    value: `You bet $${betAmount} on ${sub}\n${betDescription}`, inline: true },
-        { name: payout > 0 ? '🏆 You Won!' : '💸 You Lost', value:
-            payout > 0
-              ? `You won $${payout.toFixed(2)}!\nYour new balance is $${finalBalance.toFixed(2)}.`
-              : `You lost $${betAmount}.\nYour new balance is $${finalBalance}.`,
+        { name: 'Your Bet', value: `You wagered $${betAmount} on ${sub}\n${betDescription}`, inline: true },
+        {
+          name: payout > 0 ? '🏆 You Won!' : '💸 You Lost',
+          value: payout > 0
+            ? `You won $${(payout - betAmount).toFixed(2)} profit!\nTotal return: $${payout.toFixed(2)}\nNew balance: $${finalBalance.toFixed(2)}`
+            : `You lost $${betAmount}.\nNew balance: $${finalBalance.toFixed(2)}`,
           inline: false
         }
       );
