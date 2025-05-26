@@ -43,6 +43,15 @@ const calculateTotal = (cards) => {
 const isBlackjack = (cards) => cards.length === 2 && calculateTotal(cards) === 21;
 
 /**
+ * Dealer draws until they reach 17 or higher.
+ */
+function playDealer(dealerCards) {
+  while (calculateTotal(dealerCards) < 17) {
+    dealerCards.push(drawCard());
+  }
+}
+
+/**
  * Kick off a fresh blackjack hand for userId with bet amount.
  * Returns the Message (so we can hook a collector on it).
  */
