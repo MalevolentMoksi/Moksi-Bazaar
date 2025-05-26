@@ -1,3 +1,4 @@
+// src/bot.js
 require('dotenv').config();
 const { token } = process.env;
 const { Client, Collection, GatewayIntentBits } = require('discord.js');

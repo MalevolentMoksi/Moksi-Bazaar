@@ -1,3 +1,4 @@
+// src/events/client/interactionCreate.js
 module.exports = {
     name: 'interactionCreate',
     async execute(interaction, client) {
