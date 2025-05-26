@@ -76,6 +76,7 @@ async function startHand(interaction, userId, bet, mention) {
 
   games.set(userId, {
     bet,
+    originalBet: bet,        // ← save the user's *initial* wager
     bal,
     playerCards,
     dealerCards,
@@ -123,7 +124,8 @@ function attachCollector(msg, userId, mention) {
     let game = games.get(userId);
     if (!game) return;
 
-    let { bet, bal, playerCards, dealerCards, doubled, firstAction, actionRow } = game;
+    // pull out both the current bet (for resolution) AND the originalBet (for re-play)
+    let { bet, originalBet, bal, playerCards, dealerCards, doubled, firstAction, actionRow } = game;
 
     // Double
     if (i.customId === `double_${userId}` && !doubled && firstAction) {
@@ -216,9 +218,9 @@ function attachCollector(msg, userId, mention) {
       if (currentBal < bet) {
         return btn.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
       }
-      // 2) Tear down old game and start a fresh one, editing in place
+      // 2) Tear down old game and start a fresh one at the *original* wager
       games.delete(userId);
-      const newMsg = await startHand(btn, userId, bet, mention);
+      const newMsg = await startHand(btn, userId, originalBet, mention);
       // 3) Re-attach collector to the updated message
       attachCollector(newMsg, userId, mention);
     });
