@@ -1,6 +1,8 @@
-// src/commands/tools/gacha.js const { SlashCommandBuilder, EmbedBuilder } = require('discord.js'); const { getBalance, updateBalance } = require('../../utils/db');
+// src/commands/tools/gacha.js
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js'); const { getBalance, updateBalance } = require('../../utils/db');
 
-// In‑memory cooldown map: userId → { last: timestamp, cooldown: ms } const cooldowns = new Map();
+// In‑memory cooldown map:
+userId → { last: timestamp, cooldown: ms } const cooldowns = new Map();
 
 module.exports = { data: new SlashCommandBuilder() .setName('gacha') .setDescription('Open a loot box (once every 10 minutes)'),
 
