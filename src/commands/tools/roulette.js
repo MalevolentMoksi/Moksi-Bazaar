@@ -65,6 +65,7 @@ module.exports = {
 
     // Determine payout
     let payout = 0;
+    let betDescription = '';
     if (sub === 'number') {
       const numberStr = interaction.options.getString('numbers');
       const guessedNumbers = numberStr.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 36);
@@ -79,11 +80,14 @@ module.exports = {
       if (uniqueNumbers.includes(outcome)) {
         payout = betPerNumber * 35;
       }
+
+      betDescription = `Numbers: ${uniqueNumbers.join(', ')}`;
     } else {
       const guessColor = interaction.options.getString('color');
       if (guessColor === outcomeColor) {
         payout = betAmount;
       }
+      betDescription = `Color: ${guessColor}`;
     }
 
     // Compute new balance and update DB
@@ -107,7 +111,7 @@ module.exports = {
       )
       .addFields(
         { name: 'Result', value: `${colorEmoji} **${outcome}** (${outcomeColor})`, inline: true },
-        { name: 'Bet',    value: `You bet $${betAmount} on ${sub}`, inline: true },
+        { name: 'Bet',    value: `You bet $${betAmount} on ${sub}\n${betDescription}`, inline: true },
         { name: payout > 0 ? '🏆 You Won!' : '💸 You Lost', value:
             payout > 0
               ? `You won $${payout.toFixed(2)}!\nYour new balance is $${finalBalance.toFixed(2)}.`
