@@ -52,8 +52,8 @@ function playDealer(dealerCards) {
 }
 
 /**
- * Kick off a fresh blackjack hand for userId with bet amount.
- * Returns the Message (so we can hook a collector on it).
+ * Kick off a fresh blackjack hand, editing in place if `interaction` is a ButtonInteraction,
+ * or replying if it's a ChatInputCommandInteraction.
  */
 async function startHand(interaction, userId, bet, mention) {
   let bal = await getBalance(userId);
@@ -74,7 +74,6 @@ async function startHand(interaction, userId, bet, mention) {
         .setDisabled(bal < bet)
     );
 
-  // Store actionRow with game state
   games.set(userId, {
     bet,
     bal,
@@ -82,17 +81,20 @@ async function startHand(interaction, userId, bet, mention) {
     dealerCards,
     doubled: false,
     firstAction: true,
-    actionRow // Add actionRow to game state
+    actionRow
   });
 
-  return interaction.reply({
-    content:
-      `${mention}, wagered $${bet}.\n` +
-      `**Your hand:** [${playerCards.map(c=>c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
-      `**Dealer shows:** [${dealerCards[0].display}, ?]`,
-    components: [actionRow],
-    fetchReply: true
-  });
+  const content =
+    `${mention}, wagered $${bet}.\n` +
+    `**Your hand:** [${playerCards.map(c=>c.display).join(', ')}] (${calculateTotal(playerCards)})\n` +
+    `**Dealer shows:** [${dealerCards[0].display}, ?]`;
+
+  if (interaction.isButton()) {
+    await interaction.update({ content, components: [actionRow] });
+    return interaction.message;
+  } else {
+    return interaction.reply({ content, components: [actionRow], fetchReply: true });
+  }
 }
 
 /**
@@ -192,14 +194,16 @@ function attachCollector(msg, userId, mention) {
     });
 
     againCollector.on('collect', async btn => {
-      await btn.deferUpdate();
+      // 1) Check funds
       let currentBal = await getBalance(userId);
       if (currentBal < bet) {
-        return btn.followUp({ content: `❌ You need $${bet} to play again, you have $${currentBal}.`, ephemeral: true });
+        return btn.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
       }
+      // 2) Tear down old game and start a fresh one, editing in place
       games.delete(userId);
-      await startHand(btn, userId, bet, mention);
-      attachCollector(btn.message, userId, mention);
+      const newMsg = await startHand(btn, userId, bet, mention);
+      // 3) Re-attach collector to the updated message
+      attachCollector(newMsg, userId, mention);
     });
   });
 }
