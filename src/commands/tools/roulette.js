@@ -11,16 +11,14 @@ module.exports = {
     .setDescription('Spin the roulette wheel and bet currency')
     .addSubcommand(sub =>
       sub.setName('number')
-         .setDescription('Bet on a specific number (0–36)')
-         .addIntegerOption(opt =>
-           opt.setName('number')
-              .setDescription('Number to bet on')
-              .setRequired(true)
-              .setMinValue(0)
-              .setMaxValue(36))
+         .setDescription('Bet on one or more specific numbers (0–36)')
+         .addStringOption(opt =>
+           opt.setName('numbers')
+              .setDescription('Comma-separated numbers to bet on (e.g., 3,7,25)')
+              .setRequired(true))
          .addIntegerOption(opt =>
            opt.setName('amount')
-              .setDescription('Amount of currency to bet')
+              .setDescription('Total amount of currency to bet')
               .setRequired(true)
               .setMinValue(1)))
     .addSubcommand(sub =>
@@ -56,7 +54,8 @@ module.exports = {
 
     // Deduct initial bet
     let finalBalance = balance - betAmount;
-    // Simulate spin
+
+    // Simulate spin (0 to 36)
     const outcome = Math.floor(Math.random() * 37);
     const outcomeColor = outcome === 0
       ? 'green'
@@ -67,15 +66,22 @@ module.exports = {
     // Determine payout
     let payout = 0;
     if (sub === 'number') {
-      const guess = interaction.options.getInteger('number');
-      if (guess === outcome) {
-        // 35:1 payout for exact number
-        payout = betAmount * 35;
+      const numberStr = interaction.options.getString('numbers');
+      const guessedNumbers = numberStr.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 36);
+      const uniqueNumbers = [...new Set(guessedNumbers)];
+
+      if (uniqueNumbers.length === 0) {
+        return interaction.reply({ content: '❌ Please provide at least one valid number between 0 and 36.', ephemeral: true });
+      }
+
+      const betPerNumber = betAmount / uniqueNumbers.length;
+
+      if (uniqueNumbers.includes(outcome)) {
+        payout = betPerNumber * 35;
       }
     } else {
       const guessColor = interaction.options.getString('color');
       if (guessColor === outcomeColor) {
-        // 1:1 payout for color
         payout = betAmount;
       }
     }
@@ -104,10 +110,8 @@ module.exports = {
         { name: 'Bet',    value: `You bet $${betAmount} on ${sub}`, inline: true },
         { name: payout > 0 ? '🏆 You Won!' : '💸 You Lost', value:
             payout > 0
-              ? `You won $${payout}!
-Your new balance is $${finalBalance}.`
-              : `You lost $${betAmount}.
-Your new balance is $${finalBalance}.`,
+              ? `You won $${payout.toFixed(2)}!\nYour new balance is $${finalBalance.toFixed(2)}.`
+              : `You lost $${betAmount}.\nYour new balance is $${finalBalance}.`,
           inline: false
         }
       );
