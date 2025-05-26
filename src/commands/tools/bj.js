@@ -105,18 +105,24 @@ async function startHand(interaction, userId, bet, mention) {
  * Attach button collector to handle game interactions
  */
 function attachCollector(msg, userId, mention) {
+  // MAIN collector: only listen for hit_/stand_/double_ buttons
   const collector = msg.createMessageComponentCollector({
     componentType: ComponentType.Button,
     time: 120000,
-    filter: (i) => i.user.id === userId
+    filter: (i) =>
+      i.user.id === userId &&
+      (i.customId.startsWith(`hit_${userId}`) ||
+       i.customId.startsWith(`stand_${userId}`) ||
+       i.customId.startsWith(`double_${userId}`))
   });
 
   collector.on('collect', async i => {
+    // as soon as we collect, we know this collector is now "used up" once the hand ends
+    let ended = false;
     await i.deferUpdate();
     let game = games.get(userId);
     if (!game) return;
 
-    // Destructure actionRow along with other game state
     let { bet, bal, playerCards, dealerCards, doubled, firstAction, actionRow } = game;
 
     // Double
@@ -173,6 +179,9 @@ function attachCollector(msg, userId, mention) {
     bal += payout;
     await updateBalance(userId, bal);
     games.delete(userId);
+    // STOP the main collector—this hand is done
+    collector.stop();
+
     actionRow.components.forEach(b => b.setDisabled(true));
 
     const playAgainRow = new ActionRowBuilder().addComponents(
@@ -191,10 +200,13 @@ function attachCollector(msg, userId, mention) {
       components: [playAgainRow]
     });
 
+    // NOW attach the Play-Again–only collector
     const againCollector = i.message.createMessageComponentCollector({
       componentType: ComponentType.Button,
       time: 60000,
-      filter: btn => btn.user.id === userId && btn.customId === `playagain_${userId}`
+      filter: btn =>
+        btn.user.id === userId &&
+        btn.customId === `playagain_${userId}`
     });
 
     againCollector.on('collect', async btn => {
