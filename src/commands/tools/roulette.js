@@ -23,14 +23,15 @@ module.exports = {
               .setMinValue(1)))
     .addSubcommand(sub =>
       sub.setName('color')
-         .setDescription('Bet on a color (red or black)')
+         .setDescription('Bet on a color (red, black, or green)')
          .addStringOption(opt =>
            opt.setName('color')
               .setDescription('Color to bet on')
               .setRequired(true)
               .addChoices(
                 { name: 'Red', value: 'red' },
-                { name: 'Black', value: 'black' }
+                { name: 'Black', value: 'black' },
+                { name: 'Green (0)', value: 'green' }
               ))
          .addIntegerOption(opt =>
            opt.setName('amount')
@@ -66,9 +67,12 @@ module.exports = {
     // Determine payout
     let payout = 0;
     let betDescription = '';
+
     if (sub === 'number') {
       const numberStr = interaction.options.getString('numbers');
-      const guessedNumbers = numberStr.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n >= 0 && n <= 36);
+      const guessedNumbers = numberStr.split(',')
+        .map(n => parseInt(n.trim()))
+        .filter(n => !isNaN(n) && n >= 0 && n <= 36);
       const uniqueNumbers = [...new Set(guessedNumbers)];
 
       if (uniqueNumbers.length === 0) {
@@ -76,15 +80,18 @@ module.exports = {
       }
 
       const betPerNumber = betAmount / uniqueNumbers.length;
-
       if (uniqueNumbers.includes(outcome)) {
         payout = betPerNumber * 35;
       }
-
       betDescription = `Numbers: ${uniqueNumbers.join(', ')}`;
+
     } else {
       const guessColor = interaction.options.getString('color');
-      if (guessColor === outcomeColor) {
+      if (guessColor === 'green') {
+        // Betting on green (0) pays 35:1
+        if (outcome === 0) payout = betAmount * 35;
+      } else if (guessColor === outcomeColor) {
+        // Red/Black pays 1:1
         payout = betAmount;
       }
       betDescription = `Color: ${guessColor}`;
