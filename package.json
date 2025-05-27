@@ -15,6 +15,7 @@
     "discord-api-types": "^0.38.2",
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
-    "pg": "^8.16.0"
+    "pg": "^8.16.0",
+    "pokersolver": "^1.8.0"
   }
 }
