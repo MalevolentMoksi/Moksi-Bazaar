@@ -2,7 +2,7 @@
 // Pure hand evaluation logic for Texas Hold 'Em using pokersolver
 
 const { Hand } = require('pokersolver');
-const { toSolverFormat } = require('./pokerUtils');
+const pokerUtils = require('./pokerUtils');
 
 /**
  * Evaluate active players' hands against community cards and determine winners.
@@ -15,7 +15,7 @@ function evaluateWinners(playerStates, communityCards) {
   const activePlayers = playerStates.filter(p => p.isActive);
   // Map each to a pokersolver Hand
   const solvedHands = activePlayers.map(p => {
-    const cards = [...p.holeCards, ...communityCards].map(toSolverFormat);
+    const cards = [...p.holeCards, ...communityCards].map(pokerUtils.toSolverFormat);
     const hand = Hand.solve(cards);
     return { id: p.id, hand };
   });

@@ -94,6 +94,7 @@ function splitPot(winners, pot) {
 module.exports = {
   createShuffledDeck,
   formatCards,
+  toSolverFormat,
   evaluateWinners,
   splitPot
 };
