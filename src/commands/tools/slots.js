@@ -166,7 +166,16 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     if (i.user.id !== userId) {
       return i.reply({ content: '❌ Not your game!', ephemeral: true });
     }
-    // only prevent double‐clicks, but don't stop listening for a future Play Again
+
+    // Stop old collector before recursing
+    if (i.customId === 'play_again') {
+      collector.stop();
+    }
+
+    // Immediately defer the update
+    await i.deferUpdate();
+
+    // only prevent double-clicks, but don't stop listening for a future Play Again
     if (collected && i.customId !== 'play_again') return;
     if (['double','collect'].includes(i.customId)) collected = true;
 
@@ -174,12 +183,12 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       if (i.customId === 'play_again') {
         const currentBal = await getBalance(userId);
         if (currentBal < bet) {
-          return i.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
+          return i.followUp({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
         }
         const newBalAfterBet = currentBal - bet;
         await updateBalance(userId, newBalAfterBet);
         row.components.forEach(b => b.setDisabled(true));
-        await i.update({ components: [row] });
+        await msg.edit({ components: [row] });
         return handleSpin(msg, spinEmbed, bet, userId, newBalAfterBet);
       }
 
@@ -205,14 +214,19 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
           .setStyle(ButtonStyle.Success)
       );
 
-      await i.update({ embeds: [resultEmbed], components: [againRow] });
+      await msg.edit({ embeds: [resultEmbed], components: [againRow] });
 
     } catch (err) {
       console.error('❌ Button handler crashed:', err);
       try {
-        await i.reply({ content: '⚠️ Something went wrong while processing your choice.', ephemeral: true });
+        await i.followUp({ content: '⚠️ Something went wrong while processing your choice.', ephemeral: true });
       } catch {}
     }
+  });
+
+  // Clean up collector when it ends
+  collector.on('end', () => {
+    collector.removeAllListeners();
   });
 }
 
