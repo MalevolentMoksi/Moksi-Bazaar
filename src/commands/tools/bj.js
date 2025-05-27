@@ -69,7 +69,8 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    if (!interaction.isChatInputCommand() || interaction.options.getSubcommand() !== 'start') return;
+    // only allow a "start" invocation (slash *or* prefix)
+    if (interaction.options.getSubcommand() !== 'start') return;
     const userId = interaction.user.id;
     let bet = interaction.options.getInteger('bet');
 
