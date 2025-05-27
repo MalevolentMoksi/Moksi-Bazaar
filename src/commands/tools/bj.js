@@ -90,10 +90,10 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    // only allow a "start" invocation (slash *or* prefix)
     if (interaction.options.getSubcommand() !== 'start') return;
     const userId = interaction.user.id;
     let bet = interaction.options.getInteger('bet');
+    const originalBet = bet;
 
     // Fetch and deduct initial bet
     const origBalance = await getBalance(userId);
@@ -139,7 +139,10 @@ module.exports = {
       );
       if (balance >= bet) {
         row.addComponents(
-          new ButtonBuilder().setCustomId('double').setLabel('Double Down').setStyle(ButtonStyle.Primary)
+          new ButtonBuilder()
+            .setCustomId('double')
+            .setLabel(`Double Down (${bet * 2})`)
+            .setStyle(ButtonStyle.Primary)
         );
       }
 
@@ -185,7 +188,10 @@ module.exports = {
           );
           if (firstMove && balance >= bet) {
             newRow.addComponents(
-              new ButtonBuilder().setCustomId('double').setLabel('Double Down').setStyle(ButtonStyle.Primary)
+              new ButtonBuilder()
+                .setCustomId('double')
+                .setLabel(`Double Down (${bet * 2})`)
+                .setStyle(ButtonStyle.Primary)
             );
           }
           return message.edit({ embeds: [newEmbed], components: [newRow] });
@@ -254,12 +260,13 @@ module.exports = {
       playCollector.on('collect', async btnInt => {
         if (btnInt.user.id !== userId) return btnInt.reply({ content: 'Not your game!', ephemeral: true });
         const balNow = await getBalance(userId);
-        if (balNow < bet) {
+        if (balNow < originalBet) {
           return btnInt.reply({ content: 'Insufficient balance to play again.', ephemeral: true });
         }
-        // Deduct bet and restart
-        await updateBalance(userId, balNow - bet);
-        balance = balNow - bet;
+        // Deduct original bet and reset
+        await updateBalance(userId, balNow - originalBet);
+        balance = balNow - originalBet;
+        bet = originalBet;
         await btnInt.deferUpdate();
         await runRound();
         playCollector.stop();
