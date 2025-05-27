@@ -10,6 +10,8 @@ const {
 
 const pokerManager = require('../../managers/pokerManager');  // you’ll implement next
 const pokerUI      = require('../../utils/pokerUI');         // you’ll implement next
+const pokerUtils   = require('../../utils/pokerUtils');
+const { getBalance, updateBalance } = require('../../utils/db');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -106,8 +108,8 @@ module.exports = {
       });
 
       collector.on('collect', async btn => {
-        // only allow the current player to act
-        if (btn.user.id !== state.getCurrentPlayer()) {
+        const currentId = state.players[state.currentPlayerIndex].id;
+        if (btn.user.id !== currentId) {
           return btn.reply({ content: '⏳ Not your turn!', ephemeral: true });
         }
 
@@ -161,7 +163,7 @@ module.exports = {
             );
 
           // Send final results and clean up
-          await msg.edit({ embeds: [newEmbed, resultsEmbed], components: newComps });
+          await msg.edit({ embeds: [resultsEmbed], components: newComps });
           pokerManager.games.delete(chan);
           collector.stop();
           return;
