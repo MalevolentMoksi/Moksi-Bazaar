@@ -224,17 +224,21 @@ function attachCollector(msg, userId, mention) {
     });
 
     againCollector.on('collect', async btn => {
-      // Remove deferUpdate - we'll use update() in startHand
       const game = games.get(userId);
+      if (!game) {
+        return btn.reply({ content: '❌ This game has already ended.', ephemeral: true });
+      }
+      
+      // Store originalBet before deleting game state
+      const originalBet = Number(game.originalBet);
       const currentBal = Number(await getBalance(userId)) || 0;
-      const bet = Number(game.originalBet);
 
-      if (currentBal < bet) {
-        return btn.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
+      if (currentBal < originalBet) {
+        return btn.reply({ content: `❌ You need $${originalBet} to play again.`, ephemeral: true });
       }
 
       games.delete(userId);
-      const newMsg = await startHand(btn, userId, bet, mention);
+      const newMsg = await startHand(btn, userId, originalBet, mention);
       attachCollector(newMsg, userId, mention);
     });
   });
