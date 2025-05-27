@@ -50,7 +50,22 @@ function buildEmbed(playerCards, dealerCards, balance, bet, result) {
       { name: 'Bet', value: String(bet), inline: true },
       { name: 'Balance', value: String(balance), inline: true }
     );
-  if (result) embed.setDescription(`**${result}**`);
+
+  if (result) {
+    if (result.startsWith('🃏')) {
+      embed.setColor('#800080');        // Purple for Blackjack
+    } else if (result.includes('2.5×')) {
+      embed.setColor('#800080');        // Purple for 2.5× payout (blackjack)
+    } else if (result.toLowerCase().includes('win')) {
+      embed.setColor('#00FF00');        // Green for a standard win
+    } else if (result.includes('Bust')) {
+      embed.setColor('#FFCC00');        // Softer yellow for a Bust
+    } else if (result.toLowerCase().includes('lose')) {
+      embed.setColor('#FF0000');        // Red for a loss
+    }
+    embed.setDescription(`**${result}**`);
+  }
+
   return embed;
 }
 
