@@ -58,6 +58,9 @@ function playDealer(dealerCards) {
  */
 async function startHand(interaction, userId, bet, mention) {
   let bal = await getBalance(userId);
+  if (typeof bet !== 'number' || Number.isNaN(bet)) {
+    throw new Error('Invalid bet passed into startHand');
+  }
   bal -= bet;
   await updateBalance(userId, bal);
 
@@ -147,7 +150,17 @@ function attachCollector(msg, userId, mention) {
       actionRow.components[2].setDisabled(true); // disable double after first hit
       if (calculateTotal(playerCards) <= 21) {
         // Include actionRow in updated game state
-        games.set(userId, { bet, bal, playerCards, dealerCards, doubled, firstAction, actionRow });
+        // INCLUDE originalBet here so Play Again still knows what to re-bet
+        games.set(userId, { 
+          bet, 
+          originalBet,    // ← preserve the initial wager 
+          bal, 
+          playerCards, 
+          dealerCards, 
+          doubled, 
+          firstAction, 
+          actionRow 
+        });
         return i.editReply({
           content:
             `${mention}, drew ${playerCards[playerCards.length - 1].display}.\n` +
@@ -214,10 +227,11 @@ function attachCollector(msg, userId, mention) {
     });
 
     againCollector.on('collect', async btn => {
+      await btn.deferUpdate();
       // 1) Check funds
       let currentBal = await getBalance(userId);
       if (currentBal < bet) {
-        return btn.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
+      return btn.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: false });
       }
       // 2) Tear down old game and start a fresh one at the *original* wager
       games.delete(userId);
