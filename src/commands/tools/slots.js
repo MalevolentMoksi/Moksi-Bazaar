@@ -17,10 +17,10 @@ const baseSymbols = [
   { emoji: '🍊', weight: 25, payouts: { 2: 1.2, 3: 5 } },
   { emoji: '🔔', weight: 20, payouts: { 3: 25 } },
   { emoji: '💎', weight: 15, payouts: { 3: 50 } },
-  { emoji: '7️⃣', weight: 5, payouts: { 3: 100 } }
+  { emoji: '7️⃣', weight: 8, payouts: { 3: 100 } }
 ];
-const wildSymbol    = { emoji: '🌟', weight: 5,  payouts: { 3: 50 } };
-const scatterSymbol = { emoji: '🎟️', weight: 5, payouts: { 3: 'freespins' } };
+const wildSymbol = { emoji: '🌟', weight: 10, payouts: { 3: 50 } };
+const scatterSymbol = { emoji: '🎟️', weight: 15, payouts: {} };
 
 // Build weighted pool
 const weightedPool = [
@@ -38,16 +38,17 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
 
   // — Step 4) Final spin & compute winnings —
   const finalGrid = Array(9).fill().map(() => spinOne());
-  const emojis    = finalGrid.map(s => s.emoji);
+  const emojis = finalGrid.map(s => s.emoji);
   const displayGrid =
     `${emojis[0]} ${emojis[1]} ${emojis[2]}\n` +
     `${emojis[3]} ${emojis[4]} ${emojis[5]}\n` +
     `${emojis[6]} ${emojis[7]} ${emojis[8]}`;
 
   const scatterCount = finalGrid.filter(s => s.emoji === scatterSymbol.emoji).length;
-  const freeSpins    = scatterCount >= 3 ? 5 : 0;
+  // one free spin for every TWO scatters:
+  const freeSpins = Math.floor(scatterCount / 2);
 
-  const payline   = finalGrid.slice(3, 6);
+  const payline = finalGrid.slice(3, 6);
   const wildCount = payline.filter(s => s.emoji === wildSymbol.emoji).length;
   const baseCount = payline
     .filter(s => s.emoji !== wildSymbol.emoji)
@@ -57,7 +58,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
   let lineMultiplier = 0;
   for (const sym of [...baseSymbols, wildSymbol]) {
     const cnt = (baseCount[sym.emoji] || 0) + wildCount;
-    const p   = sym.payouts[cnt];
+    const p = sym.payouts[cnt];
     if (p && p !== 'freespins') lineMultiplier = Math.max(lineMultiplier, p);
   }
 
@@ -67,14 +68,14 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
   if (freeSpins) {
     for (let i = 0; i < freeSpins; i++) {
       const mini = [spinOne(), spinOne(), spinOne()];
-      const wc   = mini.filter(s => s.emoji === wildSymbol.emoji).length;
-      const bc   = mini
+      const wc = mini.filter(s => s.emoji === wildSymbol.emoji).length;
+      const bc = mini
         .filter(s => s.emoji !== wildSymbol.emoji)
         .reduce((a, s) => (a[s.emoji] = (a[s.emoji] || 0) + 1, a), {});
       let m = 0;
       for (const sym of [...baseSymbols, wildSymbol]) {
         const cnt = (bc[sym.emoji] || 0) + wc;
-        const p   = sym.payouts[cnt];
+        const p = sym.payouts[cnt];
         if (p && p !== 'freespins') m = Math.max(m, p);
       }
       freeWin += Math.round(bet * m);
@@ -89,18 +90,24 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     .setTitle('🎰 Slot Results')
     .setColor(lineMultiplier > 1 ? 0x2ECC71 : 0xE74C3C)
     .addFields(
-      { name: 'Grid',        value: displayGrid, inline: false },
-      { name: 'Bet',         value: `$${bet}`,     inline: true },
-      { name: 'Payline',     value: lineMultiplier > 0
+      { name: 'Grid', value: displayGrid, inline: false },
+      { name: 'Bet', value: `$${bet}`, inline: true },
+      {
+        name: 'Payline', value: lineMultiplier > 0
           ? `${lineMultiplier}× → $${lineWin}`
-          : 'No match',     inline: true },
-      { name: 'Free Spins',  value: freeSpins
-          ? `${freeSpins} spins → $${freeWin}`
-          : 'None',         inline: true },
-      { name: '\u200B',      value: payout > 0
+          : 'No match', inline: true
+      },
+      {
+        name: 'Free Spins', value: freeSpins > 0
+          ? `${freeSpins} free spin${freeSpins > 1 ? 's' : ''} → $${freeWin}`
+          : 'None', inline: true
+      },
+      {
+        name: '\u200B', value: payout > 0
           ? `Net win **$${payout}**\n\n▶️ **Double-Up?** Or play again.`
           : `You lost $${bet}.\nBetter luck next time!\n\n▶️ Play again?`,
-        inline: false }
+        inline: false
+      }
     );
 
   // … the rest of your button logic remains unchanged … 
@@ -120,9 +127,9 @@ module.exports = {
     .setDescription('🎰 Spin a 3×3 slot machine')
     .addIntegerOption(opt =>
       opt.setName('amount')
-         .setDescription('How much to bet')
-         .setRequired(true)
-         .setMinValue(1)
+        .setDescription('How much to bet')
+        .setRequired(true)
+        .setMinValue(1)
     ),
 
   async execute(interaction) {
