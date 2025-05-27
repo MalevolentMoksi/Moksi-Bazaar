@@ -1,3 +1,4 @@
+// src/commands/tools/bj.js
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
