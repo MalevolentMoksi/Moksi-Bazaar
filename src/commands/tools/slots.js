@@ -167,8 +167,14 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       return i.reply({ content: '❌ Not your game!', ephemeral: true });
     }
 
+        // Stop old collector before recursing
+    if (i.customId === 'play_again') {
+      collector.stop();
+    }
+
+    // Immediately defer the update
     await i.deferUpdate();
-    collector.stop();
+    
 
     // only prevent double-clicks, but don't stop listening for a future Play Again
     if (collected && i.customId !== 'play_again') return;
@@ -183,15 +189,8 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
         const newBalAfterBet = currentBal - bet;
         await updateBalance(userId, newBalAfterBet);
         
-        const disabledAgain = new ActionRowBuilder()
-          .addComponents(
-            new ButtonBuilder()
-              .setCustomId('play_again')
-              .setLabel('Play Again')
-              .setStyle(ButtonStyle.Success)
-              .setDisabled(true)
-          );
-        await msg.edit({ components: [disabledAgain] });
+        row.components.forEach(b => b.setDisabled(true));
+        await msg.edit({ components: [row] });
         return handleSpin(msg, spinEmbed, bet, userId, newBalAfterBet);
       }
 
