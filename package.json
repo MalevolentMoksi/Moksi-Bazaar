@@ -16,6 +16,6 @@
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
     "pg": "^8.16.0",
-    "pokersolver": "^1.8.0"
+    "pokersolver": "^2.1.4"
   }
 }
