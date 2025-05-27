@@ -49,7 +49,43 @@ module.exports = {
           return null;
         }
       },
-      reply: resp => message.channel.send(resp)
+      // track whether we've replied/deferred, and the last Message we sent
+      replied: false,
+      deferred: false,
+      lastReply: null,
+
+      // stub out deferReply()
+      async deferReply() {
+        this.deferred = true;
+        // no actual "thinking…" indicator in prefix mode
+        return;
+      },
+
+      // stub out reply()
+      async reply(resp) {
+        this.replied = true;
+        const msg = await message.channel.send(resp);
+        this.lastReply = msg;
+        return msg;
+      },
+
+      // stub out editReply()
+      async editReply(resp) {
+        if (this.lastReply) {
+          return this.lastReply.edit(resp);
+        } else {
+          // fall back to a fresh send
+          this.replied = true;
+          const msg = await message.channel.send(resp);
+          this.lastReply = msg;
+          return msg;
+        }
+      },
+
+      // stub out fetchReply()
+      async fetchReply() {
+        return this.lastReply;
+      }
     };
 
     try {

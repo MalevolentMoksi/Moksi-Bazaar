@@ -197,7 +197,7 @@ module.exports = {
             resultText = '🤝 Push. Bet returned.';
             payout = bet;
           } else {
-            resultText = '😢 You lose.';
+            resultText = '💔 You lose.';
             payout = 0;
           }
           balance += payout;
