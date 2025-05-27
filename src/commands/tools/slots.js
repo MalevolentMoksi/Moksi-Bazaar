@@ -166,9 +166,9 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     if (i.user.id !== userId) {
       return i.reply({ content: '❌ Not your game!', ephemeral: true });
     }
-    if (collected) return;
-    collected = true;
-    collector.stop();
+    // only prevent double‐clicks, but don't stop listening for a future Play Again
+    if (collected && i.customId !== 'play_again') return;
+    if (['double','collect'].includes(i.customId)) collected = true;
 
     try {
       if (i.customId === 'play_again') {
