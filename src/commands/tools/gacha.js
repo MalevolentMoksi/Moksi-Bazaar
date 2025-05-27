@@ -2,21 +2,20 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
-// In‑memory cooldown map: userId → { last: timestamp, cooldown: ms }
+// In-memory cooldown map: userId → { last: timestamp, cooldown: ms }
 const cooldowns = new Map();
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('gacha')
-    .setDescription('Open a loot box (once every 10 minutes)'),
+    .setDescription('Open a loot box (once per tier-based cooldown)'),
 
   async execute(interaction) {
     const userId = interaction.user.id;
     const now = Date.now();
 
     // Get last pull and cooldown for this user
-    const cooldownData = cooldowns.get(userId) || { last: 0, cooldown: 0 };
-    const { last, cooldown } = cooldownData;
+    const { last = 0, cooldown = 0 } = cooldowns.get(userId) || {};
 
     if (now - last < cooldown) {
       const remaining = cooldown - (now - last);
@@ -28,15 +27,7 @@ module.exports = {
       });
     }
 
-    // Set a random cooldown between 2 and 10 minutes (in ms)
-    const randomCooldown = (Math.floor(Math.random() * (10 - 2 + 1)) + 2) * 60 * 1000;
-    cooldowns.set(userId, { last: now, cooldown: randomCooldown });
-
-    // Compute next availability for embed
-    const nextMins = Math.floor(randomCooldown / 1000 / 60);
-    const nextSecs = Math.floor((randomCooldown / 1000) % 60);
-
-    // Define rarities with weights, embed colors, and reward ranges
+    // Define rarities with weights, embed colors, reward ranges, etc.
     const tiers = [
       { name: 'Common',    weight: 40, color: 0x95a5a6, range: [100,  300] },
       { name: 'Uncommon',  weight: 30, color: 0x2ecc71, range: [500, 1500] },
@@ -45,10 +36,10 @@ module.exports = {
       { name: 'Legendary', weight: 5,  color: 0xf1c40f, range: [10000,20000] }
     ];
 
-    // Weighted random selection
+    // Weighted random selection of tier
     const totalWeight = tiers.reduce((sum, t) => sum + t.weight, 0);
     let roll = Math.random() * totalWeight;
-    let chosen = tiers.find(t => {
+    const chosen = tiers.find(t => {
       if (roll < t.weight) return true;
       roll -= t.weight;
       return false;
@@ -63,17 +54,43 @@ module.exports = {
     const updated = current + reward;
     await updateBalance(userId, updated);
 
-    // Emoji mapping per rarity
-    const emojis = {
-      Common:    '📦', // Cardboard box
-      Uncommon:  '🛍️', // Shopping bags
-      Rare:      '💰', // Moneybag
-      Epic:      '💎', // Diamond
-      Legendary: '🐉'  // Dragon
+    // ────────────────────────────────────────────────
+    // Tier-based cooldown logic starts here
+    // ────────────────────────────────────────────────
+
+    // Base cooldown in minutes for each tier
+    const baseCooldownMinutes = {
+      Common:    2,
+      Uncommon:  5,
+      Rare:      8,
+      Epic:     12,
+      Legendary: 15
     };
 
-    // Build and send an embed result with dynamic emoji and cooldown info
+    const baseMin = baseCooldownMinutes[chosen.name] ?? 5;
+    const randomSeconds = Math.floor(Math.random() * 60); // 0–59s jitter
+    const cooldownMs = (baseMin * 60 + randomSeconds) * 1000;
+
+    // Save new cooldown
+    cooldowns.set(userId, { last: now, cooldown: cooldownMs });
+
+    // Compute next availability for embed
+    const nextMins = Math.floor(cooldownMs / 1000 / 60);
+    const nextSecs = Math.floor((cooldownMs / 1000) % 60);
+
+    // ────────────────────────────────────────────────
+    // Build and send embed
+    // ────────────────────────────────────────────────
+
+    const emojis = {
+      Common:    '📦',
+      Uncommon:  '🛍️',
+      Rare:      '💰',
+      Epic:      '💎',
+      Legendary: '🐉'
+    };
     const emoji = emojis[chosen.name] || '🎁';
+
     const embed = new EmbedBuilder()
       .setTitle(`${emoji} ${chosen.name} Loot Box`)
       .setColor(chosen.color)
