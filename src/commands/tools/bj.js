@@ -95,17 +95,12 @@ async function startHand(interaction, userId, bet, mention) {
     `**Dealer shows:** [${dealerCards[0].display}, ?]`;
 
   const isBtn = typeof interaction.isButton === 'function' && interaction.isButton();
-  // Only treat hit_/stand_/double_ as "update"; everything else (including Play Again) is a fresh reply
-  const cid = isBtn ? interaction.customId : '';
-  const isGameAction = ['hit_', 'stand_', 'double_'].some(pref => cid.startsWith(pref));
-  if (isBtn && isGameAction) {
-    // edit the existing game message
+  if (isBtn) {                              // any button, Play-Again included
     await interaction.update({ content, components: [actionRow] });
-    return interaction.message;
-  } else {
-    // slash command or Play Again button → new reply
-    return interaction.reply({ content, components: [actionRow], fetchReply: true });
+    return interaction.message;             // same message, fresh hand
   }
+  // only the initial /bj start uses reply()
+  return interaction.reply({ content, components: [actionRow], fetchReply: true });
 }
 
 /**
@@ -229,16 +224,17 @@ function attachCollector(msg, userId, mention) {
     });
 
     againCollector.on('collect', async btn => {
-      await btn.deferUpdate();
-      // 1) Check funds
-      let currentBal = await getBalance(userId);
+      // Remove deferUpdate - we'll use update() in startHand
+      const game = games.get(userId);
+      const currentBal = Number(await getBalance(userId)) || 0;
+      const bet = Number(game.originalBet);
+
       if (currentBal < bet) {
-      return btn.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: false });
+        return btn.reply({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
       }
-      // 2) Tear down old game and start a fresh one at the *original* wager
+
       games.delete(userId);
-      const newMsg = await startHand(btn, userId, originalBet, mention);
-      // 3) Re-attach collector to the updated message
+      const newMsg = await startHand(btn, userId, bet, mention);
       attachCollector(newMsg, userId, mention);
     });
   });
