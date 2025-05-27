@@ -39,7 +39,7 @@ function formatCards(cards) {
   return cards.map(c => `${c.rank}${c.suit}`).join(' ');
 }
 // Build embed showing hands, totals, bet, balance, and optional result
-function buildEmbed(playerCards, dealerCards, balance, bet, result) {
+function buildEmbed(playerCards, dealerCards, balance, bet, result, payout) {
   const playerTotal = calculateTotal(playerCards);
   const dealerTotal = calculateTotal(dealerCards);
   const embed = new EmbedBuilder()
@@ -47,7 +47,13 @@ function buildEmbed(playerCards, dealerCards, balance, bet, result) {
     .addFields(
       { name: `Your Hand (Total: ${playerTotal})`, value: formatCards(playerCards), inline: false },
       { name: `Dealer Hand (Total: ${dealerTotal})`, value: formatCards(dealerCards), inline: false },
-      { name: 'Bet', value: String(bet), inline: true },
+      {
+        name: 'Bet',
+        value: payout !== undefined
+          ? `${bet} (Won: ${payout})`
+          : `${bet}`,
+        inline: true
+      },
       { name: 'Balance', value: String(balance), inline: true }
     );
 
@@ -109,7 +115,12 @@ module.exports = {
         const payout = Math.floor(bet * 2.5);
         balance += payout;
         await updateBalance(userId, balance);
-        const embed = buildEmbed(playerCards, dealerCards, balance, bet, '🃏 Blackjack! You win 2.5× your bet!');
+        const embed = buildEmbed(
+          playerCards, dealerCards,
+          balance, bet,
+          '🃏 Blackjack! You win 2.5× your bet!',
+          payout
+        );
         const playRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId('play_again')
@@ -218,7 +229,12 @@ module.exports = {
           balance += payout;
           await updateBalance(userId, balance);
 
-          const finalEmbed = buildEmbed(playerCards, dealerCards, balance, bet, resultText);
+          const finalEmbed = buildEmbed(
+            playerCards, dealerCards,
+            balance, bet,
+            resultText,
+            payout
+          );
           const playRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('play_again').setLabel('Play Again').setStyle(ButtonStyle.Primary)
           );
