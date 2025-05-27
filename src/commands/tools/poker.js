@@ -8,8 +8,8 @@ const {
   EmbedBuilder
 } = require('discord.js');
 
-const pokerManager = require('../../managers/pokerManager');  // you’ll implement next
-const pokerUI      = require('../../utils/pokerUI');         // you’ll implement next
+const pokerManager = require('../../managers/pokerManager');
+const pokerUI      = require('../../utils/pokerUI');
 const pokerUtils   = require('../../utils/pokerUtils');
 const { getBalance, updateBalance } = require('../../utils/db');
 
@@ -25,29 +25,25 @@ module.exports = {
          .setDescription('Start the poker game (min 2 players)')),
 
   async execute(interaction) {
-    const sub = interaction.options.getSubcommand();
-    const chan = interaction.channelId;
-    const user = interaction.user.id;
+    const sub    = interaction.options.getSubcommand();
+    const chan   = interaction.channelId;
+    const userId = interaction.user.id;
 
     // ─── JOIN ─────────────────────────────────────────────────────
     if (sub === 'join') {
       let players;
       try {
-        players = pokerManager.joinGame(chan, user);
+        players = pokerManager.joinGame(chan, userId);
       } catch (err) {
         return interaction.reply({ content: err.message, ephemeral: true });
       }
-      // build a lobby embed + a “Start Game” button
       const embed = pokerUI.buildLobbyEmbed(players);
-      const row = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId('poker:start')
-            .setLabel('Start Game')
-            .setStyle(ButtonStyle.Primary)
-        );
-
-      // reply or edit
+      const row   = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('poker:start')
+          .setLabel('Start Game')
+          .setStyle(ButtonStyle.Primary)
+      );
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ embeds: [embed], components: [row] });
       } else {
@@ -64,77 +60,69 @@ module.exports = {
         return interaction.editReply('❗ Need at least 2 players to start.');
       }
 
-      // init state + DM hole cards
+      // initialize game state
       const state = pokerManager.startGame(chan);
-      state.players.forEach(async p => {
-        try {
-          const user = await interaction.client.users.fetch(p.id);
-          await user.send(
-            `🂠 Your hole cards: **${pokerUtils.formatCards(p.holeCards)}**`
-          );
-        } catch (e) {
-          console.warn(`Failed to DM ${p.id}:`, e);
-        }
-      });
 
-      // now render the public table embed & buttons
+      // render the public table embed & buttons
       const { embed, components } = pokerUI.buildGameUI(state);
       const msg = await interaction.editReply({ embeds: [embed], components });
 
-      // ── Step 6: schedule per-turn auto-action after 60s ─────────────
+      // ── per-turn auto-action timer ───────────────────────────────
       let turnTimeout;
       const scheduleTimeout = () => {
         clearTimeout(turnTimeout);
         turnTimeout = setTimeout(async () => {
-          // auto-fold if there's a bet to call, else auto-check
-          const curr  = state.players[state.currentPlayerIndex];
+          const curr    = state.players[state.currentPlayerIndex];
           const contrib = state.bets.get(curr.id) || 0;
-          const action = state.currentBet > contrib ? 'fold' : 'check';
-
-          // advance via pokerManager
+          const action  = state.currentBet > contrib ? 'fold' : 'check';
           const updated = pokerManager.handleAction(chan, action);
           const { embed: e2, components: c2, gameOver } = pokerUI.buildGameUI(updated);
           await msg.edit({ embeds: [e2], components: c2 });
-
           if (!gameOver) scheduleTimeout();
         }, 60_000);
       };
       scheduleTimeout();
 
-      // collect all button presses for up to 15 minutes
+      // ── button collector ────────────────────────────────────────
       const collector = msg.createMessageComponentCollector({
         componentType: ComponentType.Button,
         time: 15 * 60 * 1000
       });
 
       collector.on('collect', async btn => {
-        const currentId = state.players[state.currentPlayerIndex].id;
-        if (btn.user.id !== currentId) {
-          return btn.reply({ content: '⏳ Not your turn!', ephemeral: true });
-        }
-
         await btn.deferUpdate();
 
-        // parse customId (“poker:action:amount”)
-        const [ , action, amtStr ] = btn.customId.split(':');
-        const amount = amtStr ? parseInt(amtStr, 10) : null;
+        const [ , action, param ] = btn.customId.split(':');
 
-        // advance the state
-        const updated = pokerManager.handleAction(chan, action, amount);
-
-        // rebuild UI
-        const { embed: newEmbed, components: newComps, gameOver } =
-          pokerUI.buildGameUI(updated);
-
-        // Handle game over (showdown or single player)
-        if (gameOver && updated.winners) {
-          // Process payouts
-          for (const [userId, chips] of Object.entries(updated.payouts)) {
-            const bal = await getBalance(userId);
-            await updateBalance(userId, bal + chips);
+        // — Reveal Cards —
+        if (action === 'reveal') {
+          if (btn.user.id !== param) {
+            return btn.followUp({ content: '❌ That’s not your button!', ephemeral: true });
           }
+          const pstate = state.players.find(p => p.id === param);
+          return btn.followUp({
+            content: `🂠 Your hole cards: **${pokerUtils.formatCards(pstate.holeCards)}**`,
+            ephemeral: true
+          });
+        }
 
-          // Build final results embed
+        // — Turn Enforcement —
+        const currentId = state.players[state.currentPlayerIndex].id;
+        if (btn.user.id !== currentId) {
+          return btn.followUp({ content: '⏳ Not your turn!', ephemeral: true });
+        }
+
+        // — Advance Action —
+        const amount  = ['fold','check'].includes(action) ? null : parseInt(param, 10);
+        const updated = pokerManager.handleAction(chan, action, amount);
+        const { embed: newEmbed, components: newComps, gameOver } = pokerUI.buildGameUI(updated);
+
+        // — Game Over: Payout & Final Embed —
+        if (gameOver && updated.winners) {
+          for (const [uid, chips] of Object.entries(updated.payouts)) {
+            const bal = await getBalance(uid);
+            await updateBalance(uid, bal + chips);
+          }
           const resultsEmbed = new EmbedBuilder()
             .setTitle('🏆 Poker Results')
             .setColor('#FFD700')
@@ -144,47 +132,37 @@ module.exports = {
                 value: updated.winners
                   .map(w => `<@${w.id}> (${w.hand.name})`)
                   .join('\n'),
-                inline: false
               },
               {
                 name: 'Payouts',
                 value: Object.entries(updated.payouts)
-                  .map(([id, chips]) => `<@${id}>: ${chips} chips`)
+                  .map(([id, ch]) => `<@${id}>: ${ch} chips`)
                   .join('\n'),
-                inline: false
               },
               {
                 name: 'Final Hands',
-                value: updated.players
+                value: state.players
                   .map(p => `<@${p.id}>: ${pokerUtils.formatCards(p.holeCards)}`)
                   .join('\n'),
-                inline: false
               }
             );
-
-          // Send final results and clean up
           await msg.edit({ embeds: [resultsEmbed], components: newComps });
           pokerManager.games.delete(chan);
           collector.stop();
           return;
         }
 
+        // — Normal round update —
         await msg.edit({ embeds: [newEmbed], components: newComps });
-
-        // reset the per-turn clock
         scheduleTimeout();
-
         if (gameOver) collector.stop();
       });
 
-      collector.on('end', async (collected, reason) => {
-        // clear any pending auto-action
+      collector.on('end', async () => {
         clearTimeout(turnTimeout);
-
-        // build disabled copies of each row
         const disabledRows = msg.components.map(r => {
           const row = ActionRowBuilder.from(r);
-          row.components.forEach(btn => btn.setDisabled(true));
+          row.components.forEach(b => b.setDisabled(true));
           return row;
         });
         await msg.edit({ components: disabledRows });

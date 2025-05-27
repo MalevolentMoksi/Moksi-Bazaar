@@ -5,9 +5,9 @@ const pokerUtils = require('../utils/pokerUtils');
 const handEvaluator = require('../utils/handEvaluator');
 
 // Game constants
-const DEFAULT_STACK = 1000;   // each player starts with 1 000 chips
-const SMALL_BLIND   = 10;
-const BIG_BLIND     = 20;
+const DEFAULT_STACK = 10000;  // everyone starts with 10 000
+const SMALL_BLIND   = 100;    // small blind
+const BIG_BLIND     = 200;    // big blind
 
 // Maps to hold lobby and active game states per channel
 const lobbies = new Map();      // channelId -> Set<userId>

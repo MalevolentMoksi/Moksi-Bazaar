@@ -8,6 +8,7 @@ const {
   ButtonStyle
 } = require('discord.js');
 const pokerUtils = require('./pokerUtils');
+const { SMALL_BLIND, BIG_BLIND } = require('../managers/pokerManager');
 
 /**
  * Build the lobby embed showing joined players.
@@ -83,6 +84,20 @@ function buildGameUI(state) {
   // Build action buttons if still playing
   const components = [];
   if (!gameOver) {
+    // ── New Reveal Row (only pre-flop) ─────────────────────────────
+    if (state.stage === 'pre-flop') {
+      const revealRow = new ActionRowBuilder();
+      state.players.forEach(p => {
+        revealRow.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`poker:reveal:${p.id}`)
+            .setLabel('Reveal Cards')
+            .setStyle(ButtonStyle.Secondary)
+        );
+      });
+      components.unshift(revealRow);
+    }
+
     const current = players[currentPlayerIndex];
     const contributed = bets.get(current.id) || 0;
     const toCall = currentBet - contributed;
@@ -114,7 +129,7 @@ function buildGameUI(state) {
     }
 
     // Bet/Raise presets: minimal amounts
-    const betAmt = currentBet === 0 ? 10 : currentBet * 2;
+    const betAmt = currentBet === 0 ? BIG_BLIND : currentBet * 2;
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`poker:bet:${betAmt}`)
