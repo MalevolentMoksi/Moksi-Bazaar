@@ -95,13 +95,15 @@ async function startHand(interaction, userId, bet, mention) {
     `**Dealer shows:** [${dealerCards[0].display}, ?]`;
 
   const isBtn = typeof interaction.isButton === 'function' && interaction.isButton();
-  if (isBtn) {
-    // update in-place for button clicks
+  // Only treat hit_/stand_/double_ as "update"; everything else (including Play Again) is a fresh reply
+  const cid = isBtn ? interaction.customId : '';
+  const isGameAction = ['hit_', 'stand_', 'double_'].some(pref => cid.startsWith(pref));
+  if (isBtn && isGameAction) {
+    // edit the existing game message
     await interaction.update({ content, components: [actionRow] });
     return interaction.message;
   } else {
-    // reply (slash or prefix) for new games
-    // note: fetchReply is used by real slash interactions only
+    // slash command or Play Again button → new reply
     return interaction.reply({ content, components: [actionRow], fetchReply: true });
   }
 }
