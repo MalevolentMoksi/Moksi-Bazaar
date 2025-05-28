@@ -9,9 +9,9 @@ const {
 } = require('discord.js');
 
 const pokerManager = require('../../managers/pokerManager');
-const pokerUI      = require('../../utils/pokerUI');
-const pokerUtils   = require('../../utils/pokerUtils');
-const { getBalance, updateBalance } = require('../../utils/db');
+const pokerUI      = require('../src/utils/pokerUI');
+const pokerUtils   = require('../src/utils/pokerUtils');
+const { getBalance, updateBalance } = require('../src/utils/db');
 
 module.exports = {
   data: new SlashCommandBuilder()
