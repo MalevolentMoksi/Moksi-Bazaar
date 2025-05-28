@@ -1,8 +1,10 @@
-// src/bot.js
 require('dotenv').config();
 const { token } = process.env;
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
+const { initUptimePresence } = require('./utils/presence');
+
+
 
 const client = new Client({
   intents: [
@@ -28,6 +30,8 @@ client.login(process.env.TOKEN);
 const { init } = require('./utils/db');
 client.once('ready', async () => {
   await init();
+  console.log(`Logged in as ${client.user.tag}`);
+  initUptimePresence(client);
   console.log('✅ Database initialized, balances table is ready.');
   // ... any other ready logic
 });
