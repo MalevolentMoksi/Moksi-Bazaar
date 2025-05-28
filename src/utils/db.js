@@ -40,4 +40,5 @@ async function updateBalance(userId, newBalance) {
   );
 }
 
-module.exports = { init, getBalance, updateBalance };
+module.exports = { pool, init, getBalance, updateBalance };
+
