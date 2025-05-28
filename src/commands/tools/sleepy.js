@@ -1,7 +1,7 @@
 // src/commands/tools/sleepy.js
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { pool } = require('./db.js');
+const { pool } = require('../../utils/db.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
