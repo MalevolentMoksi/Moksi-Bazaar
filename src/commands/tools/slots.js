@@ -21,7 +21,7 @@ const baseSymbols = [
 ];
 const wildSymbol    = { emoji: '🌟', weight: 4, payouts: { 3: 50 } };
 const scatterSymbol = { emoji: '🎟️', weight: 5, payouts: {} };
-const loseSymbol    = { emoji: '⬛', weight: 40, payouts: {} };
+const loseSymbol    = { emoji: '⬛', weight: 8, payouts: {} };
 
 // build the weighted pool
 const weightedPool = [
