@@ -1,3 +1,4 @@
+// src/commands/tools/currency.js
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getBalance, updateBalance, getTopBalances } = require('../../utils/db');
 

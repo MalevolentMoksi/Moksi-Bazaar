@@ -43,7 +43,6 @@ async function getTopBalances(limit = 10) {
   return rows;
 }
 
-module.exports = { init, getBalance, updateBalance, getTopBalances };
 
 // Update (or insert) a user's balance
 async function updateBalance(userId, newBalance) {
@@ -54,5 +53,10 @@ async function updateBalance(userId, newBalance) {
   );
 }
 
-module.exports = { pool, init, getBalance, updateBalance };
-
+module.exports = {
+  pool,
+  init,
+  getBalance,
+  getTopBalances,
+  updateBalance,
+};

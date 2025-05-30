@@ -41,12 +41,21 @@ function formatCards(cards) {
 // Build embed showing hands, totals, bet, balance, and optional result
 function buildEmbed(playerCards, dealerCards, balance, bet, result, payout) {
   const playerTotal = calculateTotal(playerCards);
-  const dealerTotal = calculateTotal(dealerCards);
+
+  // Decide whether to show both dealer cards, or only the first one
+  const inProgress = !result;  
+  const dealerDisplay = inProgress
+    ? `${dealerCards[0].rank}${dealerCards[0].suit} ??`
+    : formatCards(dealerCards);
+  const dealerTotal = inProgress
+    ? calculateTotal([dealerCards[0]])
+    : calculateTotal(dealerCards);
+
   const embed = new EmbedBuilder()
     .setTitle('🎲 Blackjack')
     .addFields(
       { name: `Your Hand (Total: ${playerTotal})`, value: formatCards(playerCards), inline: false },
-      { name: `Dealer Hand (Total: ${dealerTotal})`, value: formatCards(dealerCards), inline: false },
+      { name: `Dealer Hand (Total: ${dealerTotal})`, value: dealerDisplay, inline: false },
       {
         name: 'Bet',
         value: payout !== undefined
