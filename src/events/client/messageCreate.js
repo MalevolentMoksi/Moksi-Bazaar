@@ -119,13 +119,14 @@ module.exports = {
       return;
     }
 
-    // --- Fallback for other prefix commands (e.g., blackjack) ---
+    // --- Fallback for other prefix commands (e.g., blackjack, currency) ---
     const rawSub = parts[1]?.toLowerCase() || 'start';
     const sub = (cmdName === 'bj' && rawSub === 'play') ? 'start' : rawSub;
 
-    // Stub interaction for non-roulette commands
     const interaction = {
       user: message.author,
+      guild: message.guild,        // ← inject the real Guild
+      channel: message.channel,    // ← (optional) if any cmd uses channel directly
       options: {
         getSubcommand: () => sub,
         getInteger: name => {
@@ -176,6 +177,7 @@ module.exports = {
     };
 
     try {
+      console.log('🧪 stub.interaction.guild is', interaction.guild);
       await cmd.execute(interaction);
     } catch (err) {
       console.error('Prefix-command error:', err);
