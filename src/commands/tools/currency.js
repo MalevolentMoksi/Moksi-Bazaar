@@ -38,6 +38,7 @@ module.exports = {
 
     if (sub === 'leaderboard') {
       const DISPLAY_LIMIT = 10;
+      const rankEmojis = ['👑', '🥈', '🥉'];
       const rows = await getTopBalances(DISPLAY_LIMIT * 2);
 
       const board = [];
@@ -64,10 +65,10 @@ module.exports = {
         .setTitle('💰 Server Currency Leaderboard')
         .setDescription(
           board
-            .map(
-              (entry, i) =>
-                `**${i + 1}.** <@${entry.id}> — $${entry.balance.toLocaleString()}`
-            )
+            .map(({ id, balance }, i) => {
+              const rank = rankEmojis[i] || `**${i + 1}.**`;
+              return `${rank} <@${id}> — $${balance.toLocaleString()}`;
+            })
             .join('\n')
         )
         .setColor('Gold');
