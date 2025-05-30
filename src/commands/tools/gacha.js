@@ -29,11 +29,11 @@ module.exports = {
 
     // Define rarities with weights, embed colors, reward ranges, etc.
     const tiers = [
-      { name: 'Common',    weight: 40, color: 0x95a5a6, range: [100,  300] },
-      { name: 'Uncommon',  weight: 30, color: 0x2ecc71, range: [500, 2000] },
-      { name: 'Rare',      weight: 15, color: 0x3498db, range: [2500,4500] },
-      { name: 'Epic',      weight: 10, color: 0x9b59b6, range: [5000,9000] },
-      { name: 'Legendary', weight: 5,  color: 0xf1c40f, range: [10000,20000] }
+      { name: 'Common',    weight: 40, color: 0x95a5a6, range: [1000,  3000] },
+      { name: 'Uncommon',  weight: 30, color: 0x2ecc71, range: [5000, 20000] },
+      { name: 'Rare',      weight: 15, color: 0x3498db, range: [25000,45000] },
+      { name: 'Epic',      weight: 10, color: 0x9b59b6, range: [50000,90000] },
+      { name: 'Legendary', weight: 5,  color: 0xf1c40f, range: [100000,200000] }
     ];
 
     // Weighted random selection of tier

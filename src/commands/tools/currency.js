@@ -22,7 +22,7 @@ module.exports = {
       if (bal > 0) {
         return interaction.reply({ content: `${mention}, nice try—but you still have $${bal}! You can only beg when you’re flat broke.`, ephemeral: true });
       }
-      const amount = Math.floor(Math.random() * 200) + 1;
+      const amount = Math.floor(Math.random() * 10000) + 1;
       await updateBalance(userId, amount);
       return interaction.reply(`${mention}, a benevolent stranger dropped $${amount} in your lap. Your new balance is $${amount}.`);
     }

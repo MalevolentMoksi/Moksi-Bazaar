@@ -26,9 +26,9 @@ async function getBalance(userId) {
   // New player: seed with 1000
   await pool.query(
     'INSERT INTO balances (user_id, balance) VALUES ($1, $2)',
-    [userId, 1000]
+    [userId, 10000]
   );
-  return 1000;
+  return 10000;
 }
 
 // Update (or insert) a user's balance
