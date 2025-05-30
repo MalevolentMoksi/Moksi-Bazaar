@@ -74,6 +74,8 @@ module.exports = {
       // Build a pseudo-interaction for roulette with validated options
       const interaction = {
         user: message.author,
+        guild: message.guild,
+        channel: message.channel, // ← (optional) if any commands use interaction.channel
         options: {
           getSubcommand: () => opts.sub,
           getString: name => {
