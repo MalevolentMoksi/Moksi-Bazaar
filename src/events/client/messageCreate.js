@@ -119,28 +119,36 @@ module.exports = {
       return;
     }
 
-    // --- Fallback for other prefix commands (e.g., blackjack, currency) ---
-    const rawSub = parts[1]?.toLowerCase() || 'start';
-    const sub = (cmdName === 'bj' && rawSub === 'play') ? 'start' : rawSub;
+    // --- Fallback for other prefix commands (e.g., blackjack, currency, duel) ---
+    const sub = parts[1]?.toLowerCase() || 'start';
+    // For duel: sub should be 'challenge', 'accept' or 'decline'
 
     const interaction = {
       user: message.author,
-      guild: message.guild,        // ← inject the real Guild
-      channel: message.channel,    // ← (optional) if any cmd uses channel directly
+      guild: message.guild,
+      channel: message.channel,
       options: {
         getSubcommand: () => sub,
+        getUser: name => {
+          if (name === 'user') {
+            const mention = parts[2];
+            const m = mention?.match(/^<@!?(\d+)>$/);
+            return m ? { id: m[1] } : null;
+          }
+          return null;
+        },
         getInteger: name => {
+          if (name === 'amount') {
+            // look for a number in parts
+            for (let i = parts.length - 1; i >= 0; i--) {
+              const n = parseInt(parts[i], 10);
+              if (!isNaN(n)) return n;
+            }
+            return null;
+          }
           if (name === 'bet') {
             const n = parseInt(parts[2], 10);
             return Number.isNaN(n) ? null : n;
-          }
-          if (name === 'amount') {
-            for (let idx = 3; idx >= 1; idx--) {
-              const v = parts[idx];
-              const n = parseInt(v, 10);
-              if (!Number.isNaN(n)) return n;
-            }
-            return null;
           }
           return null;
         },
