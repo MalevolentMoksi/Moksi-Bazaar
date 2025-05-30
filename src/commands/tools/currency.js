@@ -1,5 +1,5 @@
-const { SlashCommandBuilder } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { getBalance, updateBalance, getTopBalances } = require('../../utils/db');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -10,6 +10,10 @@ module.exports = {
     )
     .addSubcommand(sub =>
       sub.setName('balance').setDescription('Check your current balance')
+    )
+    .addSubcommand(sub =>
+      sub.setName('leaderboard')
+         .setDescription('Show the top balances in this server')
     ),
 
   async execute(interaction) {
@@ -30,6 +34,45 @@ module.exports = {
     if (sub === 'balance') {
       const bal = await getBalance(userId);
       return interaction.reply(`${mention}, your current balance is $${bal}.`);
+    }
+
+    if (sub === 'leaderboard') {
+      const DISPLAY_LIMIT = 10;
+      const rows = await getTopBalances(DISPLAY_LIMIT * 2);
+
+      const board = [];
+      for (const { user_id, balance } of rows) {
+        try {
+          const member = await interaction.guild.members.fetch(user_id);
+          if (member) {
+            board.push({ id: user_id, tag: member.user.tag, balance });
+          }
+        } catch {
+          // not in guild or invalid ID, skip
+        }
+        if (board.length >= DISPLAY_LIMIT) break;
+      }
+
+      if (!board.length) {
+        return interaction.reply({
+          content: 'No balances found for members of this server yet.',
+          ephemeral: true
+        });
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('💰 Server Currency Leaderboard')
+        .setDescription(
+          board
+            .map(
+              (entry, i) =>
+                `**${i + 1}.** <@${entry.id}> — $${entry.balance.toLocaleString()}`
+            )
+            .join('\n')
+        )
+        .setColor('Gold');
+
+      return interaction.reply({ embeds: [embed] });
     }
   }
 };

@@ -1,3 +1,6 @@
+PS C:\Users\enzom\Documents\Coffre\Moksi's Bazaar> tree
+Folder PATH listing for volume SSD
+Volume serial number is C415-6D95
 C:.
 ├───.vs
 │   └───Moksi's Bazaar
@@ -9,6 +12,7 @@ C:.
 │       ├───FileContentIndex
 │       └───v17
 ├───node_modules
+│   ├───.bin
 │   ├───@discordjs
 │   │   ├───builders
 │   │   │   └───dist
@@ -54,10 +58,64 @@ C:.
 │   │   └───async_event_emitter
 │   │       └───dist
 │   ├───ansi-styles
+│   ├───argparse
+│   │   ├───examples
+│   │   ├───lib
+│   │   │   ├───action
+│   │   │   │   ├───append
+│   │   │   │   └───store
+│   │   │   ├───argument
+│   │   │   └───help
+│   │   └───node_modules
+│   │       └───underscore
+│   ├───async
+│   │   └───lib
+│   ├───aws-sign
+│   ├───bignumber.js
+│   │   └───doc
+│   ├───boom
+│   │   ├───lib
+│   │   ├───node_modules
+│   │   │   └───hoek
+│   │   │       ├───images
+│   │   │       ├───lib
+│   │   │       └───test
+│   │   │           └───modules
+│   │   └───test
 │   ├───chalk
 │   │   └───source
+│   ├───charenc
+│   ├───cli-table
+│   │   ├───lib
+│   │   └───node_modules
+│   │       └───colors
+│   │           ├───examples
+│   │           ├───lib
+│   │           │   ├───custom
+│   │           │   ├───maps
+│   │           │   └───system
+│   │           ├───screenshots
+│   │           ├───tests
+│   │           └───themes
 │   ├───color-convert
 │   ├───color-name
+│   ├───colors
+│   │   └───themes
+│   ├───combined-stream
+│   │   └───lib
+│   ├───cookie-jar
+│   │   └───tests
+│   ├───core-util-is
+│   │   └───lib
+│   ├───crypt
+│   ├───cryptiles
+│   │   ├───lib
+│   │   └───test
+│   ├───cycle
+│   ├───delayed-stream
+│   │   ├───lib
+│   │   └───test
+│   │       └───integration
 │   ├───discord-api-types
 │   │   ├───gateway
 │   │   ├───payloads
@@ -108,15 +166,63 @@ C:.
 │   │   └───typings
 │   ├───dotenv
 │   │   └───lib
+│   ├───esprima
+│   │   ├───bin
+│   │   └───test
+│   ├───eyes
+│   │   ├───lib
+│   │   └───test
 │   ├───fast-deep-equal
 │   │   └───es6
+│   ├───forever-agent
+│   ├───form-data
+│   │   └───lib
 │   ├───has-flag
+│   ├───hawk
+│   │   ├───example
+│   │   ├───images
+│   │   ├───lib
+│   │   └───test
+│   ├───hoek
+│   │   ├───images
+│   │   ├───lib
+│   │   └───test
+│   │       └───modules
+│   ├───inherits
+│   ├───isarray
+│   ├───js-yaml
+│   │   ├───bin
+│   │   ├───examples
+│   │   └───lib
+│   │       └───js-yaml
+│   │           ├───schema
+│   │           └───type
+│   │               └───js
+│   ├───json-stringify-safe
 │   ├───lodash
 │   │   └───fp
 │   ├───lodash.snakecase
+│   ├───log
+│   │   ├───examples
+│   │   └───lib
 │   ├───magic-bytes.js
 │   │   └───dist
 │   │       └───model
+│   ├───MD5
+│   ├───mime
+│   │   └───types
+│   ├───mysql
+│   │   └───lib
+│   │       └───protocol
+│   │           ├───constants
+│   │           ├───packets
+│   │           └───sequences
+│   ├───node-uuid
+│   │   ├───benchmark
+│   │   ├───bin
+│   │   ├───lib
+│   │   └───test
+│   ├───oauth-sign
 │   ├───pg
 │   │   ├───esm
 │   │   └───lib
@@ -142,11 +248,55 @@ C:.
 │   │   └───test
 │   ├───pgpass
 │   │   └───lib
+│   ├───pkginfo
+│   │   ├───docs
+│   │   ├───examples
+│   │   │   └───subdir
+│   │   ├───lib
+│   │   └───test
+│   ├───pokersolver
+│   │   └───test
 │   ├───postgres-array
 │   ├───postgres-bytea
 │   ├───postgres-date
 │   ├───postgres-interval
+│   ├───process-nextick-args
+│   ├───psql
+│   │   ├───bin
+│   │   ├───config
+│   │   └───lib
+│   ├───q
+│   ├───qs
+│   │   └───test
+│   │       └───browser
+│   ├───readable-stream
+│   │   ├───doc
+│   │   │   └───wg-meetings
+│   │   └───lib
+│   │       └───internal
+│   │           └───streams
+│   ├───request
+│   │   └───tests
+│   │       └───ssl
+│   │           └───ca
+│   ├───safe-buffer
+│   ├───sntp
+│   │   ├───examples
+│   │   ├───lib
+│   │   ├───node_modules
+│   │   │   └───hoek
+│   │   │       ├───images
+│   │   │       ├───lib
+│   │   │       └───test
+│   │   │           └───modules
+│   │   └───test
 │   ├───split2
+│   ├───sqlstring
+│   │   └───lib
+│   ├───stack-trace
+│   │   └───lib
+│   ├───string_decoder
+│   │   └───lib
 │   ├───supports-color
 │   ├───ts-mixer
 │   │   └───dist
@@ -155,6 +305,13 @@ C:.
 │   │       └───types
 │   ├───tslib
 │   │   └───modules
+│   ├───tunnel-agent
+│   ├───underscore
+│   │   ├───amd
+│   │   ├───cjs
+│   │   └───modules
+│   ├───underscore.string
+│   │   └───lib
 │   ├───undici
 │   │   ├───docs
 │   │   │   └───docs
@@ -179,14 +336,41 @@ C:.
 │   │   ├───scripts
 │   │   └───types
 │   ├───undici-types
+│   ├───util-deprecate
+│   ├───winston
+│   │   ├───docs
+│   │   ├───examples
+│   │   ├───lib
+│   │   │   └───winston
+│   │   │       ├───config
+│   │   │       └───transports
+│   │   └───test
+│   │       ├───fixtures
+│   │       │   ├───keys
+│   │       │   ├───logs
+│   │       │   └───scripts
+│   │       └───transports
+│   ├───wordwrap
+│   │   ├───example
+│   │   └───test
 │   ├───ws
 │   │   └───lib
-│   └───xtend
-└───src
-    ├───commands
-    │   └───tools
-    ├───events
-    │   └───client
-    ├───functions
-    │   └───handlers
-    └───utils
+│   ├───xtend
+│   ├───yaml-config
+│   │   ├───lib
+│   │   └───test
+│   └───yargs
+│       ├───example
+│       ├───lib
+│       └───test
+│           └───_
+├───src
+│   ├───commands
+│   │   └───tools
+│   ├───events
+│   │   └───client
+│   ├───functions
+│   │   └───handlers
+│   ├───managers
+│   └───utils
+└───trashcan

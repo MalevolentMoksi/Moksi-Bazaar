@@ -31,6 +31,20 @@ async function getBalance(userId) {
   return 10000;
 }
 
+// Get the top N balances across *all* users
+async function getTopBalances(limit = 10) {
+  const { rows } = await pool.query(
+    `SELECT user_id, balance
+       FROM balances
+      ORDER BY balance DESC
+      LIMIT $1`,
+    [limit]
+  );
+  return rows;
+}
+
+module.exports = { init, getBalance, updateBalance, getTopBalances };
+
 // Update (or insert) a user's balance
 async function updateBalance(userId, newBalance) {
   await pool.query(
