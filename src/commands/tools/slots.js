@@ -12,16 +12,16 @@ const crypto = require('crypto');
 
 // -- SYMBOL DEFINITIONS --------------------------------------------------
 const baseSymbols = [
-  { emoji: '🍒', weight: 20, payouts: { 2: 2, 3: 10 } },
-  { emoji: '🍋', weight: 30, payouts: { 2: 1.5, 3: 5 } },
-  { emoji: '🍊', weight: 35, payouts: { 2: 1.2, 3: 2.5 } },
+  { emoji: '🍒', weight: 20, payouts: { 2: 6, 3: 10 } },
+  { emoji: '🍋', weight: 30, payouts: { 2: 3, 3: 5 } },
+  { emoji: '🍊', weight: 35, payouts: { 2: 2, 3: 2.5 } },
   { emoji: '🔔', weight: 15, payouts: { 3: 20 } },
   { emoji: '💎', weight: 10, payouts: { 3: 40 } },
   { emoji: '7️⃣', weight: 8,  payouts: { 3: 75 } }
 ];
 const wildSymbol    = { emoji: '🌟', weight: 4, payouts: { 3: 50 } };
 const scatterSymbol = { emoji: '🎟️', weight: 5, payouts: {} };
-const loseSymbol    = { emoji: '⬛', weight: 8, payouts: {} };
+const loseSymbol    = { emoji: '⬛', weight: 7, payouts: {} };
 
 // build the weighted pool
 const weightedPool = [
