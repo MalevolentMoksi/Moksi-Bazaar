@@ -1,7 +1,9 @@
-// src/utils/presence.js
 const { ActivityType } = require('discord.js');
 
-function formatUptime(ms) {
+/**
+ * Formats a duration (in ms) into a human-readable string.
+ */
+function formatDuration(ms) {
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
@@ -13,9 +15,42 @@ function formatUptime(ms) {
   return `${seconds}s`;
 }
 
-function initUptimePresence(client) {
+/**
+ * Initialize presence to show remaining trial time.
+ * Requires an env var TRIAL_END_DATE (ISO string), e.g. 2025-06-23T00:00:00Z
+ */
+function initTrialPresence(client) {
+  const updateInterval = 60_000; // every minute
   setInterval(() => {
-    const uptime = formatUptime(client.uptime);
+    const endDate = process.env.TRIAL_END_DATE
+      ? new Date(process.env.TRIAL_END_DATE)
+      : null;
+    let statusText;
+    if (endDate) {
+      const remainingMs = endDate - Date.now();
+      statusText = remainingMs > 0
+        ? `DOOMSDAY in: ${formatDuration(remainingMs)}`
+        : 'DOOMSDAY';
+    } else {
+      statusText = 'DOOMSDAY date not set';
+    }
+
+    client.user.setPresence({
+      activities: [{
+        name: statusText,
+        type: ActivityType.Watching
+      }],
+      status: 'online'
+    });
+  }, updateInterval);
+}
+
+// Backup uptime presence (commented out)
+/*
+function initUptimePresence(client) {
+  const updateInterval = 60_000; // every minute
+  setInterval(() => {
+    const uptime = formatDuration(client.uptime);
     client.user.setPresence({
       activities: [{
         name: `Uptime: ${uptime}`,
@@ -23,7 +58,11 @@ function initUptimePresence(client) {
       }],
       status: 'online'
     });
-  }, 60_000); // Update every minute
+  }, updateInterval);
 }
+*/
 
-module.exports = { initUptimePresence };
+module.exports = {
+  initTrialPresence,
+  // initUptimePresence,
+};
