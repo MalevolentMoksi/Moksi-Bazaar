@@ -33,7 +33,8 @@ const { init } = require('./utils/db');
 client.once('ready', async () => {
   await init();
   console.log(`Logged in as ${client.user.tag}`);
-  initUptimePresence(client);
+  // initUptimePresence(client);
+  initTrialPresence(client);
   console.log('✅ Database initialized, balances table is ready.');
   // ... any other ready logic
 });
