@@ -1,37 +1,49 @@
 // src/utils/db.js
-const { Pool } = require('pg');
-// Use SSL for Railway Postgres
+const { Pool, types } = require('pg');
+
+// ── PARSE BIGINT AS JS Number ─────────────────────────────────────────────────
+// PostgreSQL’s BIGINT (OID 20) normally comes back as a string.
+// This makes pg hand you back a Number instead, so `current + reward` works as you expect.
+types.setTypeParser(types.builtins.INT8, v => parseInt(v, 10));
+
+// ── DATABASE CONNECTION ───────────────────────────────────────────────────────
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Initialize the balances table if it doesn't exist
+// ── TABLE INITIALIZATION ───────────────────────────────────────────────────────
 const init = async () => {
-  await pool.query(
-    `CREATE TABLE IF NOT EXISTS balances (
-       user_id   TEXT PRIMARY KEY,
-       balance   INTEGER NOT NULL
-     );`
-  );
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS balances (
+      user_id TEXT PRIMARY KEY,
+      balance BIGINT NOT NULL
+    );
+  `);
 };
 
-// Get the balance for a user, creating a new entry with 1000 if absent
+// ── GET BALANCE (with default seed) ────────────────────────────────────────────
 async function getBalance(userId) {
   const { rows } = await pool.query(
     'SELECT balance FROM balances WHERE user_id = $1',
     [userId]
   );
-  if (rows.length) return rows[0].balance;
-  // New player: seed with 1000
+
+  if (rows.length) {
+    // rows[0].balance is now a Number, not a string
+    return rows[0].balance;
+  }
+
+  // New player: seed with 10 000
+  const seed = 10000;
   await pool.query(
     'INSERT INTO balances (user_id, balance) VALUES ($1, $2)',
-    [userId, 10000]
+    [userId, seed]
   );
-  return 10000;
+  return seed;
 }
 
-// Get the top N balances across *all* users
+// ── TOP BALANCES ───────────────────────────────────────────────────────────────
 async function getTopBalances(limit = 10) {
   const { rows } = await pool.query(
     `SELECT user_id, balance
@@ -40,15 +52,17 @@ async function getTopBalances(limit = 10) {
       LIMIT $1`,
     [limit]
   );
-  return rows;
+  return rows;  // balance is Number
 }
 
-
-// Update (or insert) a user's balance
+// ── UPDATE BALANCE ─────────────────────────────────────────────────────────────
 async function updateBalance(userId, newBalance) {
+  // newBalance should be a Number if you follow this approach
   await pool.query(
-    `INSERT INTO balances (user_id, balance) VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET balance = EXCLUDED.balance`,
+    `INSERT INTO balances (user_id, balance)
+       VALUES ($1, $2)
+     ON CONFLICT (user_id)
+       DO UPDATE SET balance = EXCLUDED.balance`,
     [userId, newBalance]
   );
 }
