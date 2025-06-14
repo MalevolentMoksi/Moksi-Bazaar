@@ -41,6 +41,8 @@ module.exports = {
       const DISPLAY_LIMIT = 10;
       const rankEmojis = ['👑', '🥈', '🥉'];
       const rows = await getTopBalances(DISPLAY_LIMIT * 2);
+      console.log('DB rows for leaderboard:', rows);
+
 
       const board = [];
       for (const { user_id, balance } of rows) {
