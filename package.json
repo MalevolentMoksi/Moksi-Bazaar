@@ -4,7 +4,10 @@
   "description": "",
   "main": "src/bot.js",
   "scripts": {
-    "start": "node src/bot.js"
+    "start": "node src/bot.js",
+    "test": "jest",
+    "lint": "eslint . --ext .js",
+    "pretest": "npm run lint"
   },
   "keywords": [],
   "author": "Moksi",
@@ -17,5 +20,9 @@
     "dotenv": "^16.5.0",
     "pg": "^8.16.0",
     "pokersolver": "^2.1.4"
+  },
+  "devDependencies": {
+    "eslint": "^9.29.0",
+    "jest": "^30.0.3"
   }
 }
