@@ -4,7 +4,7 @@ require('dotenv').config();
 const { token } = process.env;
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
-const { initTrialPresence } = require('./utils/presence');
+const { initUptimePresence } = require('./utils/presence');
 
 
 
@@ -33,8 +33,7 @@ const { init } = require('./utils/db');
 client.once('ready', async () => {
   await init();
   console.log(`Logged in as ${client.user.tag}`);
-  // initUptimePresence(client);
-  initTrialPresence(client);
+  initUptimePresence(client);
   console.log('✅ Database initialized, balances table is ready.');
   // ... any other ready logic
 });

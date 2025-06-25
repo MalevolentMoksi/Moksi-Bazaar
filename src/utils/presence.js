@@ -16,37 +16,8 @@ function formatDuration(ms) {
 }
 
 /**
- * Initialize presence to show remaining trial time.
- * Requires an env var TRIAL_END_DATE (ISO string), e.g. 2025-06-23T00:00:00Z
+ * Initialize presence to show the bot's current runtime.
  */
-function initTrialPresence(client) {
-  const updateInterval = 60_000; // every minute
-  setInterval(() => {
-    const endDate = process.env.TRIAL_END_DATE
-      ? new Date(process.env.TRIAL_END_DATE)
-      : null;
-    let statusText;
-    if (endDate) {
-      const remainingMs = endDate - Date.now();
-      statusText = remainingMs > 0
-        ? `DOOMSDAY in: ${formatDuration(remainingMs)}`
-        : 'DOOMSDAY';
-    } else {
-      statusText = 'DOOMSDAY date not set';
-    }
-
-    client.user.setPresence({
-      activities: [{
-        name: statusText,
-        type: ActivityType.Watching
-      }],
-      status: 'online'
-    });
-  }, updateInterval);
-}
-
-// Backup uptime presence (commented out)
-/*
 function initUptimePresence(client) {
   const updateInterval = 60_000; // every minute
   setInterval(() => {
@@ -60,9 +31,7 @@ function initUptimePresence(client) {
     });
   }, updateInterval);
 }
-*/
 
 module.exports = {
-  initTrialPresence,
-  // initUptimePresence,
+  initUptimePresence,
 };
