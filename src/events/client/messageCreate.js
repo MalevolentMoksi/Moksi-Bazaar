@@ -10,7 +10,7 @@ module.exports = {
     const rawCmd = parts[0].toLowerCase();
 
     // Alias map for prefix commands
-    const aliasMap = { r: 'roulette', bj: 'bj' };
+    const aliasMap = { r: 'roulette', bj: 'bj', hl: 'highlow' };
     const cmdName = aliasMap[rawCmd] ?? rawCmd;
     const cmd = client.commands.get(cmdName);
     if (!cmd) return;
@@ -120,7 +120,10 @@ module.exports = {
     }
 
     // --- Fallback for other prefix commands (e.g., blackjack, currency, duel) ---
-    const sub = parts[1]?.toLowerCase() || 'start';
+    const firstArg = parts[1];
+    const isNumeric = firstArg && !isNaN(parseInt(firstArg, 10));
+    const sub = isNumeric ? 'start' : (firstArg ? firstArg.toLowerCase() : 'start');
+    const betIndex = isNumeric ? 1 : 2;
     // For duel: sub should be 'challenge', 'accept' or 'decline'
 
     const interaction = {
@@ -147,7 +150,7 @@ module.exports = {
             return null;
           }
           if (name === 'bet') {
-            const n = parseInt(parts[2], 10);
+            const n = parseInt(parts[betIndex], 10);
             return Number.isNaN(n) ? null : n;
           }
           return null;
