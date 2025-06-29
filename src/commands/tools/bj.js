@@ -231,7 +231,10 @@ module.exports = {
           const dealerTotal = calculateTotal(dealerCards);
           let resultText;
           let payout = 0;
-          if (dealerTotal > 21 || playerTotal > dealerTotal) {
+          if (playerTotal > 21) {
+            resultText = '💥 Bust! You lose.';
+            payout = 0;
+          } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
             resultText = '🎉 You win!';
             payout = bet * 2;
           } else if (playerTotal === dealerTotal) {
