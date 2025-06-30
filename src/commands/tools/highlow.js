@@ -85,7 +85,17 @@ module.exports = {
       }
 
       const message = await interaction.fetchReply();
-      const collector = message.createMessageComponentCollector({ componentType: ComponentType.Button });
+      const collector = message.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 60_000
+      });
+
+      collector.on('end', async (_collected, reason) => {
+        if (reason === 'time') {
+          for (const btn of row.components) btn.setDisabled(true);
+          await message.edit({ components: [row] }).catch(() => {});
+        }
+      });
 
       collector.on('collect', async btnInt => {
         if (btnInt.user.id !== userId) {
@@ -129,6 +139,14 @@ module.exports = {
         await interaction.editReply({ embeds: [resultEmbed], components: [againRow] });
 
         const againCollector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
+
+        againCollector.on('end', async (_collected, reason) => {
+          if (reason === 'time') {
+            for (const btn of againRow.components) btn.setDisabled(true);
+            await message.edit({ components: [againRow] }).catch(() => {});
+          }
+        });
+
         againCollector.on('collect', async b => {
           if (b.user.id !== userId) return b.reply({ content: 'Not your game!', ephemeral: true });
           await b.deferUpdate();
