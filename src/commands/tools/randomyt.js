@@ -18,8 +18,10 @@ let currentVideo = null;
 // Astronaut.io emits random "video" events with { id: "YOUTUBE_ID", ... }
 sock.on('connect', () => console.log('[randomyt] Connected to Astronaut.io'));
 sock.on('video', pkt => {
-  currentVideo = `https://youtu.be/${pkt.id}`;
+  console.log('[randomyt] Received video event:', pkt);
+  currentVideo = pkt && pkt.id ? `https://youtu.be/${pkt.id}` : null;
 });
+
 sock.on('connect_error', err => console.error('[randomyt] Astronaut.io error:', err));
 sock.on('disconnect', () => console.warn('[randomyt] Disconnected from Astronaut.io'));
 
@@ -28,11 +30,11 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('randomyt')
     .setDescription('Get a YouTube video with (almost) zero views, via Astronaut.io!'),
-  async execute(interaction) {
+    async execute(interaction) {
     if (currentVideo) {
-      await interaction.reply(currentVideo);
+        await interaction.reply(currentVideo);
     } else {
-      await interaction.reply('Still connecting to the Astronaut.io video feed... try again in a few seconds!');
+        await interaction.reply('Still connecting or no video received... try again in a few seconds!');
     }
   },
 };
