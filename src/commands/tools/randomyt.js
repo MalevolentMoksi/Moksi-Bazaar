@@ -18,7 +18,7 @@ let currentVideo = null;
 // Astronaut.io emits random "video" events with { id: "YOUTUBE_ID", ... }
 sock.on('connect', () => console.log('[randomyt] Connected to Astronaut.io'));
 sock.on('video', pkt => {
-  console.log('[randomyt] Received video event:', pkt);
+//  console.log('[randomyt] Received video event:', pkt);
   // Robustly grab ID from nested payload
   if (pkt && pkt.video && pkt.video.id) {
     currentVideo = `https://youtu.be/${pkt.video.id}`;
