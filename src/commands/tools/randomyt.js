@@ -19,8 +19,14 @@ let currentVideo = null;
 sock.on('connect', () => console.log('[randomyt] Connected to Astronaut.io'));
 sock.on('video', pkt => {
   console.log('[randomyt] Received video event:', pkt);
-  currentVideo = pkt && pkt.id ? `https://youtu.be/${pkt.id}` : null;
+  // Robustly grab ID from nested payload
+  if (pkt && pkt.video && pkt.video.id) {
+    currentVideo = `https://youtu.be/${pkt.video.id}`;
+  } else {
+    currentVideo = null;
+  }
 });
+
 
 sock.on('connect_error', err => console.error('[randomyt] Astronaut.io error:', err));
 sock.on('disconnect', () => console.warn('[randomyt] Disconnected from Astronaut.io'));
