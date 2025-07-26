@@ -4,13 +4,14 @@ const { SlashCommandBuilder } = require('discord.js');
 const { io } = require('socket.io-client');
 
 // Establish persistent connection when module is loaded
-const sock = io('https://astronaut.io', {
+const sock = io('http://astronaut.io', {
   path: '/socket.io',
   transports: ['websocket'],
   reconnection: true,
   reconnectionAttempts: 20,
   reconnectionDelay: 3000,
 });
+
 
 let currentVideo = null;
 
