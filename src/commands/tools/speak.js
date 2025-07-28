@@ -3,6 +3,7 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
+    goat_puke: '<a:goat_puke:1398407422187540530>',
     goat_meditate: '<a:goat_meditate:1395455714901884978>',
     goat_hurt: '<a:goat_hurt:1395446681826234531>',
     goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
@@ -17,7 +18,7 @@ const GOAT_EMOJIS = {
 
 module.exports = {
     data: new SlashCommandBuilder()
-        .setName('moksisays')
+        .setName('speak')
         .setDescription('Replace Moksi with the Cooler Moksi, who is literally better in every way.')
         .addStringOption(opt =>
             opt
@@ -42,7 +43,7 @@ module.exports = {
                 })
                 .join('\n');
             const contextAndPersona =
-                `You're Cooler Moksi, a mildly cynic and playful guy. Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) and to have natural reactions to things (shock, disgust, anger possible).` +
+                `You're Cooler Moksi, a mildly cynic and playful guy. Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) and to have natural reactions to things (shock, disgust and anger possible), otherwise you can be regular, somewhat friendly.` +
                 `Here are the latest chat messages on this Discord server, so you know the context:\n${recent}\n\n`;
             const userRequest = interaction.options.getString('request');
 
