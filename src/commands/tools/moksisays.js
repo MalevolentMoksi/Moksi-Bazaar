@@ -91,25 +91,31 @@ module.exports = {
                 data.content?.trim() ||
                 '*No witty summary returned.*';
 
-            // If the user requested, format as asked by them, small and italicized
-            if (userRequest) {
-                // Ping user
-                reply = `-# <@${interaction.user.id}> asked *"${userRequest}"*\n\n${reply}`;
-            }
+            // Fetch Groq reply:
+            let rawGroqReply = data.choices?.[0]?.message?.content?.trim() ||
+                data.choices?.[0]?.text?.trim() ||
+                data.content?.trim() ||
+                '*No witty summary returned.*';
 
-            // Split response into main reply and possible emoji name
-            let [mainReply, maybeEmojiName] = reply.trim().split('\n').map(s => s.trim());
+            // Split Groq answer (may be multi-line!)
+            let lines = rawGroqReply.split('\n').map(s => s.trim()).filter(Boolean);
 
-            // Clean up: remove any accidental colons, ensure lowercase
-            if (maybeEmojiName) maybeEmojiName = maybeEmojiName.replace(/^:|:$/g, '').toLowerCase();
+            let replyBody = lines[0];
+            let maybeEmojiName = lines[1] || '';
+            maybeEmojiName = maybeEmojiName.replace(/^:|:$/g, '').toLowerCase();
 
-            // Look up the corresponding emoji markup, or fallback to empty string
             const emoji = GOAT_EMOJIS[maybeEmojiName] || '';
 
-            // Combine the main reply with the emoji, if present
-            const finalReply = emoji ? `${mainReply} ${emoji}` : mainReply;
+            let finalReply = replyBody;
+            if (emoji) finalReply += ' ' + emoji;
+
+            if (userRequest) {
+                const questionLine = `-# <@${interaction.user.id}> asked *"${userRequest}"*`;
+                finalReply = `${questionLine}\n\n${finalReply}`;
+            }
 
             await interaction.editReply(finalReply);
+
 
 
         } catch (error) {
