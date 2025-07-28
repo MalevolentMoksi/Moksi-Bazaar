@@ -67,10 +67,36 @@ async function updateBalance(userId, newBalance) {
   );
 }
 
+// Add this in db.js, near your other exports
+async function isUserBlacklisted(userId) {
+  const { rows } = await pool.query(
+    'SELECT 1 FROM speak_blacklist WHERE user_id = $1',
+    [userId]
+  );
+  return rows.length > 0;
+}
+
+async function addUserToBlacklist(userId) {
+  await pool.query(
+    'INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING',
+    [userId]
+  );
+}
+
+async function removeUserFromBlacklist(userId) {
+  await pool.query(
+    'DELETE FROM speak_blacklist WHERE user_id = $1',
+    [userId]
+  );
+}
+
 module.exports = {
   pool,
   init,
   getBalance,
   getTopBalances,
   updateBalance,
+  isUserBlacklisted,
+  addUserToBlacklist,
+  removeUserFromBlacklist,
 };

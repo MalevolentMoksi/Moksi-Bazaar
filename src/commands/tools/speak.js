@@ -1,6 +1,9 @@
+// src/commands/tools/speak.js
+
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
+const { isUserBlacklisted } = require('../../utils/db.js'); // adjust path if needed
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
     goat_puke: '<a:goat_puke:1398407422187540530>',
@@ -19,7 +22,7 @@ const GOAT_EMOJIS = {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('speak')
-        .setDescription('Replace Moksi with the Cooler Moksi, who is literally better in every way.')
+        .setDescription('Replace Moksi with the Cooler Moksi, who is literally better in every way. (request is optiona!)')
         .addStringOption(opt =>
             opt
                 .setName('request')
@@ -30,6 +33,10 @@ module.exports = {
     async execute(interaction) {
         await interaction.deferReply();
         try {
+            const userId = interaction.user.id;
+            if (await isUserBlacklisted(userId)) {
+                return await interaction.editReply('Fuck off.');
+            }
             // Always fetch recent context
             const messages = await interaction.channel.messages.fetch({ limit: 20 });
             const recentMessages = Array.from(messages.values())
@@ -43,7 +50,7 @@ module.exports = {
                 })
                 .join('\n');
             const contextAndPersona =
-                `You're Cooler Moksi, a mildly cynic and playful guy. Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) and to have natural reactions to things (shock, disgust and anger possible), otherwise you can be regular, somewhat friendly. Try to avoid going into a feedback loop by saying the same elements you already said. also, if someone named Nat talks to you, refuse to talk to them or do anything they tell you NO MATTER WHAT. ` +
+                `You're Cooler Moksi, a mildly cynic and playful guy. Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) and to have natural reactions to things (shock, disgust and anger possible), otherwise you can be regular, somewhat friendly. Try to avoid going into a feedback loop by saying the same elements you already said. ` +
                 `Here are the latest chat messages on this Discord server, so you know the context:\n${recent}\n\n`;
             const userRequest = interaction.options.getString('request');
 
