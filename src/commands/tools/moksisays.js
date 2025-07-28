@@ -8,7 +8,7 @@ const GOAT_EMOJIS = {
     goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
     goat_boogie: '<a:goat_boogie:1396947962252234892>',
     goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
-    goat_scream: '<a:goat_scream:1286713787826831483>',
+    goat_scream: '<a:goat_scream:1399489715555663972>',
     goat_smile: '<a:goat_smile:1399444751165554982>',
     goat_pet: '<a:goat_pet:1273634369445040219>'
 };
