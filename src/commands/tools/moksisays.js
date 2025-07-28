@@ -10,7 +10,7 @@ const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('moksisays')
-        .setDescription('Let Moksi summarize the last 10 messages with AI wit!'),
+        .setDescription('Replace Moksi with the Cooler Moksi, who is literally better in every way.'),
 
     async execute(interaction) {
         await interaction.deferReply();
@@ -39,7 +39,7 @@ module.exports = {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    model: 'mixtral-8x7b-32768', // or 'llama3-8b-8192' -- see Groq dashboard for available models
+                    model: 'llama-3.3-70b-versatile', // or 'llama3-8b-8192' -- see Groq dashboard for available models
                     messages: [{ role: 'user', content: prompt }],
                     max_tokens: 100,
                     temperature: 0.7,
