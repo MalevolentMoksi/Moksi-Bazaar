@@ -43,17 +43,23 @@ module.exports = {
             const userRequest = interaction.options.getString('request');
 
             const suggestEmojiInstruction = `After replying, output on a new line the most context-appropriate emoji name from this list (or "none" if not fitting): ${Object.keys(GOAT_EMOJIS).join(", ")}. Only output the emoji name itself, without markup or explanation.\n`
-            if (Math.random() < 0.45) contextAndPersona += suggestEmojiInstruction;
+            
+            
+            let fullContext = contextAndPersona;
+            if (Math.random() < 0.45) fullContext += suggestEmojiInstruction;
+
+
+
 
             let prompt;
             if (userRequest) {
                 prompt =
-                    contextAndPersona +
+                    fullContext +
                     `A user now asks: "${userRequest}"\n` +
                     `Reply as Cooler Moksi (one or two sentences), addressing the request (and the context IF it's relevant to the request).`;
             } else {
                 prompt =
-                    contextAndPersona +
+                    fullContext +
                     `Respond with a witty or pithy one- or two-sentence reply to add to the conversation.`;
             }
 
