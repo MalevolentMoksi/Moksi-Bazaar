@@ -47,9 +47,11 @@ module.exports = {
         });
 
         if (!response.ok) {
-            return interaction.editReply('Claude API error: ' + errText);
-            console.log('Claude API status:', response.status, await response.text());
+            const errText = await response.text();
+            await interaction.editReply('Claude API error: ' + errText);
+            return;
         }
+
 
         const data = await response.json();
         // Haiku returns: { content: [{ type: "text", text: "..." }], ... }
