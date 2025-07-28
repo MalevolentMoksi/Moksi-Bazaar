@@ -16,13 +16,13 @@ module.exports = {
         await interaction.deferReply();
 
         try {
-            // Fetch last 15 messages for filtering (to ensure 10 user messages)
-            const messages = await interaction.channel.messages.fetch({ limit: 15 });
-            // Get the last 10 non-bot messages, sorted oldest to newest
+            // Fetch last 25 messages for filtering (to ensure 10 user messages)
+            const messages = await interaction.channel.messages.fetch({ limit: 25 });
+            // Get the last 20 non-bot messages, sorted oldest to newest
             const recentMessages = Array.from(messages.values())
                 .filter(msg => !msg.author.bot)
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-                .slice(-10);
+                .slice(-20);
 
             const recent = recentMessages
                 .map(msg => `${msg.author.username}: ${msg.content}`)
