@@ -47,7 +47,8 @@ module.exports = {
         });
 
         if (!response.ok) {
-            return interaction.editReply('Claude API error; please try again later.');
+            return interaction.editReply('Claude API error: ' + errText);
+            console.log('Claude API status:', response.status, await response.text());
         }
 
         const data = await response.json();
