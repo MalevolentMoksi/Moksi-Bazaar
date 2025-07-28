@@ -2,15 +2,15 @@ const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
 const GOAT_EMOJIS = {
-  goat_cry: '<a:goat_cry:1395455098716688424>',
-  goat_meditate: '<a:goat_meditate:1395455714901884978>',
-  goat_hurt: '<a:goat_hurt:1395446681826234531>',
-  goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
-  goat_boogie: '<a:goat_boogie:1396947962252234892>',
-  goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
-  goat_scream: '<a:goat_scream:1286713787826831483>',
-  goat_smile: '<a:goat_smile:1399444751165554982>',
-  goat_pet: '<a:goat_pet:1273634369445040219>'
+    goat_cry: '<a:goat_cry:1395455098716688424>',
+    goat_meditate: '<a:goat_meditate:1395455714901884978>',
+    goat_hurt: '<a:goat_hurt:1395446681826234531>',
+    goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
+    goat_boogie: '<a:goat_boogie:1396947962252234892>',
+    goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
+    goat_scream: '<a:goat_scream:1286713787826831483>',
+    goat_smile: '<a:goat_smile:1399444751165554982>',
+    goat_pet: '<a:goat_pet:1273634369445040219>'
 };
 
 
@@ -43,8 +43,8 @@ module.exports = {
             const userRequest = interaction.options.getString('request');
 
             const suggestEmojiInstruction = `After replying, output on a new line the most context-appropriate emoji name from this list (or "none" if not fitting): ${Object.keys(GOAT_EMOJIS).join(", ")}. Only output the emoji name itself, without markup or explanation.\n`
-            
-            
+
+
             let fullContext = contextAndPersona;
             if (Math.random() < 0.45) fullContext += suggestEmojiInstruction;
 
@@ -63,6 +63,7 @@ module.exports = {
                     `Respond with a witty or pithy one- or two-sentence reply to add to the conversation.`;
             }
 
+            // === THE FETCH MUST BE HERE, after prompt is ready ===
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
