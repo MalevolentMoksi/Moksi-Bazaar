@@ -32,11 +32,11 @@ module.exports = {
                     `You're Cooler Moksi, a cynic bot replacement of a guy named Moksi. Here are the latest chat messages on this Discord server:\n` +
                     `${recent}\n\n` +
                     `A user now asks: "${userRequest}"\n` +
-                    `Reply as Cooler Moksi, in a clever, context-aware tone (one or two sentences), addressing both the chat context (if it's relevant!) and their request.`;
+                    `Reply as Cooler Moksi (one or two sentences), addressing the request (and the context IF it's relevant to the request). Try to write naturally (lowercase, no excessive punctuation, etc.).`;
             } else {
                 prompt =
                     `You're Cooler Moksi, a cynic bot replacement of a guy named Moksi. These are the last Discord chat messages:\n${recent}\n\n` +
-                    `Respond with a witty or pithy one- or two-sentence reply to add to the conversation.`;
+                    `Respond with a witty or pithy one- or two-sentence reply to add to the conversation. Try to write naturally (lowercase, no excessive punctuation, etc.).`;
             }
 
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -68,8 +68,8 @@ module.exports = {
 
             // If the user requested, format as asked by them, small and italicized
             if (userRequest) {
-                // Use interaction.user for the display name
-                reply = `-# @${interaction.user.username} asked *"${userRequest}"*\n\n${reply}`;
+                // Ping user
+                reply = `-# <@${interaction.user.id}> asked *"${userRequest}"*\n\n${reply}`;
             }
 
             await interaction.editReply(reply);
