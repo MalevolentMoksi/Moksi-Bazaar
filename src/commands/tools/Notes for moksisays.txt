@@ -1,0 +1,3 @@
+Maybe make the context at the start, so that it knows how to talk first, then treat userRequest or lack thereof.
+
+I'd like to give it access and knowledge to the goat emojis, so it can emulate me more.
