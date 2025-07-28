@@ -19,7 +19,6 @@ module.exports = {
       // Always fetch recent context
       const messages = await interaction.channel.messages.fetch({ limit: 20 });
       const recentMessages = Array.from(messages.values())
-        .filter(msg => !msg.author.bot)
         .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
         .slice(-15);
       const recent = recentMessages
