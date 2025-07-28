@@ -46,7 +46,7 @@ module.exports = {
 
 
             let fullContext = contextAndPersona;
-            if (Math.random() < 0.45) fullContext += suggestEmojiInstruction;
+            if (Math.random() < 0.66) fullContext += suggestEmojiInstruction;
 
 
 
@@ -60,7 +60,7 @@ module.exports = {
             } else {
                 prompt =
                     fullContext +
-                    `Respond with a witty or pithy one- or two-sentence reply to add to the conversation.`;
+                    `Respond with a one or two-sentence reply to add to the conversation.`;
             }
 
             // === THE FETCH MUST BE HERE, after prompt is ready ===
