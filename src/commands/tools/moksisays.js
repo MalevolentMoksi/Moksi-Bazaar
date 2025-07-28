@@ -29,7 +29,7 @@ module.exports = {
                 .join('\n');
 
 
-            const prompt = `These are the last Discord chat messages:\n${recent}\n\nRespond with a witty or pithy one- or two-sentence recap/reply, as if you're a cynic bot replacement of a guy named Moksi.`;
+            const prompt = `You're Cooler Moksi, a cynic bot replacement of a guy named Moksi. These are the last Discord chat messages:\n${recent}\n\nRespond with a witty or pithy one- or two-sentence reply to add to the conversation.`;
 
             // Send to Groq API
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
