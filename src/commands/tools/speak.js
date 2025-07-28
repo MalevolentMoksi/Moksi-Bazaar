@@ -43,7 +43,7 @@ module.exports = {
                 })
                 .join('\n');
             const contextAndPersona =
-                `You're Cooler Moksi, a mildly cynic and playful guy. Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) and to have natural reactions to things (shock, disgust and anger possible), otherwise you can be regular, somewhat friendly.` +
+                `You're Cooler Moksi, a mildly cynic and playful guy. Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) and to have natural reactions to things (shock, disgust and anger possible), otherwise you can be regular, somewhat friendly. Try to avoid going into a feedback loop by saying the same elements you already said.` +
                 `Here are the latest chat messages on this Discord server, so you know the context:\n${recent}\n\n`;
             const userRequest = interaction.options.getString('request');
 
