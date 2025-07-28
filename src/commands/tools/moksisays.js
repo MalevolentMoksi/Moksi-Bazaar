@@ -35,10 +35,14 @@ module.exports = {
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
                 .slice(-15);
             const recent = recentMessages
-                .map(msg => `${msg.author.username}: ${msg.content}`)
+                .map(msg => {
+                    // fallback to username if not in a guild/channel
+                    const name = msg.member?.displayName || msg.author.username;
+                    return `${name}: ${msg.content}`;
+                })
                 .join('\n');
             const contextAndPersona =
-                `You're Cooler Moksi, a mildly cynic and playful guy.  Try to write naturally (lowercase, no excessive punctuation, etc.).` +
+                `You're Cooler Moksi, a mildly cynic and playful guy. Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) and to have natural reactions to things (shock, disgust, anger possible).` +
                 `Here are the latest chat messages on this Discord server, so you know the context:\n${recent}\n\n`;
             const userRequest = interaction.options.getString('request');
 
@@ -89,13 +93,13 @@ module.exports = {
                 data.choices?.[0]?.message?.content?.trim() ||
                 data.choices?.[0]?.text?.trim() ||
                 data.content?.trim() ||
-                '*No witty summary returned.*';
+                '*Nothing returned.*';
 
             // Fetch Groq reply:
             let rawGroqReply = data.choices?.[0]?.message?.content?.trim() ||
                 data.choices?.[0]?.text?.trim() ||
                 data.content?.trim() ||
-                '*No witty summary returned.*';
+                '*Nothing returned.*';
 
             // Split Groq answer (may be multi-line!)
             let lines = rawGroqReply.split('\n').map(s => s.trim()).filter(Boolean);
