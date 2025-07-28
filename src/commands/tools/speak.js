@@ -68,7 +68,7 @@ module.exports = {
                 prompt =
                     fullContext +
                     `A user now asks: "${userRequest}"\n` +
-                    `Reply as Cooler Moksi (one or two sentences), addressing the request (and the context IF it's relevant to the request).`;
+                    `Reply as Cooler Moksi (one or two sentences), addressing the request primarly. You don't need to actually do the request, just like a person would.`;
             } else {
                 prompt =
                     fullContext +
