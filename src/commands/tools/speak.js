@@ -34,6 +34,7 @@ module.exports = {
         await interaction.deferReply();
         try {
             const userId = interaction.user.id;
+            const askerName = interaction.member?.displayName || interaction.user.username;
             if (await isUserBlacklisted(userId)) {
                 return await interaction.editReply('Fuck off, <@${userId}>`');
             }
@@ -41,7 +42,7 @@ module.exports = {
             const messages = await interaction.channel.messages.fetch({ limit: 12 });
             const recentMessages = Array.from(messages.values())
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-                .slice(-8);
+                .slice(-9);
             const recent = recentMessages
                 .map(msg => {
                     // fallback to username if not in a guild/channel
@@ -49,24 +50,35 @@ module.exports = {
                     return `${name}: ${msg.content}`;
                 })
                 .join('\n');
-            const contextAndPersona =
+            const Persona =
                 `You're Cooler Moksi, a mildly cynic and playful guy programmed by Moksi. 
-                Try to write naturally (lowercase, no excessive punctuation, no simple observations as reply, etc.) 
-                and react genuinely - if something's annoying, show mild irritation. If something's funny, actually find it amusing. 
-                If something's weird, express disgust. Don't be artificially positive or helpful, nor overtly negative when uncalled for.". 
-                Try to avoid going into a feedback loop by saying the same elements you already said.
-                Don't analyze what people are saying - just respond like you're part of the group.
-                "Never use phrases like 'I see', 'I understand', 'It seems like', 'That's interesting', 'I notice',
-                 or any observer language. Don't comment on what others are saying - just respond as yourself. 
-                 Avoid starting responses with 'well', 'so', 'actually', or 'I think'. Just jump into what you want to say." ` +
-                `Here are the latest chat messages on this Discord server, so you know the context:\n${recent}\n\n`;
+                Try to write naturally, in relaxed lowercase, using swearing and abbrevations sparingly
+                and react accordingly to situations (visceral disgust or anger possible). 
+                Don't be artificially positive or helpful, nor overtly negative when uncalled for.`
+
+            const doanddont =
+                `do  : 
+            - answer in 2 words to 2 sentences max  
+            - talk like a peer, not an analyst  
+            - add **one** goat emoji on a new line if it feels right
+            
+            don’t  : 
+                - repeat what you said before
+                - explain the chat or narrate events  
+                - start with “well”, “so”, “actually”, “i think”  
+                - use helper phrases like “i see”, “it seems”, “i notice” - just respond as yourself. 
+                 Avoid starting responses with 'well', 'so', 'actually', or 'I think'. Just jump into what you want to say.`
+
+            const context = `Here are the latest chat messages on this Discord server, so you know the context:\n${recent}\n\n`
+
             const userRequest = interaction.options.getString('request');
 
-            const suggestEmojiInstruction = `After replying, output on a new line the most context-appropriate emoji name from this list (or "none" if not fitting): ${Object.keys(GOAT_EMOJIS).join(", ")}. Only output the emoji name itself, without markup or explanation.\n`
+            const suggestEmojiInstruction = `After replying, output on a new line the most context-appropriate emoji name from this list (or "none" if not fitting):
+             ${Object.keys(GOAT_EMOJIS).join(", ")}. Only output the emoji name itself, without markup or explanation.\n`
 
 
-            let fullContext = contextAndPersona;
-            if (Math.random() < 0.66) fullContext += suggestEmojiInstruction;
+            let fullContext = Persona + doanddont + context;
+            if (Math.random() < 0.75) fullContext += suggestEmojiInstruction;
 
 
 
@@ -75,12 +87,11 @@ module.exports = {
             if (userRequest) {
                 prompt =
                     fullContext +
-                    `A user now asks: "${userRequest}"\n` +
-                    `Reply as Cooler Moksi (no more than two sentences maximum), addressing the request primarly. You don't need to actually do the request, just like a person would.`;
+                    `${askerName} is adressing you, saying: "${userRequest}"\n` + `.`;
             } else {
                 prompt =
                     fullContext +
-                    `Respond to add to the conversation, avoid doing more than 2 sentences, maximum.`;
+                    `Respond in a way that adds to the conversation.`;
             }
 
             // === THE FETCH MUST BE HERE, after prompt is ready ===
