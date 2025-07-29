@@ -104,6 +104,7 @@ module.exports = {
                 body: JSON.stringify({
                     model: 'llama-3.3-70b-versatile',
                     messages: [{ role: 'user', content: prompt }],
+                    service_tier: 'auto',
                     max_tokens: 70,
                     temperature: 0.6,
                     top_p: 0.9,
