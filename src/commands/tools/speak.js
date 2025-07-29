@@ -36,7 +36,7 @@ module.exports = {
             const userId = interaction.user.id;
             const askerName = interaction.member?.displayName || interaction.user.username;
             if (await isUserBlacklisted(userId)) {
-                return await interaction.editReply('Fuck off, <@${userId}>`');
+                return await interaction.editReply(`Fuck off, <@${userId}>`);
             }
             const messages = await interaction.channel.messages.fetch({ limit: 12 });
             const recentMessages = Array.from(messages.values())
