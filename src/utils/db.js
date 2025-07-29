@@ -90,6 +90,15 @@ async function removeUserFromBlacklist(userId) {
   );
 }
 
+async function getSettingState(key) {
+  const { rows } = await pool.query(
+    'SELECT state FROM settings WHERE setting = $1 LIMIT 1', [key]
+  );
+  if (rows.length === 0) return null; // or your default
+  return rows[0].state; // Assuming your column is boolean
+}
+
+
 module.exports = {
   pool,
   init,
@@ -99,4 +108,5 @@ module.exports = {
   isUserBlacklisted,
   addUserToBlacklist,
   removeUserFromBlacklist,
+  getSettingState,
 };

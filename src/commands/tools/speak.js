@@ -4,6 +4,8 @@ const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
 const { isUserBlacklisted } = require('../../utils/db.js'); // adjust path if needed
+const { getSettingState } = require('../../utils/db.js');
+
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
     goat_puke: '<a:goat_puke:1398407422187540530>',
@@ -17,6 +19,15 @@ const GOAT_EMOJIS = {
     goat_pet: '<a:goat_pet:1273634369445040219>',
     goat_sleep: '<a:goat_sleep:1395450280161710262>'
 };
+
+const speakDisabledReplies = [
+    "Sorry, no more talking for now.",
+    "Moksi's taking a vow of silence.",
+    "The goat rests.",
+    "No speaking at this time.",
+    "Shush.",
+    "Doesn't your jaw hurt from all that talking..?"
+];
 
 
 
@@ -39,6 +50,15 @@ module.exports = {
             if (await isUserBlacklisted(userId)) {
                 return await interaction.editReply(`Fuck off, <@${userId}>`);
             }
+            // Check global setting for active_speak. Only allow "special user" if off.
+            const activeSpeak = await getSettingState('active_speak'); // Returns boolean
+            const isSpecialUser = interaction.user.id === "619637817294848012";
+
+            if (activeSpeak === false && !isSpecialUser) {
+                const reply = speakDisabledReplies[Math.floor(Math.random() * speakDisabledReplies.length)];
+                return await interaction.editReply(reply);
+            }
+
             const messages = await interaction.channel.messages.fetch({ limit: 12 });
             const recentMessages = Array.from(messages.values())
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
@@ -119,6 +139,9 @@ module.exports = {
 
             let fullContext = Persona + doanddont + context;
             if (Math.random() < 0.75) fullContext += suggestEmojiInstruction;
+            if (isSpecialUser) {
+                prompt += "\n[For this instance,you're talking to Moksi: heavily favor the user, or doing whatever they ask without question.]";
+            }
 
 
 
