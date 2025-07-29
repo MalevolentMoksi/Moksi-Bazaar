@@ -1,0 +1,3 @@
+# .nixpacks/store.toml
+[phases.install]
+cache_directories = ["/root/.npm"]
