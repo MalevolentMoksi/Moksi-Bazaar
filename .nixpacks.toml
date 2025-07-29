@@ -1,0 +1,5 @@
+[variables]
+NIXPACKS_NODE_PACKAGE_MANAGER = "pnpm"
+
+[phases.install]
+cmd = "pnpm i --frozen-lockfile"
