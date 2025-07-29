@@ -38,10 +38,10 @@ module.exports = {
                 return await interaction.editReply('Fuck off.');
             }
             // Always fetch recent context
-            const messages = await interaction.channel.messages.fetch({ limit: 20 });
+            const messages = await interaction.channel.messages.fetch({ limit: 15 });
             const recentMessages = Array.from(messages.values())
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-                .slice(-15);
+                .slice(-10);
             const recent = recentMessages
                 .map(msg => {
                     // fallback to username if not in a guild/channel
