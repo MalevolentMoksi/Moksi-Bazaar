@@ -29,9 +29,6 @@ importers:
       pg:
         specifier: ^8.16.0
         version: 8.16.0
-      pokersolver:
-        specifier: ^2.1.4
-        version: 2.1.4
       socket.io-client:
         specifier: ^2.4.0
         version: 2.5.0
@@ -1507,10 +1504,6 @@ packages:
   pkg-dir@4.2.0:
     resolution: {integrity: sha512-HRDzbaKjC+AOWVXxAU/x54COGeIv9eb+6CkDSQoNTt4XyWoIJvuPsXizxu/Fr23EiekbtZwmh1IcIG/l/a10GQ==}
     engines: {node: '>=8'}
-
-  pokersolver@2.1.4:
-    resolution: {integrity: sha512-vmgZS+K8H8r1RePQykFM5YyvlKo1v3xVec8FMBjg9N6mR2Tj/n/X415w+lG67FWbrk71D/CADmKFinDgaQlAsw==}
-    engines: {'0': node >= 4.0.0}
 
   postgres-array@2.0.0:
     resolution: {integrity: sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA==}
@@ -3558,8 +3551,6 @@ snapshots:
   pkg-dir@4.2.0:
     dependencies:
       find-up: 4.1.0
-
-  pokersolver@2.1.4: {}
 
   postgres-array@2.0.0: {}
 
