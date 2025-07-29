@@ -35,7 +35,7 @@ module.exports = {
         try {
             const userId = interaction.user.id;
             if (await isUserBlacklisted(userId)) {
-                return await interaction.editReply('Fuck off.');
+                return await interaction.editReply('Fuck off, <@${userId}>`');
             }
             // Always fetch recent context
             const messages = await interaction.channel.messages.fetch({ limit: 15 });
