@@ -75,11 +75,11 @@ module.exports = {
                 prompt =
                     fullContext +
                     `A user now asks: "${userRequest}"\n` +
-                    `Reply as Cooler Moksi (one or two sentences), addressing the request primarly. You don't need to actually do the request, just like a person would.`;
+                    `Reply as Cooler Moksi (no more than two sentences maximum), addressing the request primarly. You don't need to actually do the request, just like a person would.`;
             } else {
                 prompt =
                     fullContext +
-                    `Respond with a one or two-sentence reply to add to the conversation.`;
+                    `Respond to add to the conversation, avoid doing more than 2 sentences, maximum.`;
             }
 
             // === THE FETCH MUST BE HERE, after prompt is ready ===
