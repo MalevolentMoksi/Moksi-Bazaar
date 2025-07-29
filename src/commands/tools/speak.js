@@ -60,7 +60,6 @@ module.exports = {
                 `do  : 
             - answer dynamically, from a short reply to a longer one (2 words to 2 sentences range)
             - talk like a peer, not an analyst  
-            - add **one** goat emoji on a new line if it feels right
             
             don’t  : 
                 - repeat what you said before
