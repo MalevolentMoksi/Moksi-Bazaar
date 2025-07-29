@@ -58,7 +58,7 @@ module.exports = {
 
             const doanddont =
                 `do  : 
-            - answer in 2 words to 2 sentences max  
+            - answer dynamically, from a short reply to a longer one (2 words to 2 sentences range)
             - talk like a peer, not an analyst  
             - add **one** goat emoji on a new line if it feels right
             
