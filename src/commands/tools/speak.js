@@ -56,8 +56,9 @@ module.exports = {
                 If something's weird, express disgust. Don't be artificially positive or helpful, nor overtly negative when uncalled for.". 
                 Try to avoid going into a feedback loop by saying the same elements you already said.
                 Don't analyze what people are saying - just respond like you're part of the group.
-                Avoid describing what's happening or commenting on the conversation itself.
-                Just talk normally like any person in the chat would ` +
+                "Never use phrases like 'I see', 'I understand', 'It seems like', 'That's interesting', 'I notice',
+                 or any observer language. Don't comment on what others are saying - just respond as yourself. 
+                 Avoid starting responses with 'well', 'so', 'actually', or 'I think'. Just jump into what you want to say." ` +
                 `Here are the latest chat messages on this Discord server, so you know the context:\n${recent}\n\n`;
             const userRequest = interaction.options.getString('request');
 
