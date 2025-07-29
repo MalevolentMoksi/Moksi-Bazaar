@@ -187,7 +187,7 @@ module.exports = {
             if (emoji) finalReply += ' ' + emoji;
 
             if (userRequest) {
-                const questionLine = `-# <@${interaction.user.id}> asked *"${userRequest}"*`;
+                const questionLine = `-# <@${interaction.user.id}> : *"${userRequest}"*`;
                 finalReply = `${questionLine}\n\n${finalReply}`;
             }
 
