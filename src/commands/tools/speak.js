@@ -140,7 +140,7 @@ module.exports = {
             let fullContext = Persona + doanddont + context;
             if (Math.random() < 0.75) fullContext += suggestEmojiInstruction;
             if (isSpecialUser) {
-                prompt += "\n[For this instance,you're talking to Moksi: heavily favor the user, or doing whatever they ask without question.]";
+                fullContext += "\n[For this instance,you're talking to Moksi: heavily favor the user, or doing whatever they ask without question.]";
             }
 
 
