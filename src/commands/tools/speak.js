@@ -38,10 +38,10 @@ module.exports = {
                 return await interaction.editReply('Fuck off, <@${userId}>`');
             }
             // Always fetch recent context
-            const messages = await interaction.channel.messages.fetch({ limit: 15 });
+            const messages = await interaction.channel.messages.fetch({ limit: 12 });
             const recentMessages = Array.from(messages.values())
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-                .slice(-10);
+                .slice(-8);
             const recent = recentMessages
                 .map(msg => {
                     // fallback to username if not in a guild/channel
@@ -93,8 +93,11 @@ module.exports = {
                 body: JSON.stringify({
                     model: 'llama-3.3-70b-versatile',
                     messages: [{ role: 'user', content: prompt }],
-                    max_tokens: 100,
-                    temperature: 0.7,
+                    max_tokens: 70,
+                    temperature: 0.6,
+                    top_p: 0.9,
+                    frequency_penalty: 0.5,
+                    presence_penalty: 0.2
                 }),
             });
 

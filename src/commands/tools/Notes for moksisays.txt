@@ -1,3 +1,5 @@
-Maybe make the context at the start, so that it knows how to talk first, then treat userRequest or lack thereof.
-
-I'd like to give it access and knowledge to the goat emojis, so it can emulate me more.
+- Context research to make it more lively, with samples from convo (in progress)
+- Make requests include who is asking in context, so bot knows who is adressing him
+- Make emojis not just one at the end, but whenever appropriate in sentence
+- Temperature and token tweaks?
+- Potential Groq model upgrade, on-demand, and maybe Groq model switch if one is more appropriate, economical or effective.
