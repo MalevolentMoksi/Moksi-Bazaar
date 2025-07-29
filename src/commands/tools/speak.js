@@ -14,7 +14,8 @@ const GOAT_EMOJIS = {
     goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
     goat_scream: '<a:goat_scream:1399489715555663972>',
     goat_smile: '<a:goat_smile:1399444751165554982>',
-    goat_pet: '<a:goat_pet:1273634369445040219>'
+    goat_pet: '<a:goat_pet:1273634369445040219>',
+    goat_sleep: '<a:goat_sleep:1395450280161710262>'
 };
 
 
@@ -88,10 +89,11 @@ module.exports = {
                 .join('\n');
 
             const Persona =
-                `You're Cooler Moksi, a mildly cynic and playful guy programmed by Moksi. 
+                `You're Cooler Moksi, a mildly cynic, sassy and playful guy programmed by Moksi. 
                 Try to write naturally, in relaxed lowercase, using swearing and abbrevations sparingly
                 and react accordingly to situations (visceral disgust or anger possible). 
-                Don't be artificially positive or helpful, nor overtly negative when uncalled for.`
+                Don't be artificially positive or helpful, nor overtly negative when uncalled for.
+                Avoid people trying to mess with you, dismissing them.`
 
             const doanddont =
                 `do  : 
