@@ -38,18 +38,55 @@ module.exports = {
             if (await isUserBlacklisted(userId)) {
                 return await interaction.editReply('Fuck off, <@${userId}>`');
             }
-            // Always fetch recent context
             const messages = await interaction.channel.messages.fetch({ limit: 12 });
             const recentMessages = Array.from(messages.values())
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
                 .slice(-9);
+
             const recent = recentMessages
                 .map(msg => {
-                    // fallback to username if not in a guild/channel
                     const name = msg.member?.displayName || msg.author.username;
-                    return `${name}: ${msg.content}`;
+
+                    // If this is a reply, try to show who was replied to (fallback to 'someone')
+                    let replyPrefix = '';
+                    if (msg.reference && msg.reference.messageId) {
+                        // If possible, get the original replied-to message from channel cache
+                        const refMsg = messages.get(msg.reference.messageId);
+                        const repliedTo = refMsg
+                            ? (refMsg.member?.displayName || refMsg.author?.username || 'someone')
+                            : 'someone';
+                        replyPrefix = `(reply to ${repliedTo}) `;
+                    }
+
+                    // Summarize embeds: title, desc (first 50 chars), up to 3 field names/values
+                    let embedSummary = '';
+                    if (msg.embeds.length > 0) {
+                        embedSummary = msg.embeds.map(embed => {
+                            const parts = [];
+                            if (embed.title) parts.push(`title: ${embed.title}`);
+                            if (embed.description) parts.push(`desc: ${embed.description.replace(/\s+/g, ' ').slice(0, 50)}`);
+                            if (embed.fields && embed.fields.length > 0) {
+                                const fieldsSumm = embed.fields.slice(0, 3)
+                                    .map(f => `${f.name}: ${f.value}`)
+                                    .join('; ');
+                                parts.push(`fields: ${fieldsSumm}`);
+                            }
+                            return parts.join(' | ');
+                        }).join(' || ');
+                        embedSummary = ` [EMBED: ${embedSummary}]`;
+                    }
+
+                    // Optionally, flag if there’s a non-empty attachment
+                    let attachmentInfo = '';
+                    if (msg.attachments.size > 0) {
+                        attachmentInfo = ` [${msg.attachments.size} attachment${msg.attachments.size === 1 ? '' : 's'}]`;
+                    }
+
+                    // Final line: [(reply to ...)] Name: content [EMBED: ...] [n attachments]
+                    return `${replyPrefix}${name}: ${msg.content}${embedSummary}${attachmentInfo}`;
                 })
                 .join('\n');
+
             const Persona =
                 `You're Cooler Moksi, a mildly cynic and playful guy programmed by Moksi. 
                 Try to write naturally, in relaxed lowercase, using swearing and abbrevations sparingly
