@@ -99,9 +99,15 @@ module.exports = {
             });
 
             if (!response.ok) {
-                const errText = await response.text();
-                await interaction.editReply('Groq API error: ' + errText);
-                return;
+                // 1️⃣  Log the full Groq error for yourself
+                const errText = await response.text();   // still a JSON string
+                console.error('Groq API error:', errText);
+
+                // 2️⃣  Send a user-friendly message instead of the raw JSON
+                await interaction.editReply(
+                    'Moksi has no more money. You guys sucked it all up.'
+                );
+                return; // important – stop here
             }
 
             const data = await response.json();
