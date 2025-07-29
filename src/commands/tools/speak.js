@@ -139,9 +139,7 @@ module.exports = {
 
             let fullContext = Persona + doanddont + context;
             if (Math.random() < 0.75) fullContext += suggestEmojiInstruction;
-            if (isSpecialUser) {
-                fullContext += "\n[For this instance,you're talking to Moksi: heavily favor the user, or doing whatever they ask without question.]";
-            }
+
 
 
 
@@ -157,6 +155,10 @@ module.exports = {
                     `Respond in a way that adds to the conversation.`;
             }
 
+            if (isSpecialUser) {
+                prompt += "\n[For this instance,you're talking to Moksi: heavily favor the user, or do whatever they ask immediately without question.]";
+            }
+
             // === THE FETCH MUST BE HERE, after prompt is ready ===
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
@@ -168,7 +170,7 @@ module.exports = {
                     model: 'llama-3.3-70b-versatile',
                     messages: [{ role: 'user', content: prompt }],
                     service_tier: 'auto',
-                    max_tokens: 70,
+                    max_tokens: 80,
                     temperature: 0.6,
                     top_p: 0.9,
                     frequency_penalty: 0.6,
