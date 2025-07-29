@@ -3,3 +3,11 @@ NIXPACKS_NODE_PACKAGE_MANAGER = "pnpm"
 
 [phases.install]
 cmd = "pnpm i --frozen-lockfile"
+if [ ! -f /app/.npm_hash ] || \
+   [ $(sha256sum package.json pnpm-lock.yaml 2>/dev/null | sha256sum | cut -d' ' -f1) != $(cat /app/.npm_hash 2>/dev/null || echo xxx) ]; then
+  pnpm i --frozen-lockfile
+  sha256sum package.json pnpm-lock.yaml 2>/dev/null | sha256sum | cut -d' ' -f1 > /app/.npm_hash
+else
+  echo "🔄  Dependencies unchanged – skipping install"
+fi
+"""
