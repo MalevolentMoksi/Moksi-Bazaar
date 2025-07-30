@@ -3,11 +3,7 @@ const { SlashCommandBuilder } = require('@discordjs/builders');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const path = require('path');
 const fs = require('fs');
-if (!fs.existsSync(audioPath)) {
-    console.error("Audio file missing at: ", audioPath);
-    await interaction.followUp("Audio file missing at: " + audioPath);
-    return;
-}
+
 
 // ...rest of your goatvc.js...
 
@@ -33,6 +29,11 @@ module.exports = {
         const sc = interaction.options.getSubcommand();
 
         if (sc === 'start') {
+            if (!fs.existsSync(audioPath)) {
+                console.error("Audio file missing at: ", audioPath);
+                await interaction.followUp("Audio file missing at: " + audioPath);
+                return;
+            }
             // Check if user is in a VC
             const userVC = interaction.member?.voice?.channel;
             if (!userVC) return interaction.reply("You must be in a voice channel!");
@@ -109,6 +110,11 @@ module.exports = {
         }
 
         if (sc === 'test') {
+            if (!fs.existsSync(audioPath)) {
+                console.error("Audio file missing at: ", audioPath);
+                await interaction.followUp("Audio file missing at: " + audioPath);
+                return;
+            }
             const userVC = interaction.member?.voice?.channel;
             if (!userVC) return interaction.reply("You must be in a voice channel!");
 
