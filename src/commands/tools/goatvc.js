@@ -4,6 +4,17 @@ const { SlashCommandBuilder } = require('@discordjs/builders');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const path = require('path');
 const fs = require('fs');
+const { Client, GatewayIntentBits } = require('discord.js');
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildVoiceStates, // Required for voice functionality
+        GatewayIntentBits.MessageContent
+    ]
+});
+
 
 // Per-guild: { connection, timer, stopped }
 const bleatSessions = new Map();
@@ -94,32 +105,50 @@ module.exports = {
             });
 
             async function scheduleBleat() {
-                const player = createAudioPlayer();
-                connection.subscribe(player);
+                try {
+                    // Wait for connection to be ready
+                    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
 
-                player.on('error', (err) => {
-                    console.error('[GoatVC] Audio error:', err);
-                });
-                player.on(AudioPlayerStatus.Playing, () => {
-                    console.log('[GoatVC] Bleat started!');
-                });
-                player.on(AudioPlayerStatus.Idle, () => {
-                    console.log('[GoatVC] Bleat finished!');
-                });
+                    const player = createAudioPlayer();
+                    const subscription = connection.subscribe(player);
 
-                const resource = createAudioResource(audioPath);
-                player.play(resource);
+                    if (!subscription) {
+                        console.error('[GoatVC] Failed to subscribe player to connection');
+                        return;
+                    }
 
-                await new Promise(res => {
-                    player.once(AudioPlayerStatus.Idle, res);
-                });
+                    player.on('error', (err) => {
+                        console.error('[GoatVC] Audio error:', err);
+                    });
 
-                const session = bleatSessions.get(interaction.guild.id);
-                if (session && !session.stopped) {
-                    session.timer = setTimeout(scheduleBleat, randomIntervalMs());
-                    bleatSessions.set(interaction.guild.id, session);
+                    player.on(AudioPlayerStatus.Playing, () => {
+                        console.log('[GoatVC] Bleat started!');
+                    });
+
+                    player.on(AudioPlayerStatus.Idle, () => {
+                        console.log('[GoatVC] Bleat finished!');
+                    });
+
+                    const resource = createAudioResource(audioPath, {
+                        inlineVolume: true
+                    });
+
+                    player.play(resource);
+
+                    await new Promise(res => {
+                        player.once(AudioPlayerStatus.Idle, res);
+                    });
+
+                    const session = bleatSessions.get(interaction.guild.id);
+                    if (session && !session.stopped) {
+                        session.timer = setTimeout(scheduleBleat, randomIntervalMs());
+                        bleatSessions.set(interaction.guild.id, session);
+                    }
+                } catch (error) {
+                    console.error('[GoatVC] Error in scheduleBleat:', error);
                 }
             }
+
 
             bleatSessions.set(interaction.guild.id, { connection, stopped: false, timer: null });
             await interaction.reply("I'm in the VC! Get ready for regular goat mayhem.");
