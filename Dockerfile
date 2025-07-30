@@ -5,6 +5,9 @@ RUN corepack enable && corepack prepare pnpm@9.1.4 --activate
 
 WORKDIR /app
 
+# --- ffmpeg install for vc ---
+RUN apt-get update && apt-get install -y ffmpeg
+
 # Copy package files first (for better caching)
 COPY package.json pnpm-lock.yaml ./
 
