@@ -49,6 +49,10 @@ module.exports = {
                 guildId: userVC.guild.id,
                 adapterCreator: userVC.guild.voiceAdapterCreator,
             });
+            connection.on('stateChange', (oldState, newState) => {
+                console.log(`[GoatVC] Connection: ${oldState.status} → ${newState.status}`);
+            });
+
             const player = createAudioPlayer();
             connection.subscribe(player);
 
