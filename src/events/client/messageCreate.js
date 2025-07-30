@@ -6,7 +6,7 @@ module.exports = {
 
     // ----- Add this block: If bot is mentioned, run /speak -----
     const botId = message.client.user.id || (message.client.user && message.client.user.id);
-    if (message.mentions.has(botId)) {
+    if (message.mentions.users.has(botId)) {
       // Optionally: Extract the rest of the message after the mention as the "request"
       const mentionRegex = new RegExp(`<@!?${botId}>\\s*`, 'i');
       const requestText = message.content.replace(mentionRegex, '').trim();
