@@ -2,6 +2,12 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const path = require('path');
+const fs = require('fs');
+if (!fs.existsSync(audioPath)) {
+    console.error("Audio file missing at: ", audioPath);
+    await interaction.followUp("Audio file missing at: " + audioPath);
+    return;
+}
 
 // ...rest of your goatvc.js...
 
@@ -10,81 +16,132 @@ const path = require('path');
 const bleatSessions = new Map();
 
 function randomIntervalMs() {
-  return Math.floor(30_000 + Math.random() * (15 * 60_000 - 30_000)); // 30s to 15m
+    return Math.floor(30_000 + Math.random() * (15 * 60_000 - 30_000)); // 30s to 15m
 }
 
 module.exports = {
-  data: new SlashCommandBuilder()
-    .setName('goatvc')
-    .setDescription('Moksi VC goat bleater')
-    .addSubcommand(c => c.setName('start').setDescription('Start goat bleats'))
-    .addSubcommand(c => c.setName('stop').setDescription('Stop goat bleats and leave')),
+    data: new SlashCommandBuilder()
+        .setName('goatvc')
+        .setDescription('Moksi VC goat bleater')
+        .addSubcommand(c => c.setName('start').setDescription('Start goat bleats'))
+        .addSubcommand(c => c.setName('test').setDescription('Play a test bleat now'))
+        .addSubcommand(c => c.setName('stop').setDescription('Stop goat bleats and leave')),
 
-  async execute(interaction) {
-    // Which subcommand?
-    const sc = interaction.options.getSubcommand();
 
-    if (sc === 'start') {
-      // Check if user is in a VC
-      const userVC = interaction.member?.voice?.channel;
-      if (!userVC) return interaction.reply("You must be in a voice channel!");
+    async execute(interaction) {
+        // Which subcommand?
+        const sc = interaction.options.getSubcommand();
 
-      // Prevent multiple sessions per guild
-      if (bleatSessions.has(interaction.guild.id)) {
-        return interaction.reply("I'm already goat-bleating in this server!");
-      }
+        if (sc === 'start') {
+            // Check if user is in a VC
+            const userVC = interaction.member?.voice?.channel;
+            if (!userVC) return interaction.reply("You must be in a voice channel!");
 
-      // Join the channel
-      const connection = joinVoiceChannel({
-        channelId: userVC.id,
-        guildId: userVC.guild.id,
-        adapterCreator: userVC.guild.voiceAdapterCreator,
-      });
+            // Prevent multiple sessions per guild
+            if (bleatSessions.has(interaction.guild.id)) {
+                return interaction.reply("I'm already goat-bleating in this server!");
+            }
 
-      // Bleat function, schedules itself randomly
-      async function scheduleBleat() {
-        const player = createAudioPlayer();
-        const audioPath = path.join(__dirname, '..', '..', 'assets', 'goat_bleat.mp3');
-        const resource = createAudioResource(audioPath);
+            // Join the channel
+            const connection = joinVoiceChannel({
+                channelId: userVC.id,
+                guildId: userVC.guild.id,
+                adapterCreator: userVC.guild.voiceAdapterCreator,
+            });
 
-        connection.subscribe(player);
-        player.play(resource);
+            // Bleat function, schedules itself randomly
+            async function scheduleBleat() {
+                const player = createAudioPlayer();
+                const audioPath = path.join(__dirname, '..', '..', 'assets', 'goat_bleat.mp3');
+                const resource = createAudioResource(audioPath);
 
-        // Wait until playback is done
-        await new Promise(res => {
-          player.once(AudioPlayerStatus.Idle, res);
-        });
+                connection.subscribe(player);
+                console.log("[GoatVC] About to play:", audioPath);
+                player.play(resource);
+                console.log("[GoatVC] play() called");
 
-        // Set up next bleat unless cancelled
-        const session = bleatSessions.get(interaction.guild.id);
-        if (session && !session.stopped) {
-          session.timer = setTimeout(scheduleBleat, randomIntervalMs());
-          bleatSessions.set(interaction.guild.id, session);
+                player.on('error', (err) => {
+                    console.error('[GoatVC] Audio error:', err);
+                });
+                player.on(AudioPlayerStatus.Playing, () => {
+                    console.log('[GoatVC] Bleat started!');
+                });
+                player.on(AudioPlayerStatus.Idle, () => {
+                    console.log('[GoatVC] Bleat finished!');
+                });
+
+
+                // Wait until playback is done
+                await new Promise(res => {
+                    player.once(AudioPlayerStatus.Idle, res);
+                });
+
+                // Set up next bleat unless cancelled
+                const session = bleatSessions.get(interaction.guild.id);
+                if (session && !session.stopped) {
+                    session.timer = setTimeout(scheduleBleat, randomIntervalMs());
+                    bleatSessions.set(interaction.guild.id, session);
+                }
+            }
+
+            // Track session
+            bleatSessions.set(interaction.guild.id, { connection, stopped: false, timer: null });
+
+            // Start first bleat soon
+            await interaction.reply("I'm in the VC! Get ready for regular goat mayhem.");
+            const session = bleatSessions.get(interaction.guild.id);
+            session.timer = setTimeout(scheduleBleat, 2000); // first bleat in 2s
         }
-      }
 
-      // Track session
-      bleatSessions.set(interaction.guild.id, { connection, stopped: false, timer: null });
+        if (sc === 'stop') {
+            const session = bleatSessions.get(interaction.guild.id);
+            if (!session) return interaction.reply("Not in a voice channel right now!");
 
-      // Start first bleat soon
-      await interaction.reply("I'm in the VC! Get ready for regular goat mayhem.");
-      const session = bleatSessions.get(interaction.guild.id);
-      session.timer = setTimeout(scheduleBleat, 2000); // first bleat in 2s
-    }
+            // Signal stop
+            session.stopped = true;
+            if (session.timer) clearTimeout(session.timer);
 
-    if (sc === 'stop') {
-      const session = bleatSessions.get(interaction.guild.id);
-      if (!session) return interaction.reply("Not in a voice channel right now!");
+            // Disconnect
+            session.connection.destroy();
+            bleatSessions.delete(interaction.guild.id);
 
-      // Signal stop
-      session.stopped = true;
-      if (session.timer) clearTimeout(session.timer);
+            await interaction.reply("I've left the VC. Goat silence resumes.");
+        }
 
-      // Disconnect
-      session.connection.destroy();
-      bleatSessions.delete(interaction.guild.id);
+        if (sc === 'test') {
+            const userVC = interaction.member?.voice?.channel;
+            if (!userVC) return interaction.reply("You must be in a voice channel!");
 
-      await interaction.reply("I've left the VC. Goat silence resumes.");
-    }
-  },
+            const connection = joinVoiceChannel({
+                channelId: userVC.id,
+                guildId: userVC.guild.id,
+                adapterCreator: userVC.guild.voiceAdapterCreator,
+            });
+
+            const player = createAudioPlayer();
+            const audioPath = path.join(__dirname, '..', '..', 'assets', 'goat_bleat.mp3');
+
+            if (!fs.existsSync(audioPath)) {
+                await interaction.reply("Test error: Goat audio file missing!");
+                return;
+            }
+
+            const resource = createAudioResource(audioPath);
+            connection.subscribe(player);
+            player.play(resource);
+
+            player.on(AudioPlayerStatus.Idle, () => {
+                connection.destroy();
+            });
+
+            player.on('error', (err) => {
+                console.error('[GoatVC-Test] Audio error:', err);
+                connection.destroy();
+            });
+
+            await interaction.reply("Bleat test: 🐐🎵 (If you hear nothing, check bot perms and file path!)");
+            return;
+        }
+
+    },
 };
