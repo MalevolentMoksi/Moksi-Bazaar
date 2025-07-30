@@ -16,7 +16,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const bleatSessions = new Map();
 
 function randomIntervalMs() {
-    return Math.floor(30_000 + Math.random() * (15 * 60_000 - 30_000)); // 30s to 15m
+    return Math.floor(30_000 + Math.random() * (15 * 60_000 - 3_000)); // 3s to 15m
 }
 
 module.exports = {
