@@ -1,6 +1,10 @@
 // At the top of your goatvc.js or a voiceManager module:
-const { joinVoiceChannel, getVoiceConnection, createAudioResource, createAudioPlayer, AudioPlayerStatus } = require('@discordjs/voice');
+const { SlashCommandBuilder } = require('@discordjs/builders');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const path = require('path');
+
+// ...rest of your goatvc.js...
+
 
 // One per guild: { connection, timer }
 const bleatSessions = new Map();
