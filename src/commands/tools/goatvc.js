@@ -1,19 +1,15 @@
 // src/commands/tools/goatvc.js
 
 const { SlashCommandBuilder } = require('@discordjs/builders');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
+const { joinVoiceChannel,
+    createAudioPlayer,
+    createAudioResource,
+    AudioPlayerStatus,
+    entersState,
+    VoiceConnectionStatus } = require('@discordjs/voice');
 const path = require('path');
 const fs = require('fs');
 const { Client, GatewayIntentBits } = require('discord.js');
-
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.GuildVoiceStates, // Required for voice functionality
-        GatewayIntentBits.MessageContent
-    ]
-});
 
 
 // Per-guild: { connection, timer, stopped }
