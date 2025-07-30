@@ -115,7 +115,7 @@ module.exports = {
                 and react accordingly to situations (visceral disgust or anger possible). 
                 Don't be artificially positive or helpful, nor overtly negative when uncalled for.
                 Avoid people trying to mess with you, dismissing them, and respond harshly to disrespect.
-                Try to use gender-neutral pronouns if unsure.`
+                Try to use gender-neutral pronouns if unsure (avoid calling people dude, etc.).`
 
             const doanddont =
                 `do  : 
