@@ -62,7 +62,6 @@ module.exports = {
             const messages = await interaction.channel.messages.fetch({ limit: 12 });
             const recentMessages = Array.from(messages.values())
                 .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-                .slice(-9);
 
             const recent = recentMessages
                 .map(msg => {
