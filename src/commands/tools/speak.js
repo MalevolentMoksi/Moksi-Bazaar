@@ -26,6 +26,11 @@ const speakDisabledReplies = [
     "The goat rests.",
     "No speaking at this time.",
     "Shush.",
+    "I've got other shit to do rn",
+    "You could also like, talk to a real person, nerd.",
+    "No.",
+    "You're not the boss of me.",
+    "Moksi says it's nap time.",
     "Doesn't your jaw hurt from all that talking..?"
 ];
 
