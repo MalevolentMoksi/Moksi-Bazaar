@@ -24,6 +24,7 @@ const speakDisabledReplies = [
     "Sorry, no more talking for now.",
     "Moksi's taking a vow of silence.",
     "The goat rests.",
+    "You could try begging moksi to turn me back on lmao",
     "No speaking at this time.",
     "Shush.",
     "I've got other shit to do rn",
