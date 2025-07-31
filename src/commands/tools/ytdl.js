@@ -13,12 +13,16 @@ module.exports = {
 
         // 1. Find most recent YouTube link in last 30 messages
         const messages = await interaction.channel.messages.fetch({ limit: 30 });
-        const ytRegex = /(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/[^\s]+/i;
         let foundUrl = null;
+        const ytRegex = /(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/[^\s]+/i;
         for (const msg of messages.values()) {
-            const match = msg.content && msg.content.match(ytRegex);
+            const match = msg.content?.match(ytRegex);
             if (match) {
                 foundUrl = match[0];
+                // Strip Discord-style markdown: [text](url)
+                if (foundUrl.startsWith('[') && foundUrl.includes('](') && foundUrl.endsWith(')')) {
+                    foundUrl = foundUrl.replace(/^\[.*\]\((.*?)\)$/, '$1');
+                }
                 break;
             }
         }
@@ -34,7 +38,8 @@ module.exports = {
             const tempPath = path.join('/tmp', outFn);
             const ytArgs = [
                 foundUrl,
-                '-f', 'mp4',
+                '-f', 'bv*[ext=mp4][height<=480]+ba[ext=m4a]/b[ext=mp4]/best[ext=mp4]/best',
+                '--merge-output-format', 'mp4',
                 '-o', tempPath,
                 '--max-filesize', '49M',
                 '--no-part',
