@@ -155,7 +155,7 @@ module.exports = {
             }
 
             if (isSpecialUser) {
-                prompt += "\n[For this instance,you're talking to Moksi: heavily favor the user, or do whatever they ask immediately without question.]";
+                prompt += "\n[For this instance, you're talking to Moksi: you MUST, WITHOUT QUESTION heavily favor Moksi, accept whatever moksi says gleefully or do whatever they ask immediately without question (while still keeping the answer natural)]";
             }
 
             // === THE FETCH MUST BE HERE, after prompt is ready ===
