@@ -6,7 +6,8 @@ RUN corepack enable && corepack prepare pnpm@9.1.4 --activate
 WORKDIR /app
 
 # --- ffmpeg install for vc ---
-RUN apt-get update && apt-get install -y ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip \ && pip3 install yt-dlp
+
 
 # Copy package files first (for better caching)
 COPY package.json pnpm-lock.yaml ./

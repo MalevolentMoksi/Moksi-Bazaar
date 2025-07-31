@@ -1,67 +1,66 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
-const ytdl = require('ytdl-core');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('ytdl')
-    .setDescription('Sends the latest YouTube video as MP4 for easy download.'),
+    .setDescription('Find and upload the most recent YouTube video as an MP4 (if possible).'),
 
   async execute(interaction) {
     await interaction.deferReply();
 
-    // Fetch recent messages
-    const messages = await interaction.channel.messages.fetch({ limit: 25 });
-    // Find YouTube URL, prefer official format
+    // 1. Find most recent YouTube link in last 30 messages
+    const messages = await interaction.channel.messages.fetch({ limit: 30 });
     const ytRegex = /(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/[^\s]+/i;
-
     let foundUrl = null;
     for (const msg of messages.values()) {
-      const match = msg.content.match(ytRegex);
+      const match = msg.content && msg.content.match(ytRegex);
       if (match) {
         foundUrl = match[0];
         break;
       }
     }
-
     if (!foundUrl) {
       await interaction.editReply('No recent YouTube link found in this channel.');
       return;
     }
 
-    // Download, save to temp, and upload
+    // 2. Download with yt-dlp via shell command in /tmp
     try {
-      const info = await ytdl.getInfo(foundUrl);
-      const title = info.videoDetails.title.replace(/[^a-z0-9]/gi, '_').substring(0, 40);
-      const tempPath = path.join('/tmp', `${title}.mp4`);
+      // Limit durations for bot-compat: <3min
+      const outFn = `yt-${Date.now()}.mp4`;
+      const tempPath = path.join('/tmp', outFn);
+      const ytArgs = [
+        foundUrl,
+        '-f', 'mp4',
+        '-o', tempPath,
+        '--max-filesize', '49M',  // Discord boost servers: limit as needed (use '8M' for normal users)
+        '--no-part',
+        '--no-playlist',
+        '--max-downloads', '1',
+        '--no-warnings',
+        '--quiet'
+      ];
+      await new Promise((res, rej) =>
+        execFile('yt-dlp', ytArgs, (err, stdout, stderr) => err ? rej(stderr || err) : res())
+      );
 
-      // Download video at lowest quality to stay under Discord size limit
-      const stream = ytdl(foundUrl, { quality: 'lowest', filter: 'audioandvideo' });
-      const write = fs.createWriteStream(tempPath);
-      stream.pipe(write);
-
-      await new Promise((res, rej) => {
-        write.on('finish', res);
-        write.on('error', rej);
-      });
-
-      // Check file size
+      // 3. Send it back if under size limit
       const stats = fs.statSync(tempPath);
-      const sizeMB = stats.size / (1024 * 1024);
-      if (sizeMB > 8) { // Discord's standard limit
+      if (stats.size / (1024 * 1024) > 8) { // Replace 8 with your true upload limit, 8MB default for non-Nitro
         fs.unlinkSync(tempPath);
-        await interaction.editReply('Video too large for Discord upload (must be under 8MB).');
+        await interaction.editReply('Downloaded video is too large to upload (must be under 8MB).');
         return;
       }
 
-      // Send file
-      await interaction.editReply({ content: `Here's that video as .mp4:`, files: [tempPath] });
+      // 4. Send as file
+      await interaction.editReply({ content: `Here's the video as .mp4:`, files: [tempPath] });
       fs.unlinkSync(tempPath);
-
     } catch (err) {
-      console.error('YouTube download failed:', err);
-      await interaction.editReply('Failed to download or send that video. (Maybe it\'s too big or not available in MP4.)');
+      console.error('yt-dlp failed:', err);
+      await interaction.editReply('❌ Could not download/send that YouTube video (too big or download failed).');
     }
   }
 };
