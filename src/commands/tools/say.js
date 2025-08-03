@@ -13,7 +13,7 @@ module.exports = {
     const text = interaction.options.getString('message');
     if (interaction.user.id === "619637817294848012") {
       await interaction.channel.send(text);
-      await interaction.reply({ content: "✅ Message sent.", ephemeral: true });
+      await interaction.reply({ content: "✅ Message sent.", flags: MessageFlags.Ephemeral });
     } else {
       await interaction.reply({ content: `You don't speak for me <@${interaction.user.id}>, you little worm.` });
     }
