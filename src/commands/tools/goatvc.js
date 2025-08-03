@@ -67,7 +67,7 @@ module.exports = {
             const resource = createAudioResource(audioPath);
             player.play(resource);
 
-            await interaction.reply("Bleat test: 🐐🎵 (If you hear nothing, check bot perms and file path!)");
+            await interaction.reply("BAAAAAAAAAAAAAAAH");
             return;
         }
 
@@ -81,7 +81,7 @@ module.exports = {
             if (session.timer) clearTimeout(session.timer);
             session.connection.destroy();
             bleatSessions.delete(interaction.guild.id);
-            await interaction.reply("I've left the VC. Goat silence resumes.");
+            await interaction.reply("Goat silence resumes.");
             return;
         }
 
@@ -151,7 +151,7 @@ module.exports = {
 
 
             bleatSessions.set(interaction.guild.id, { connection, stopped: false, timer: null });
-            await interaction.reply("I'm in the VC! Get ready for regular goat mayhem.");
+            await interaction.reply("Yo!");
             const session = bleatSessions.get(interaction.guild.id);
             session.timer = setTimeout(scheduleBleat, 2000); // first bleat in 2s
             return;
