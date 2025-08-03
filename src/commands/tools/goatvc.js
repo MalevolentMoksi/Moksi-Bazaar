@@ -40,11 +40,34 @@ module.exports = {
                     "Test error: Goat audio file missing at: " + audioPath
                 );
             }
-            const connection = joinVoiceChannel({
-                channelId: userVC.id,
-                guildId: userVC.guild.id,
-                adapterCreator: userVC.guild.voiceAdapterCreator,
-            });
+
+            // Find if bot is already in user's VC
+            const botMember = interaction.guild.members.me;
+            const inSameVC = botMember.voice.channelId === userVC.id;
+
+            let connection;
+            if (inSameVC) {
+                // Already in correct VC (reuse)
+                // Use discord.js/voice VoiceConnection utils to get the connection
+                connection = botMember.voice?.connection;
+                if (!connection) {
+                    // Fallback - rejoin if no active connection object (for robustness)
+                    connection = joinVoiceChannel({
+                        channelId: userVC.id,
+                        guildId: userVC.guild.id,
+                        adapterCreator: userVC.guild.voiceAdapterCreator,
+                    });
+                }
+            } else {
+                // Not in VC or in wrong one, join
+                connection = joinVoiceChannel({
+                    channelId: userVC.id,
+                    guildId: userVC.guild.id,
+                    adapterCreator: userVC.guild.voiceAdapterCreator,
+                });
+            }
+
+            // No destroy after playing!
             connection.on('stateChange', (oldState, newState) => {
                 console.log(`[GoatVC] Connection: ${oldState.status} → ${newState.status}`);
             });
@@ -54,22 +77,25 @@ module.exports = {
 
             player.on('error', (err) => {
                 console.error('[GoatVC-Test] Audio error:', err);
-                connection.destroy();
+                // Do NOT disconnect after test
             });
+
             player.on(AudioPlayerStatus.Playing, () => {
                 console.log('[GoatVC-Test] Bleat started!');
             });
+
             player.on(AudioPlayerStatus.Idle, () => {
                 console.log('[GoatVC-Test] Bleat finished!');
-                connection.destroy();
+                // Intentionally do nothing here—bot stays in VC
             });
 
             const resource = createAudioResource(audioPath);
             player.play(resource);
 
-            await interaction.reply("BAAAAAAAAAAAAAAAH");
+            await interaction.reply("BAAAAAAAAAAAAAAAH (test, bot will stay in VC)");
             return;
         }
+
 
         // --- STOP ---
         if (sc === 'stop') {
@@ -89,9 +115,20 @@ module.exports = {
         if (sc === 'start') {
             const userVC = interaction.member?.voice?.channel;
             if (!userVC) return interaction.reply("You must be in a voice channel!");
+            const guildVoiceState = interaction.guild.members.me.voice;
+            let isActuallyInVC = !!guildVoiceState?.channel;
+
+            // Also check the session map, but verify reality
             if (bleatSessions.has(interaction.guild.id)) {
-                return interaction.reply("I'm already goat-bleating in this server!");
+                // If bot is NOT in a VC, reset the session!
+                if (!isActuallyInVC) {
+                    bleatSessions.delete(interaction.guild.id);
+                } else {
+                    return interaction.reply("I'm already goat-bleating in this server!");
+                }
             }
+            // If we got here, either no session, or session is stale and deleted above
+
             const audioPath = path.join(__dirname, '..', '..', 'assets', 'goat_bleat.mp3');
             if (!fs.existsSync(audioPath)) {
                 await interaction.reply("Goat audio file missing at: " + audioPath);
@@ -103,6 +140,13 @@ module.exports = {
                 guildId: userVC.guild.id,
                 adapterCreator: userVC.guild.voiceAdapterCreator,
             });
+
+            connection.on('stateChange', (oldState, newState) => {
+                if (oldState.status !== VoiceConnectionStatus.Destroyed && newState.status === VoiceConnectionStatus.Destroyed) {
+                    bleatSessions.delete(interaction.guild.id);
+                }
+            });
+
 
             async function scheduleBleat() {
                 try {
