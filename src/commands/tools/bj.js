@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, MessageFlags } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
 // Helper: build and shuffle a deck of cards
@@ -107,7 +107,7 @@ module.exports = {
     // Fetch and deduct initial bet
     const origBalance = await getBalance(userId);
     if (origBalance < bet) {
-      return interaction.reply({ content: `💰 You only have ${origBalance}, you cannot bet ${bet}.`, ephemeral: true });
+      return interaction.reply({ content: `💰 You only have ${origBalance}, you cannot bet ${bet}.`, flags: MessageFlags.Ephemeral});
     }
     let balance = origBalance - bet;
     await updateBalance(userId, balance);
@@ -168,7 +168,7 @@ module.exports = {
 
       collector.on('collect', async btnInt => {
         if (btnInt.user.id !== userId) {
-          return btnInt.reply({ content: 'This isn’t your game!', ephemeral: true });
+          return btnInt.reply({ content: 'This isn’t your game!', flags: MessageFlags.Ephemeral});
         }
 
         await btnInt.deferUpdate();
@@ -209,7 +209,7 @@ module.exports = {
         // DOUBLE DOWN
         if (action === 'double' && firstMove) {
           if (balance < bet) {
-            return btnInt.followUp({ content: 'Insufficient balance to double down.', ephemeral: true });
+            return btnInt.followUp({ content: 'Insufficient balance to double down.', flags: MessageFlags.Ephemeral});
           }
           // Deduct second bet
           balance -= bet;
@@ -270,10 +270,10 @@ module.exports = {
     function handlePlayAgain(msg) {
       const playCollector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 3 * 60 * 1000 });
       playCollector.on('collect', async btnInt => {
-        if (btnInt.user.id !== userId) return btnInt.reply({ content: 'Not your game!', ephemeral: true });
+        if (btnInt.user.id !== userId) return btnInt.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
         const balNow = await getBalance(userId);
         if (balNow < originalBet) {
-          return btnInt.reply({ content: 'Insufficient balance to play again.', ephemeral: true });
+          return btnInt.reply({ content: 'Insufficient balance to play again.', flags: MessageFlags.Ephemeral});
         }
         // Deduct original bet and reset
         await updateBalance(userId, balNow - originalBet);

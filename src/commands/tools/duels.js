@@ -1,5 +1,5 @@
 // src/commands/tools/duel.js
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
 // In-memory store for pending duels: key = challengedUserId
@@ -33,15 +33,15 @@ module.exports = {
       const amount = interaction.options.getInteger('amount');
 
       if (target.id === me.id) {
-        return interaction.reply({ content: '❌ You can’t duel yourself!', ephemeral: true });
+        return interaction.reply({ content: '❌ You can’t duel yourself!', flags: MessageFlags.Ephemeral});
       }
       if (pendingDuels.has(target.id)) {
-        return interaction.reply({ content: '❌ That user already has a pending duel.', ephemeral: true });
+        return interaction.reply({ content: '❌ That user already has a pending duel.', flags: MessageFlags.Ephemeral});
       }
 
       const myBal = await getBalance(me.id);
       if (myBal < amount) {
-        return interaction.reply({ content: `❌ You only have $${myBal}, cannot wager $${amount}.`, ephemeral: true });
+        return interaction.reply({ content: `❌ You only have $${myBal}, cannot wager $${amount}.`, flags: MessageFlags.Ephemeral});
       }
 
       // record the pending duel
@@ -76,7 +76,7 @@ module.exports = {
     if (sub === 'accept') {
       const duel = pendingDuels.get(me.id);
       if (!duel) {
-        return interaction.reply({ content: '❌ You have no pending duel to accept.', ephemeral: true });
+        return interaction.reply({ content: '❌ You have no pending duel to accept.', flags: MessageFlags.Ephemeral});
       }
       clearTimeout(duel.timeout);
       pendingDuels.delete(me.id);
@@ -115,7 +115,7 @@ module.exports = {
     if (sub === 'decline') {
       const duel = pendingDuels.get(me.id);
       if (!duel) {
-        return interaction.reply({ content: '❌ No duel to decline.', ephemeral: true });
+        return interaction.reply({ content: '❌ No duel to decline.', flags: MessageFlags.Ephemeral});
       }
       clearTimeout(duel.timeout);
       pendingDuels.delete(me.id);

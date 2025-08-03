@@ -1,6 +1,6 @@
 // src/commands/tools/sleepy.js
 
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db.js');
 
 module.exports = {
@@ -39,8 +39,7 @@ module.exports = {
     const guildId = interaction.guildId;
     if (guildId !== '1217066705537204325') {
       return interaction.reply({
-        content: '🚫 This command only works in the sleepytime server.',
-        ephemeral: true,
+        content: '🚫 This command only works in the sleepytime server.', flags: MessageFlags.Ephemeral
       });
     }
 
@@ -49,7 +48,7 @@ module.exports = {
     try {
       if (sub === 'add' || sub === 'remove') {
         const user = interaction.options.getUser('user');
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const member = await interaction.guild.members.fetch(user.id).catch(() => null);
         if (!member || member.user.bot) {
@@ -118,8 +117,7 @@ module.exports = {
     } catch (err) {
       console.error('Sleepy command error:', err);
       return interaction.reply({
-        content: '⚠️ Something went wrong handling your sleepy command.',
-        ephemeral: true,
+        content: '⚠️ Something went wrong handling your sleepy command.', flags: MessageFlags.Ephemeral
       });
     }
   },

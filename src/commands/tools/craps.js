@@ -5,7 +5,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ComponentType
+  ComponentType,
+  MessageFlags
 } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
@@ -66,8 +67,7 @@ module.exports = {
     let balance = await getBalance(userId);
     if (bet > balance) {
       return interaction.reply({
-        content: `❌ You only have $${balance}.`,
-        ephemeral: true
+        content: `❌ You only have $${balance}.`, flags: MessageFlags.Ephemeral
       });
     }
 
@@ -115,12 +115,12 @@ module.exports = {
 
       collector.on('collect', async btnInt => {
         if (btnInt.user.id !== userId) {
-          return btnInt.reply({ content: 'Not your game!', ephemeral: true });
+          return btnInt.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
         }
         await btnInt.deferUpdate();
         const balNow = await getBalance(userId);
         if (balNow < originalBet) {
-          return btnInt.followUp({ content: `❌ You need $${originalBet} to play again.`, ephemeral: true });
+          return btnInt.followUp({ content: `❌ You need $${originalBet} to play again.`, flags: MessageFlags.Ephemeral});
         }
         balance = balNow - originalBet;
         bet = originalBet;

@@ -22,8 +22,7 @@ module.exports = {
       const mins = Math.floor(remaining / 1000 / 60);
       const secs = Math.floor((remaining / 1000) % 60);
       return interaction.reply({
-        content: `⏳ Please wait **${mins}m ${secs}s** before opening another loot box.`,
-        ephemeral: false
+        content: `⏳ Please wait **${mins}m ${secs}s** before opening another loot box.`
       });
     }
 

@@ -1,7 +1,8 @@
 // src/commands/tools/speak_settings.js
 
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, InteractionType, MessageFlags } = require('discord.js');
 const { pool, getSettingState } = require('../../utils/db.js');
+
 
 const OWNER_ID = '619637817294848012';
 const jokes = [
@@ -33,7 +34,7 @@ module.exports = {
         if (interaction.user.id !== OWNER_ID) {
             const msg = jokes[Math.floor(Math.random() * jokes.length)];
             // Sassy refusal, NOT ephemeral:
-            return await interaction.reply({ content: msg, ephemeral: false });
+            return await interaction.reply({ content: msg });
         }
 
         // Get current states
@@ -87,7 +88,7 @@ module.exports = {
                     .setStyle(ButtonStyle.Secondary),
             );
 
-        await interaction.reply({ embeds: [embed], components: [buttons], ephemeral: true });
+        await interaction.reply({ embeds: [embed], components: [buttons], flags: MessageFlags.Ephemeral});
 
         // Set up button collector – live only for the OWNER, only 1 minute
         const msg = await interaction.fetchReply();
@@ -104,7 +105,7 @@ module.exports = {
           VALUES ('active_speak', $1)
           ON CONFLICT (setting) DO UPDATE SET state = EXCLUDED.state
         `, [newState]);
-                await i.reply({ content: `Speak is now **${newState ? 'ON' : 'OFF'}**!`, ephemeral: true });
+                await i.reply({ content: `Speak is now **${newState ? 'ON' : 'OFF'}**!`, flags: MessageFlags.Ephemeral});
                 collector.stop();
             } else if (i.customId === 'add_blacklist') {
                 // Show modal asking for user id
@@ -151,17 +152,17 @@ module.exports = {
             if (!modalFilter(modalInt)) return;
             const userid = modalInt.fields.getTextInputValue('userid').trim();
             if (!userid.match(/^\d{17,20}$/)) {
-                return await modalInt.reply({ content: "That doesn't look like a valid user ID.", ephemeral: true });
+                return await modalInt.reply({ content: "That doesn't look like a valid user ID.", flags: MessageFlags.Ephemeral});
             }
             if (modalInt.customId === 'add_blacklist_modal') {
                 await pool.query(
                     'INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [userid]
                 );
-                await modalInt.reply({ content: `User <@${userid}> **blacklisted!**`, ephemeral: true });
+                await modalInt.reply({ content: `User <@${userid}> **blacklisted!**`, flags: MessageFlags.Ephemeral});
             }
             if (modalInt.customId === 'remove_blacklist_modal') {
                 await pool.query('DELETE FROM speak_blacklist WHERE user_id = $1', [userid]);
-                await modalInt.reply({ content: `User <@${userid}> removed from blacklist.`, ephemeral: true });
+                await modalInt.reply({ content: `User <@${userid}> removed from blacklist.`, flags: MessageFlags.Ephemeral});
             }
         });
 

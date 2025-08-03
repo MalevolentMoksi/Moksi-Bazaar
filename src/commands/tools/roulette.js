@@ -1,5 +1,5 @@
 // src/commands/tools/roulette.js
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
 // Numbers colored red in European roulette
@@ -48,8 +48,7 @@ module.exports = {
     const balance = await getBalance(userId);
     if (betAmount > balance) {
       return interaction.reply({
-        content: `❌ You only have $${balance} available to bet.`,
-        ephemeral: true
+        content: `❌ You only have $${balance} available to bet.`, flags: MessageFlags.Ephemeral
       });
     }
 
@@ -77,8 +76,7 @@ module.exports = {
 
       if (uniqueNumbers.length === 0) {
         return interaction.reply({
-          content: '❌ Please provide at least one valid number between 0 and 36.',
-          ephemeral: true
+          content: '❌ Please provide at least one valid number between 0 and 36.', flags: MessageFlags.Ephemeral
         });
       }
 

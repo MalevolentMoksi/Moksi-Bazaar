@@ -1,6 +1,6 @@
 // src/commands/tools/goatvc.js
 
-const { SlashCommandBuilder } = require('@discordjs/builders');
+const { SlashCommandBuilder, MessageFlags } = require('@discordjs/builders');
 const { joinVoiceChannel,
     createAudioPlayer,
     createAudioResource,
@@ -205,7 +205,7 @@ module.exports = {
         if (sc === 'sic') {
             // Check permission:
             if (interaction.user.id !== '619637817294848012') {
-                return interaction.reply({ content: "You can't unleash the goat like that!", ephemeral: true });
+                return interaction.reply({ content: "You can't unleash the goat like that!", flags: MessageFlags.Ephemeral});
             }
 
             // List all joinable VCs:
@@ -214,7 +214,7 @@ module.exports = {
                 .map(ch => ({ name: ch.name, id: ch.id }));
 
             if (!vcs.length) {
-                return interaction.reply({ content: "No joinable voice channels found.", ephemeral: true });
+                return interaction.reply({ content: "No joinable voice channels found.", flags: MessageFlags.Ephemeral});
             }
 
             // Build select menu (up to 25 options for Discord UI)
@@ -235,7 +235,7 @@ module.exports = {
                 .setTitle('🐐 Sic the Goat!')
                 .setDescription('Choose a voice channel below for the bot to enter, bleat, and then leave. No one will see it coming.');
 
-            await interaction.reply({ embeds: [embed], components: [selectRow], ephemeral: true });
+            await interaction.reply({ embeds: [embed], components: [selectRow], flags: MessageFlags.Ephemeral});
 
             // Handle selector
             const msg = await interaction.fetchReply();
@@ -246,7 +246,7 @@ module.exports = {
                     const vc = interaction.guild.channels.cache.get(chosenId);
 
                     if (!vc || !vc.joinable || vc.type !== 2) {
-                        return selectInt.reply({ content: "Cannot join that VC!", ephemeral: true });
+                        return selectInt.reply({ content: "Cannot join that VC!", flags: MessageFlags.Ephemeral});
                     }
 
                     // Play the bleat, then leave
@@ -254,7 +254,7 @@ module.exports = {
                     const path = require('path'), fs = require('fs');
                     const audioPath = path.join(__dirname, '..', '..', 'assets', 'goat_bleat.mp3');
                     if (!fs.existsSync(audioPath)) {
-                        return selectInt.reply({ content: "Goat audio missing!", ephemeral: true });
+                        return selectInt.reply({ content: "Goat audio missing!", flags: MessageFlags.Ephemeral});
                     }
                     const connection = joinVoiceChannel({
                         channelId: vc.id,
@@ -280,7 +280,7 @@ module.exports = {
                     const resource = createAudioResource(audioPath);
                     player.play(resource);
 
-                    await selectInt.reply({ content: `Goat has secretly been sicced into **${vc.name}** (will bail after the bleat)!`, ephemeral: true });
+                    await selectInt.reply({ content: `Goat has secretly been sicced into **${vc.name}** (will bail after the bleat)!`, flags: MessageFlags.Ephemeral});
                 })
                 .catch(() => { /* Timeout/no action; silently ignore */ });
 

@@ -5,7 +5,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ComponentType
+  ComponentType,
+  MessageFlags
 } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 const crypto = require('crypto');
@@ -137,7 +138,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
 
   collector.on('collect', async i => {
     if (i.user.id !== userId) {
-      return i.reply({ content: '❌ Not your game!', ephemeral: true });
+      return i.reply({ content: '❌ Not your game!', flags: MessageFlags.Ephemeral});
     }
     await i.deferUpdate();
 
@@ -145,7 +146,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       collector.stop();
       const currentBal = await getBalance(userId);
       if (currentBal < bet) {
-        return i.followUp({ content: `❌ You need $${bet} to play again.`, ephemeral: true });
+        return i.followUp({ content: `❌ You need $${bet} to play again.`, flags: MessageFlags.Ephemeral});
       }
       const newBal = currentBal - bet;
       await updateBalance(userId, newBal);
@@ -199,7 +200,7 @@ module.exports = {
 
     const balance = await getBalance(userId);
     if (bet > balance) {
-      return interaction.reply({ content: `❌ You only have $${balance}.`, ephemeral: true });
+      return interaction.reply({ content: `❌ You only have $${balance}.`, flags: MessageFlags.Ephemeral});
     }
 
     const balanceAfterBet = balance - bet;

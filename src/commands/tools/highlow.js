@@ -5,7 +5,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ComponentType
+  ComponentType,
+  MessageFlags
 } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
 
@@ -52,7 +53,7 @@ module.exports = {
 
     let balance = await getBalance(userId);
     if (bet > balance) {
-      return interaction.reply({ content: `❌ You only have $${balance}.`, ephemeral: true });
+      return interaction.reply({ content: `❌ You only have $${balance}.`, flags: MessageFlags.Ephemeral});
     }
 
     balance -= bet;
@@ -99,7 +100,7 @@ module.exports = {
 
       collector.on('collect', async btnInt => {
         if (btnInt.user.id !== userId) {
-          return btnInt.reply({ content: 'Not your game!', ephemeral: true });
+          return btnInt.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
         }
         await btnInt.deferUpdate();
         collector.stop();
@@ -148,12 +149,12 @@ module.exports = {
         });
 
         againCollector.on('collect', async b => {
-          if (b.user.id !== userId) return b.reply({ content: 'Not your game!', ephemeral: true });
+          if (b.user.id !== userId) return b.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
           await b.deferUpdate();
           if (b.customId !== 'play_again') return;
           const balNow = await getBalance(userId);
           if (balNow < originalBet) {
-            return b.followUp({ content: `❌ You need $${originalBet} to play again.`, ephemeral: true });
+            return b.followUp({ content: `❌ You need $${originalBet} to play again.`, flags: MessageFlags.Ephemeral});
           }
           balance = balNow - originalBet;
           bet = originalBet;
