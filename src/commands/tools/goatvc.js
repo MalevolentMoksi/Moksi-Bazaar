@@ -25,6 +25,7 @@ module.exports = {
         .setDescription('Moksi VC goat bleater')
         .addSubcommand(c => c.setName('start').setDescription('Start goat bleats'))
         .addSubcommand(c => c.setName('stop').setDescription('Stop goat bleats and leave'))
+        .addSubcommand(c => c.setName('sic').setDescription('(Owner) Sic the goat into any VC'))
         .addSubcommand(c => c.setName('test').setDescription('Play a test bleat now')),
 
     async execute(interaction) {
@@ -200,6 +201,92 @@ module.exports = {
             session.timer = setTimeout(scheduleBleat, 2000); // first bleat in 2s
             return;
         }
+
+        if (sc === 'sic') {
+            // Check permission:
+            if (interaction.user.id !== '619637817294848012') {
+                return interaction.reply({ content: "You can't unleash the goat like that!", ephemeral: true });
+            }
+
+            // List all joinable VCs:
+            const vcs = interaction.guild.channels.cache
+                .filter(ch => ch.type === 2 && ch.joinable)
+                .map(ch => ({ name: ch.name, id: ch.id }));
+
+            if (!vcs.length) {
+                return interaction.reply({ content: "No joinable voice channels found.", ephemeral: true });
+            }
+
+            // Build select menu (up to 25 options for Discord UI)
+            const { ActionRowBuilder, StringSelectMenuBuilder, EmbedBuilder } = require('discord.js');
+            const options = vcs.slice(0, 25).map(vc => ({
+                label: vc.name,
+                value: vc.id,
+            }));
+
+            const selectRow = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder()
+                    .setCustomId('goatvc_sic_select')
+                    .setPlaceholder('Select a Voice Channel')
+                    .addOptions(options)
+            );
+
+            const embed = new EmbedBuilder()
+                .setTitle('🐐 Sic the Goat!')
+                .setDescription('Choose a voice channel below for the bot to enter, bleat, and then leave. No one will see it coming.');
+
+            await interaction.reply({ embeds: [embed], components: [selectRow], ephemeral: true });
+
+            // Handle selector
+            const msg = await interaction.fetchReply();
+            msg.awaitMessageComponent({ filter: i => i.user.id === '619637817294848012', time: 30_000 })
+                .then(async selectInt => {
+                    // Safety: Only let owner use and only for chosen VC
+                    const chosenId = selectInt.values[0];
+                    const vc = interaction.guild.channels.cache.get(chosenId);
+
+                    if (!vc || !vc.joinable || vc.type !== 2) {
+                        return selectInt.reply({ content: "Cannot join that VC!", ephemeral: true });
+                    }
+
+                    // Play the bleat, then leave
+                    const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
+                    const path = require('path'), fs = require('fs');
+                    const audioPath = path.join(__dirname, '..', '..', 'assets', 'goat_bleat.mp3');
+                    if (!fs.existsSync(audioPath)) {
+                        return selectInt.reply({ content: "Goat audio missing!", ephemeral: true });
+                    }
+                    const connection = joinVoiceChannel({
+                        channelId: vc.id,
+                        guildId: vc.guild.id,
+                        adapterCreator: vc.guild.voiceAdapterCreator,
+                    });
+
+                    const player = createAudioPlayer();
+                    connection.subscribe(player);
+
+                    player.on('error', err => {
+                        connection.destroy();
+                    });
+
+                    player.on(AudioPlayerStatus.Idle, () => {
+                        setTimeout(() => connection.destroy(), 600);
+                    });
+
+                    player.on(AudioPlayerStatus.Playing, () => {
+                        // Bleat started—no further action needed here
+                    });
+
+                    const resource = createAudioResource(audioPath);
+                    player.play(resource);
+
+                    await selectInt.reply({ content: `Goat has secretly been sicced into **${vc.name}** (will bail after the bleat)!`, ephemeral: true });
+                })
+                .catch(() => { /* Timeout/no action; silently ignore */ });
+
+            return;
+        }
+
 
         // Defensive: if no subcommand matched
         await interaction.reply("Unknown subcommand.");
