@@ -3,15 +3,19 @@ const { SlashCommandBuilder } = require('@discordjs/builders');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('say')
-    .setDescription('I repeats your message')
+    .setDescription('Bot repeats your message anonymously')
     .addStringOption(opt =>
       opt.setName('message')
-         .setDescription('What should I say?')
-         .setRequired(true)
+        .setDescription('What should I say?')
+        .setRequired(true)
     ),
-    
   async execute(interaction) {
     const text = interaction.options.getString('message');
-    await interaction.reply(text);
-  }
+    if (interaction.user.id === "619637817294848012") {
+      await interaction.channel.send(text);
+      await interaction.reply({ content: "✅ Message sent.", ephemeral: true });
+    } else {
+      await interaction.reply({ content: `You don't speak for me <@${interaction.user.id}>, you little worm.` });
+    }
+  },
 };
