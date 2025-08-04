@@ -175,80 +175,80 @@ module.exports = {
     //   return;
     // }
 
-    // --- Fallback for other prefix commands (e.g., blackjack, currency, duel) ---
-    const firstArg = parts[1];
-    const isNumeric = firstArg && !isNaN(parseInt(firstArg, 10));
-    const sub = isNumeric ? 'start' : (firstArg ? firstArg.toLowerCase() : 'start');
-    const betIndex = isNumeric ? 1 : 2;
-    // For duel: sub should be 'challenge', 'accept' or 'decline'
+  //   // --- Fallback for other prefix commands (e.g., blackjack, currency, duel) ---
+  //   const firstArg = parts[1];
+  //   const isNumeric = firstArg && !isNaN(parseInt(firstArg, 10));
+  //   const sub = isNumeric ? 'start' : (firstArg ? firstArg.toLowerCase() : 'start');
+  //   const betIndex = isNumeric ? 1 : 2;
+  //   // For duel: sub should be 'challenge', 'accept' or 'decline'
 
-    const interaction = {
-      user: message.author,
-      guild: message.guild,
-      channel: message.channel,
-      options: {
-        getSubcommand: () => sub,
-        getUser: name => {
-          if (name === 'user') {
-            const mention = parts[2];
-            const m = mention?.match(/^<@!?(\d+)>$/);
-            return m ? { id: m[1] } : null;
-          }
-          return null;
-        },
-        getInteger: name => {
-          if (name === 'amount') {
-            // look for a number in parts
-            for (let i = parts.length - 1; i >= 0; i--) {
-              const n = parseInt(parts[i], 10);
-              if (!isNaN(n)) return n;
-            }
-            return null;
-          }
-          if (name === 'bet') {
-            const n = parseInt(parts[betIndex], 10);
-            return Number.isNaN(n) ? null : n;
-          }
-          return null;
-        },
-        getString: name => {
-          if (name === 'numbers' || name === 'color') {
-            return parts[2] || null;
-          }
-          return null;
-        }
-      },
-      replied: false,
-      deferred: false,
-      lastReply: null,
-      async deferReply() { this.deferred = true; },
-      async reply(resp) {
-        this.replied = true;
-        const msg = await message.channel.send(resp);
-        this.lastReply = msg;
-        return msg;
-      },
-      async editReply(resp) {
-        if (this.lastReply) {
-          return this.lastReply.edit(resp);
-        } else {
-          this.replied = true;
-          const msg = await message.channel.send(resp);
-          this.lastReply = msg;
-          return msg;
-        }
-      },
-      async fetchReply() {
-        return this.lastReply;
-      }
-    };
+  //   const interaction = {
+  //     user: message.author,
+  //     guild: message.guild,
+  //     channel: message.channel,
+  //     options: {
+  //       getSubcommand: () => sub,
+  //       getUser: name => {
+  //         if (name === 'user') {
+  //           const mention = parts[2];
+  //           const m = mention?.match(/^<@!?(\d+)>$/);
+  //           return m ? { id: m[1] } : null;
+  //         }
+  //         return null;
+  //       },
+  //       getInteger: name => {
+  //         if (name === 'amount') {
+  //           // look for a number in parts
+  //           for (let i = parts.length - 1; i >= 0; i--) {
+  //             const n = parseInt(parts[i], 10);
+  //             if (!isNaN(n)) return n;
+  //           }
+  //           return null;
+  //         }
+  //         if (name === 'bet') {
+  //           const n = parseInt(parts[betIndex], 10);
+  //           return Number.isNaN(n) ? null : n;
+  //         }
+  //         return null;
+  //       },
+  //       getString: name => {
+  //         if (name === 'numbers' || name === 'color') {
+  //           return parts[2] || null;
+  //         }
+  //         return null;
+  //       }
+  //     },
+  //     replied: false,
+  //     deferred: false,
+  //     lastReply: null,
+  //     async deferReply() { this.deferred = true; },
+  //     async reply(resp) {
+  //       this.replied = true;
+  //       const msg = await message.channel.send(resp);
+  //       this.lastReply = msg;
+  //       return msg;
+  //     },
+  //     async editReply(resp) {
+  //       if (this.lastReply) {
+  //         return this.lastReply.edit(resp);
+  //       } else {
+  //         this.replied = true;
+  //         const msg = await message.channel.send(resp);
+  //         this.lastReply = msg;
+  //         return msg;
+  //       }
+  //     },
+  //     async fetchReply() {
+  //       return this.lastReply;
+  //     }
+  //   };
 
-    try {
-      console.log('🧪 stub.interaction.guild is', interaction.guild);
-      await cmd.execute(interaction);
-    } catch (err) {
-      console.error('Prefix-command error:', err);
-      message.channel.send(`⚠️ Something went wrong: ${err.message}`);
-    }
-  }
+  //   try {
+  //     console.log('🧪 stub.interaction.guild is', interaction.guild);
+  //     await cmd.execute(interaction);
+  //   } catch (err) {
+  //     console.error('Prefix-command error:', err);
+  //     message.channel.send(`⚠️ Something went wrong: ${err.message}`);
+  //   }
+   }
 };
