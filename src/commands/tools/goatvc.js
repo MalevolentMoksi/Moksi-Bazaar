@@ -1,15 +1,22 @@
 // src/commands/tools/goatvc.js
 
-const { SlashCommandBuilder, MessageFlags } = require('@discordjs/builders');
-const { joinVoiceChannel,
+const { SlashCommandBuilder } = require('@discordjs/builders');
+const { 
+    ActionRowBuilder, 
+    StringSelectMenuBuilder, 
+    EmbedBuilder, 
+    MessageFlags 
+} = require('discord.js');
+const { 
+    joinVoiceChannel,
     createAudioPlayer,
     createAudioResource,
     AudioPlayerStatus,
     entersState,
-    VoiceConnectionStatus } = require('@discordjs/voice');
+    VoiceConnectionStatus 
+} = require('@discordjs/voice');
 const path = require('path');
 const fs = require('fs');
-const { Client, GatewayIntentBits } = require('discord.js');
 
 
 // Per-guild: { connection, timer, stopped }
@@ -218,7 +225,6 @@ module.exports = {
             }
 
             // Build select menu (up to 25 options for Discord UI)
-            const { ActionRowBuilder, StringSelectMenuBuilder, EmbedBuilder } = require('discord.js');
             const options = vcs.slice(0, 25).map(vc => ({
                 label: vc.name,
                 value: vc.id,
