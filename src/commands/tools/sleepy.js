@@ -37,9 +37,9 @@ module.exports = {
 
   async execute(interaction) {
     const guildId = interaction.guildId;
-    if (guildId !== '1217066705537204325') {
+    if (guildId !== '1217066705537204325' && guildId !== '1347922267853553806') {
       return interaction.reply({
-        content: '🚫 This command only works in the sleepytime server.', flags: MessageFlags.Ephemeral
+      content: '🚫 This command only works in the sleepytime server.', flags: MessageFlags.Ephemeral
       });
     }
 
