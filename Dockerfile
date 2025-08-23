@@ -6,7 +6,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # Copy package files first (for better caching)
-COPY package.json pnpm-lock.yaml ./
+COPY package.json package-lock.json ./
 
 # Install dependencies (reproducible, fast, no audit/fund noise)
 RUN npm ci --omit=dev --no-audit --no-fund
