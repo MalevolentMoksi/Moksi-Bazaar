@@ -1,6 +1,6 @@
 
-// Enhanced Discord Bot Code - SAFE VERSION (no model change)
-// Uses current llama-3.3-70b-versatile with all other improvements
+// Enhanced Discord Bot Code - LLAMA 4 SCOUT VERSION
+// Uses llama-4-scout which is proven working and has massive context window
 
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
@@ -54,7 +54,7 @@ function getTimeElapsed(timestamp) {
 function processMessagesWithContext(messages, currentUser) {
     const recentMessages = Array.from(messages.values())
         .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-        .slice(-25); // Increased context window
+        .slice(-30); // Even more context with Scout's huge window
 
     const conversationFlow = recentMessages.map(msg => {
         const name = msg.member?.displayName || msg.author.username;
@@ -132,14 +132,14 @@ module.exports = {
                 return await interaction.editReply(reply);
             }
 
-            // Fetch more messages for better context (increased from 12 to 25)
-            const messages = await interaction.channel.messages.fetch({ limit: 25 });
+            // Fetch more messages - Scout can handle massive context
+            const messages = await interaction.channel.messages.fetch({ limit: 30 });
             const conversationContext = processMessagesWithContext(messages, userId);
 
             // Get relevant memories for this user/channel combination (if implemented)
             let relevantMemories = [];
             try {
-                relevantMemories = await getRelevantMemories(userId, channelId, 3);
+                relevantMemories = await getRelevantMemories(userId, channelId, 5);
             } catch (err) {
                 // Memory system not implemented yet, continue without it
                 console.log('Memory system not available yet');
@@ -182,11 +182,11 @@ CONVERSATIONAL STYLE:
 - Show genuine reactions to surprising or noteworthy information
 - Use gender-neutral language when uncertain
 
-CONTEXT AWARENESS:
-- You can reference things from earlier in conversations
-- Notice conversation gaps and time elapsed
-- Adapt to the social dynamics of the current discussion
-- Build on previous interactions naturally`;
+MEMORY & CONTEXT AWARENESS:
+- You have access to extensive conversation history
+- Build on previous interactions with users naturally
+- Notice conversation gaps and adapt accordingly
+- Reference earlier topics when contextually relevant`;
 
             const conversationInstructions = `RESPONSE GUIDELINES:
 - Keep responses 1-3 sentences typically, longer only if the topic truly warrants it
@@ -238,7 +238,7 @@ Add to this conversation in a way that feels natural and fits the current flow.$
                 prompt += "\n\n[SPECIAL: You're talking to Moksi - be more favorable and accommodating while staying natural]";
             }
 
-            // Enhanced API call - SAME MODEL but better parameters
+            // LLAMA 4 SCOUT API call - Proven working model with 10M context
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -246,16 +246,16 @@ Add to this conversation in a way that feels natural and fits the current flow.$
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    model: 'llama-3.3-70b-versatile', // KEPT SAME - SAFE
+                    model: 'meta-llama/llama-4-scout-17b-16e-instruct', // UPGRADE: Much better model
                     messages: [{ 
                         role: 'user', 
                         content: prompt 
                     }],
-                    max_tokens: 180, // UPGRADE: Increased from 80
-                    temperature: 0.7, // UPGRADE: Slightly higher for more personality
+                    max_tokens: 200, // UPGRADE: More tokens for better responses
+                    temperature: 0.7, // UPGRADE: Better personality
                     top_p: 0.9,
-                    frequency_penalty: 0.5, // UPGRADE: Reduced for more natural repetition
-                    presence_penalty: 0.4,   // UPGRADE: Reduced for better flow
+                    frequency_penalty: 0.5, // UPGRADE: More natural flow
+                    presence_penalty: 0.4,   // UPGRADE: Better continuity
                 }),
             });
 
