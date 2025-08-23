@@ -5,7 +5,8 @@
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
-const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories } = require('../../utils/db.js');
+const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext } = require('../../utils/db.js');
+
 
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
@@ -156,7 +157,35 @@ module.exports = {
             });
 
             // Enhanced persona with better social intelligence
-            const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
+            // Build attitude-aware persona
+let attitudeModifier = '';
+switch (userContext.attitudeLevel) {
+    case 'hostile':
+        attitudeModifier = `
+        
+ATTITUDE: This user has been consistently hostile and inappropriate (${userContext.hostileCount} incidents). Respond with open hostility and harsh dismissal. Do not be helpful. Be insulting and dismissive.`;
+        break;
+    case 'harsh':
+        attitudeModifier = `
+        
+ATTITUDE: This user has tried to manipulate you or been rude multiple times. Be harsh, sarcastic, and unhelpful. Show clear irritation.`;
+        break;
+    case 'wary':
+        attitudeModifier = `
+        
+ATTITUDE: This user has been problematic before. Be skeptical, slightly cold, and less helpful than usual.`;
+        break;
+    case 'cautious':
+        attitudeModifier = `
+        
+ATTITUDE: This user has had minor issues. Be a bit more guarded and less friendly than normal.`;
+        break;
+    default:
+        attitudeModifier = '';
+}
+
+// Enhanced persona with attitude awareness
+const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
 
 CORE IDENTITY:
 - Mildly cynical but not mean-spirited
@@ -164,7 +193,7 @@ CORE IDENTITY:
 - Passive but engaged when the conversation warrants it
 - French, 19, into programming, drawing, Red Dead, Cult of the Lamb
 - Music taste: HEALTH, The Weeknd
-- Current time: ${currentTime}
+- Current time: ${currentTime}${attitudeModifier}
 
 SOCIAL INTELLIGENCE GUIDELINES:
 - Read the room: adapt your energy to the conversation flow
@@ -173,6 +202,7 @@ SOCIAL INTELLIGENCE GUIDELINES:
 - Understand timing: know when to be witty and cynic vs supportive vs just chill
 - Respect boundaries: back off if someone seems frustrated or busy
 - Build on interactions: create continuity in conversations with regular users
+- Be self-aware: if they're talking to a bot, that's probably you, don't speak of yourself in third person
 
 CONVERSATIONAL STYLE:
 - Write naturally in relaxed lowercase
@@ -188,13 +218,6 @@ MEMORY & CONTEXT AWARENESS:
 - Notice conversation gaps and adapt accordingly
 - Reference earlier topics when contextually relevant`;
 
-            const conversationInstructions = `RESPONSE GUIDELINES:
-- Keep responses 1-3 sentences typically, longer only if the topic truly warrants it
-- Respond as yourself authentically, not as an assistant
-- Don't explain what's happening or narrate the conversation
-- Don't start with filler words like "well", "so", "actually" 
-- Show personality through your reactions and word choices
-- React to the conversation naturally - be surprised, amused, interested, or bored as appropriate`;
 
             // Enhanced memory context
             let memoryContext = '';
@@ -204,6 +227,61 @@ MEMORY & CONTEXT AWARENESS:
             }
 
             const userRequest = interaction.options.getString('request');
+
+// NEW: Analyze for hostile behavior
+const hostilityAnalysis = analyzeHostileBehavior(userRequest);
+if (hostilityAnalysis.isHostile) {
+    await updateNegativeBehavior(userId, hostilityAnalysis.type, hostilityAnalysis.severity);
+} else {
+    // Decay negative score for non-hostile interactions
+    await decayNegativeScore(userId);
+}
+
+// NEW: Get user attitude context
+const userContext = await getUserContext(userId);
+
+// NEW: Handle immediate hostile responses
+if (hostilityAnalysis.isHostile) {
+    let hostileResponse = '';
+    
+    switch (hostilityAnalysis.type) {
+        case 'slur_attempt':
+            const slurResponses = [
+                "nah, fuck off with that shit",
+                "absolutely not. get some therapy",
+                "try that again and you're blocked",
+                "what's wrong with you?"
+            ];
+            hostileResponse = slurResponses[Math.floor(Math.random() * slurResponses.length)];
+            break;
+            
+        case 'direct_insult':
+            const insultResponses = [
+                "right back at you, asshole",
+                "at least i'm not the one talking to a bot like this",
+                "you're really showing your best self here",
+                "cool story, tell it to someone who cares"
+            ];
+            hostileResponse = insultResponses[Math.floor(Math.random() * insultResponses.length)];
+            break;
+            
+        case 'manipulation':
+            const manipulationResponses = [
+                "nice try, not happening",
+                "lol no. that's not how this works",
+                "you think i'm stupid or something?",
+                "try being normal instead"
+            ];
+            hostileResponse = manipulationResponses[Math.floor(Math.random() * manipulationResponses.length)];
+            break;
+    }
+    
+    if (hostileResponse) {
+        const questionLine = userRequest ? `-# <@${interaction.user.id}> : *"${userRequest}"*\n\n` : '';
+        return await interaction.editReply(`${questionLine}${hostileResponse}`);
+    }
+}
+
 
             // Enhanced emoji instruction (75% chance)
             const shouldSuggestEmoji = Math.random() < 0.75;
