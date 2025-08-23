@@ -260,7 +260,7 @@ module.exports = {
         schedulerRunning = false;
         scheduleNext(interaction.client).catch(() => {});
         const eta = new Date(dueAt);
-        await interaction.editReply(`Reminder set for ${eta.toUTCString()} (UTC). I’ll ping you here when it’s time.`);
+        await interaction.editReply(`Alright,  I’ll ping you here when it’s time.\n(Reminder set for ${eta.toUTCString()} (UTC)).`);
         return;
       }
 
