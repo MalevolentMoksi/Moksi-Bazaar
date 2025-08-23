@@ -1,25 +1,11 @@
 // src/commands/tools/remind.js
-const { SlashCommandBuilder, time: discordTime, TimestampStyles } = require('discord.js');
-const { pool } = require('../../utils/db'); // reuse your existing pg pool
+const { SlashCommandBuilder } = require('discord.js');
+const { pool } = require('../../utils/db');
 const { randomUUID } = require('crypto');
 
-/**
- * TABLE:
- * CREATE TABLE IF NOT EXISTS reminders (
- *   id TEXT PRIMARY KEY,
- *   user_id TEXT NOT NULL,
- *   channel_id TEXT NOT NULL,
- *   due_at_utc_ms BIGINT NOT NULL,
- *   reason TEXT,
- *   created_at_utc_ms BIGINT NOT NULL
- * );
- *
- * Index for efficient scheduling:
- * CREATE INDEX IF NOT EXISTS reminders_due_idx ON reminders (due_at_utc_ms);
- */
-
 let schedulerTimer = null;
-let schedulerRunning = false;
+let schedulerBusy = false; // prevents overlapping schedules
+let clientRef = null;
 
 // Ensure table exists
 async function ensureTable() {
@@ -36,68 +22,90 @@ async function ensureTable() {
   await pool.query(`CREATE INDEX IF NOT EXISTS reminders_due_idx ON reminders (due_at_utc_ms)`);
 }
 
-// Fetch the next due reminder (earliest)
+// Fetch earliest pending reminder
 async function fetchNextReminder() {
-  const { rows } = await pool.query(
-    `SELECT id, user_id, channel_id, due_at_utc_ms, reason
-     FROM reminders
-     ORDER BY due_at_utc_ms ASC
-     LIMIT 1`
-  );
+  const { rows } = await pool.query(`
+    SELECT id, user_id, channel_id, due_at_utc_ms, reason
+    FROM reminders
+    ORDER BY due_at_utc_ms ASC
+    LIMIT 1
+  `);
   return rows[0] || null;
 }
 
-// Send and delete a reminder by id
-async function sendAndDeleteReminder(client, reminder) {
-  try {
-    const channel = await client.channels.fetch(reminder.channel_id).catch(() => null);
-    if (channel) {
-      const userMention = `<@${reminder.user_id}>`;
-      const reasonText = reminder.reason ? ` • Reason: ${reminder.reason}` : '';
-      await channel.send(`${userMention} Reminder time!${reasonText}`);
-    }
-  } catch (e) {
-    // swallow send errors to avoid blocking scheduling
-    console.error('Failed to send reminder:', e);
-  } finally {
-    // delete from DB
-    await pool.query(`DELETE FROM reminders WHERE id = $1`, [reminder.id]).catch(() => {});
-  }
+// Double-fire guard: re-fetch row right before sending, ensure still due and present
+async function refetchReminderById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id, channel_id, due_at_utc_ms, reason
+     FROM reminders WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  return rows || null;
 }
 
-// Core scheduler loop: always schedule the next reminder
+async function deleteReminder(id) {
+  await pool.query(`DELETE FROM reminders WHERE id = $1`, [id]);
+}
+
+async function sendReminderMessage(client, reminder) {
+  const channel = await client.channels.fetch(reminder.channel_id).catch(() => null);
+  if (!channel) return;
+  const userMention = `<@${reminder.user_id}>`;
+  const prefix = `${userMention}, the Goat apprises you.`; // your custom phrasing
+  const suffix = reminder.reason ? ` ${reminder.reason}` : '';
+  await channel.send(`${prefix}${suffix}`);
+}
+
+// Always schedule the next single reminder only
 async function scheduleNext(client) {
-  if (schedulerRunning) return;
-  schedulerRunning = true;
+  if (schedulerBusy) return;
+  schedulerBusy = true;
 
   try {
     const next = await fetchNextReminder();
     if (!next) {
-      // nothing to schedule
-      schedulerRunning = false;
+      // nothing to schedule; clear existing timer if any
+      if (schedulerTimer) {
+        clearTimeout(schedulerTimer);
+        schedulerTimer = null;
+      }
+      schedulerBusy = false;
       return;
+    }
+
+    // Clear and reschedule the one timer
+    if (schedulerTimer) {
+      clearTimeout(schedulerTimer);
+      schedulerTimer = null;
     }
 
     const now = Date.now();
     const delay = Math.max(0, Number(next.due_at_utc_ms) - now);
 
     schedulerTimer = setTimeout(async () => {
-      // Set running false to allow immediate scheduling of the next one after execution
-      schedulerRunning = false;
-      await sendAndDeleteReminder(client, next);
-      // After sending, schedule next
-      scheduleNext(client).catch(e => console.error('scheduleNext error:', e));
+      // Before sending, re-check the DB to ensure we still have this reminder and it's due
+      try {
+        const again = await refetchReminderById(next.id);
+        if (again && Number(again.due_at_utc_ms) <= Date.now()) {
+          await sendReminderMessage(client, again);
+          await deleteReminder(again.id);
+        }
+      } catch (e) {
+        console.error('Error during reminder dispatch:', e);
+      } finally {
+        schedulerBusy = false;
+        scheduleNext(client).catch(err => console.error('scheduleNext follow-up error:', err));
+      }
     }, delay);
   } catch (e) {
     console.error('scheduleNext failed:', e);
-    schedulerRunning = false;
-    // retry in 10 seconds if failed to fetch
+    schedulerBusy = false;
+    // Retry later
     setTimeout(() => scheduleNext(client).catch(() => {}), 10000);
   }
 }
 
-// Kickoff scheduler on module load, once client is ready (requires client injection)
-let clientRef = null;
+// Initialize scheduler once per process
 async function initScheduler(client) {
   if (clientRef) return;
   clientRef = client;
@@ -105,12 +113,12 @@ async function initScheduler(client) {
   await scheduleNext(clientRef);
 }
 
-// Helpers: parse relative time like "10m", "2h", "1d", "30s"
+// Helpers
 function parseRelative(spec) {
-  // allow composite like "1h30m", "2h 10m", "90m"
+  // supports "1h30m", "2h 10m", "45m", "90s", "2d"
   const re = /(\d+)\s*(d|h|m|s)/gi;
-  let match;
   let totalMs = 0;
+  let match;
   while ((match = re.exec(spec)) !== null) {
     const val = parseInt(match[1], 10);
     const unit = match[2].toLowerCase();
@@ -122,59 +130,46 @@ function parseRelative(spec) {
   return totalMs > 0 ? totalMs : null;
 }
 
-/**
- * Parse absolute time with timezone.
- * Inputs:
- * - date: "YYYY-MM-DD"
- * - time: "HH:mm" (24h)
- * - tz: IANA timezone string (e.g., "Europe/Paris", "America/New_York")
- *
- * We convert the provided local time in tz to a UTC timestamp (ms).
- */
+// Parse absolute wall time in tz -> UTC ms
 function parseAbsoluteToUTCms(dateStr, timeStr, tz) {
-  // Basic validation
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
   if (!/^\d{2}:\d{2}$/.test(timeStr)) return null;
   try {
-    // Use Intl to compute the offset by formatting that local time in tz and comparing to UTC.
-    // Create a Date from components, assumed in target TZ. We can derive UTC by finding the TZ offset at that time.
-    const [Y, M, D] = dateStr.split('-').map(n => parseInt(n, 10));
-    const [HH, MM] = timeStr.split(':').map(n => parseInt(n, 10));
+    const [Y, M, D] = dateStr.split('-').map(Number);
+    const [HH, MM] = timeStr.split(':').map(Number);
 
-    // Build a Date in UTC first (same wall time treated as UTC)
-    const assumedUTC = Date.UTC(Y, M - 1, D, HH, MM, 0, 0);
-
-    // Figure out the TZ offset at that local wall time.
-    // Format that wall time in the given tz, then in UTC, compare epoch ms by shifting with guessed offset.
-    // We'll binary search offset within plausible bounds (-14:00 to +14:00)
-    function tzOffsetMinutes(epochMs, tzName) {
-      const fmt = new Intl.DateTimeFormat('en-US', {
-        timeZone: tzName,
-        hour12: false,
+    // We’ll iteratively adjust an epoch guess so that, when shown in tz, it matches Y-M-D HH:MM
+    const desired = { Y, M, D, HH, MM };
+    function localParts(epoch, tzName) {
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: tzName, hour12: false,
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit'
       });
-      const parts = fmt.formatToParts(new Date(epochMs));
-      const get = t => parts.find(p => p.type === t)?.value;
-      // returns the local Y-M-D HH:MM that this epochMs shows in tz
-      return { year: +get('year'), month: +get('month'), day: +get('day'), hour: +get('hour'), minute: +get('minute') };
+      const parts = fmt.formatToParts(new Date(epoch));
+      const pick = t => parts.find(p => p.type === t)?.value;
+      return {
+        Y: +pick('year'),
+        M: +pick('month'),
+        D: +pick('day'),
+        HH: +pick('hour'),
+        MM: +pick('minute'),
+      };
     }
-
-    // Find the epoch that, when viewed in tz, shows Y-M-D HH:MM
-    // Start with a guess: the UTC date constructed above; refine by offset iterations.
-    let guess = assumedUTC;
-    for (let i = 0; i < 5; i++) {
-      const local = tzOffsetMinutes(guess, tz);
-      const deltaMinutes = ((Y - local.year) * 525600) +
-                           ((M - local.month) * 43200) +
-                           ((D - local.day) * 1440) +
-                           ((HH - local.hour) * 60) +
-                           (MM - local.minute);
-      if (deltaMinutes === 0) break;
-      guess += deltaMinutes * 60 * 1000;
+    let guess = Date.UTC(Y, M - 1, D, HH, MM, 0, 0);
+    for (let i = 0; i < 6; i++) {
+      const cur = localParts(guess, tz);
+      const deltaMin =
+        ((desired.Y - cur.Y) * 525600) +
+        ((desired.M - cur.M) * 43200) +
+        ((desired.D - cur.D) * 1440) +
+        ((desired.HH - cur.HH) * 60) +
+        (desired.MM - cur.MM);
+      if (deltaMin === 0) break;
+      guess += deltaMin * 60 * 1000;
     }
-    return guess; // UTC ms for that local time in tz
-  } catch (e) {
+    return guess;
+  } catch {
     return null;
   }
 }
@@ -197,16 +192,16 @@ module.exports = {
     .addSubcommand(sub =>
       sub
         .setName('in')
-        .setDescription('Remind after a relative duration (e.g., 10m, 2h, 1d, or combos like 1h30m)')
+        .setDescription('Remind after a relative duration (e.g., 10m, 2h, 1d, 1h30m)')
         .addStringOption(opt =>
           opt.setName('duration')
-             .setDescription('Duration like 10m, 2h, 1d, or combined like 1h30m')
-             .setRequired(true)
+            .setDescription('Duration like 10m, 2h, 1d, or combos like 1h30m')
+            .setRequired(true)
         )
         .addStringOption(opt =>
           opt.setName('reason')
-             .setDescription('Optional reason to include in the reminder')
-             .setRequired(false)
+            .setDescription('Optional reason to include in the reminder')
+            .setRequired(false)
         )
     )
     .addSubcommand(sub =>
@@ -215,33 +210,29 @@ module.exports = {
         .setDescription('Remind at an exact time with timezone')
         .addStringOption(opt =>
           opt.setName('date')
-             .setDescription('YYYY-MM-DD (your local date in the specified timezone)')
-             .setRequired(true)
+            .setDescription('YYYY-MM-DD in the specified timezone')
+            .setRequired(true)
         )
         .addStringOption(opt =>
           opt.setName('time')
-             .setDescription('HH:MM (24h) in the specified timezone')
-             .setRequired(true)
+            .setDescription('HH:MM (24h) in the specified timezone')
+            .setRequired(true)
         )
         .addStringOption(opt =>
           opt.setName('timezone')
-             .setDescription('IANA timezone, e.g., Europe/Paris, America/New_York')
-             .setRequired(true)
+            .setDescription('IANA timezone, e.g., Europe/Paris, America/New_York')
+            .setRequired(true)
         )
         .addStringOption(opt =>
           opt.setName('reason')
-             .setDescription('Optional reason to include in the reminder')
-             .setRequired(false)
+            .setDescription('Optional reason to include in the reminder')
+            .setRequired(false)
         )
     ),
 
-  // This command module needs the client instance to schedule reminders reliably.
-  // The client is available on interaction.client.
   async execute(interaction) {
-    // initialize scheduler (once per process)
     await initScheduler(interaction.client);
-
-    await interaction.deferReply({});
+    await interaction.deferReply({ ephemeral: true });
 
     try {
       const sub = interaction.options.getSubcommand();
@@ -256,11 +247,14 @@ module.exports = {
         }
         const dueAt = Date.now() + deltaMs;
         await insertReminder(interaction.user.id, interaction.channel.id, dueAt, reason);
-        // Reschedule if this is earlier than current
-        schedulerRunning = false;
-        scheduleNext(interaction.client).catch(() => {});
-        const eta = new Date(dueAt);
-        await interaction.editReply(`Alright,  I’ll ping you here when it’s time.\n(Reminder set for ${eta.toUTCString()} (UTC)).`);
+
+        // Re-schedule safely (single timer)
+        schedulerBusy = false;
+        await scheduleNext(interaction.client);
+
+        const utcStr = new Date(dueAt).toUTCString();
+        // Two-line confirmation: line 1 plain, line 2 subtle/smaller via spoiler-ish style
+        await interaction.editReply(`Understood. The Goat will forewarn you\n-# ${utcStr}`);
         return;
       }
 
@@ -270,9 +264,8 @@ module.exports = {
         const tz = interaction.options.getString('timezone', true);
         const reason = interaction.options.getString('reason') || '';
 
-        // Quick validate timezone by trying a format
+        // Validate tz
         try {
-          // Throws for invalid IANA names in some runtimes
           new Intl.DateTimeFormat('en-US', { timeZone: tz });
         } catch {
           await interaction.editReply('Invalid timezone. Please provide a valid IANA timezone like Europe/Paris or America/New_York.');
@@ -290,10 +283,12 @@ module.exports = {
         }
 
         await insertReminder(interaction.user.id, interaction.channel.id, dueAt, reason);
-        schedulerRunning = false;
-        scheduleNext(interaction.client).catch(() => {});
-        const eta = new Date(dueAt);
-        await interaction.editReply(`Reminder set for ${eta.toUTCString()} (UTC). I’ll ping you here when it’s time.`);
+
+        schedulerBusy = false;
+        await scheduleNext(interaction.client);
+
+        const utcStr = new Date(dueAt).toUTCString();
+        await interaction.editReply(`Understood. The Goat will forewarn you\n-# ${utcStr}`);
         return;
       }
 
@@ -302,7 +297,7 @@ module.exports = {
       console.error('remind command error:', err);
       try {
         await interaction.editReply('There was an error setting your reminder.');
-      } catch (_) {}
+      } catch {}
     }
   },
 };
