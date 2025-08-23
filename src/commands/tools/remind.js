@@ -232,7 +232,7 @@ module.exports = {
 
   async execute(interaction) {
     await initScheduler(interaction.client);
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({});
 
     try {
       const sub = interaction.options.getSubcommand();
@@ -254,7 +254,7 @@ module.exports = {
 
         const utcStr = new Date(dueAt).toUTCString();
         // Two-line confirmation: line 1 plain, line 2 subtle/smaller via spoiler-ish style
-        await interaction.editReply(`Understood. The Goat will forewarn you\n-# ${utcStr}`);
+        await interaction.editReply(`Understood. The Goat will forewarn you\n-# At ${utcStr}`);
         return;
       }
 
