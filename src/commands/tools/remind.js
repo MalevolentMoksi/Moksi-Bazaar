@@ -241,7 +241,7 @@ module.exports = {
     // initialize scheduler (once per process)
     await initScheduler(interaction.client);
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({});
 
     try {
       const sub = interaction.options.getSubcommand();
