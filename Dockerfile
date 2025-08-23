@@ -1,20 +1,15 @@
 FROM node:18-slim
 
 # Enable pnpm
-RUN corepack enable && corepack prepare pnpm@9.1.4 --activate
+ENV NODE_ENV=production
 
 WORKDIR /app
-
-# --- ffmpeg install for vc ---
-RUN apt-get update
-
-
 
 # Copy package files first (for better caching)
 COPY package.json pnpm-lock.yaml ./
 
-# Install dependencies (cached unless package files change)
-RUN pnpm install --frozen-lockfile --prod
+# Install dependencies (reproducible, fast, no audit/fund noise)
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # Copy source code
 COPY . .
