@@ -295,7 +295,6 @@ MEMORY & CONTEXT AWARENESS:
             if (userRequest) {
                 prompt = `${enhancedPersona}
 
-${conversationInstructions}
 
 RECENT CONVERSATION:
 ${conversationContext}${memoryContext}
@@ -306,7 +305,6 @@ Respond naturally as Cooler Moksi.${emojiInstruction}`;
             } else {
                 prompt = `${enhancedPersona}
 
-${conversationInstructions}
 
 RECENT CONVERSATION:
 ${conversationContext}${memoryContext}
