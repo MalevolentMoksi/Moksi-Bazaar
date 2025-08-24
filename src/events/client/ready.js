@@ -1,5 +1,5 @@
 // In your bot.js ready event:
-const { startReminderScheduler } = require('./commands/tools/remind.js');
+const { startReminderScheduler } = require('../../commands/tools/remind.js');
 
 client.once('ready', async () => {
   await init();
