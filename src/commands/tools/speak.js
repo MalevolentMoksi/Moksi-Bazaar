@@ -159,6 +159,13 @@ module.exports = {
             // Enhanced persona with better social intelligence
             // Build attitude-aware persona
 let attitudeModifier = '';
+
+
+
+
+// NEW: Get user attitude context
+const userContext = await getUserContext(userId);
+
 switch (userContext.attitudeLevel) {
     case 'hostile':
         attitudeModifier = `
@@ -183,7 +190,6 @@ ATTITUDE: This user has had minor issues. Be a bit more guarded and less friendl
     default:
         attitudeModifier = '';
 }
-
 // Enhanced persona with attitude awareness
 const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
 
@@ -236,9 +242,6 @@ if (hostilityAnalysis.isHostile) {
     // Decay negative score for non-hostile interactions
     await decayNegativeScore(userId);
 }
-
-// NEW: Get user attitude context
-const userContext = await getUserContext(userId);
 
 // NEW: Handle immediate hostile responses
 if (hostilityAnalysis.isHostile) {
