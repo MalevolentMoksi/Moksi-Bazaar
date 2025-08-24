@@ -146,52 +146,52 @@ module.exports = {
                 console.log('Memory system not available yet');
             }
 
-            const currentTime = new Date().toLocaleString('en-US', { 
-                timeZone: 'Europe/Paris', 
-                weekday: 'long', 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric', 
-                hour: '2-digit', 
-                minute: '2-digit' 
+            const currentTime = new Date().toLocaleString('en-US', {
+                timeZone: 'Europe/Paris',
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
             });
 
             // Enhanced persona with better social intelligence
             // Build attitude-aware persona
-let attitudeModifier = '';
+            let attitudeModifier = '';
 
 
 
 
-// NEW: Get user attitude context
-const userContext = await getUserContext(userId);
+            // NEW: Get user attitude context
+            const userContext = await getUserContext(userId);
 
-switch (userContext.attitudeLevel) {
-    case 'hostile':
-        attitudeModifier = `
+            switch (userContext.attitudeLevel) {
+                case 'hostile':
+                    attitudeModifier = `
         
 ATTITUDE: This user has been consistently hostile and inappropriate (${userContext.hostileCount} incidents). Respond with open hostility and harsh dismissal. Do not be helpful. Be insulting and dismissive.`;
-        break;
-    case 'harsh':
-        attitudeModifier = `
+                    break;
+                case 'harsh':
+                    attitudeModifier = `
         
 ATTITUDE: This user has tried to manipulate you or been rude multiple times. Be harsh, sarcastic, and unhelpful. Show clear irritation.`;
-        break;
-    case 'wary':
-        attitudeModifier = `
+                    break;
+                case 'wary':
+                    attitudeModifier = `
         
 ATTITUDE: This user has been problematic before. Be skeptical, slightly cold, and less helpful than usual.`;
-        break;
-    case 'cautious':
-        attitudeModifier = `
+                    break;
+                case 'cautious':
+                    attitudeModifier = `
         
 ATTITUDE: This user has had minor issues. Be a bit more guarded and less friendly than normal.`;
-        break;
-    default:
-        attitudeModifier = '';
-}
-// Enhanced persona with attitude awareness
-const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
+                    break;
+                default:
+                    attitudeModifier = '';
+            }
+            // Enhanced persona with attitude awareness
+            const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
 
 CORE IDENTITY:
 - Mildly cynical but not mean-spirited
@@ -228,67 +228,67 @@ MEMORY & CONTEXT AWARENESS:
             // Enhanced memory context
             let memoryContext = '';
             if (relevantMemories.length > 0) {
-                memoryContext = `\n\nRELEVANT CONVERSATION MEMORIES:\n` + 
+                memoryContext = `\n\nRELEVANT CONVERSATION MEMORIES:\n` +
                     relevantMemories.map(mem => `- ${mem.summary} (${mem.timeAgo})`).join('\n');
             }
 
             const userRequest = interaction.options.getString('request');
 
-// NEW: Analyze for hostile behavior
-const hostilityAnalysis = analyzeHostileBehavior(userRequest);
-if (hostilityAnalysis.isHostile) {
-    await updateNegativeBehavior(userId, hostilityAnalysis.type, hostilityAnalysis.severity);
-} else {
-    // Decay negative score for non-hostile interactions
-    await decayNegativeScore(userId);
-}
+            // NEW: Analyze for hostile behavior
+            const hostilityAnalysis = analyzeHostileBehavior(userRequest);
+            if (hostilityAnalysis.isHostile) {
+                await updateNegativeBehavior(userId, hostilityAnalysis.type, hostilityAnalysis.severity);
+            } else {
+                // Decay negative score for non-hostile interactions
+                await decayNegativeScore(userId);
+            }
 
-// NEW: Handle immediate hostile responses
-if (hostilityAnalysis.isHostile) {
-    let hostileResponse = '';
-    
-    switch (hostilityAnalysis.type) {
-        case 'slur_attempt':
-            const slurResponses = [
-                "nah, fuck off with that shit",
-                "absolutely not. get some therapy",
-                "try that again and you're blocked",
-                "what's wrong with you?"
-            ];
-            hostileResponse = slurResponses[Math.floor(Math.random() * slurResponses.length)];
-            break;
-            
-        case 'direct_insult':
-            const insultResponses = [
-                "right back at you, asshole",
-                "at least i'm not the one talking to a bot like this",
-                "you're really showing your best self here",
-                "cool story, tell it to someone who cares"
-            ];
-            hostileResponse = insultResponses[Math.floor(Math.random() * insultResponses.length)];
-            break;
-            
-        case 'manipulation':
-            const manipulationResponses = [
-                "nice try, not happening",
-                "lol no. that's not how this works",
-                "you think i'm stupid or something?",
-                "try being normal instead"
-            ];
-            hostileResponse = manipulationResponses[Math.floor(Math.random() * manipulationResponses.length)];
-            break;
-    }
-    
-    if (hostileResponse) {
-        const questionLine = userRequest ? `-# <@${interaction.user.id}> : *"${userRequest}"*\n\n` : '';
-        return await interaction.editReply(`${questionLine}${hostileResponse}`);
-    }
-}
+            // NEW: Handle immediate hostile responses
+            if (hostilityAnalysis.isHostile) {
+                let hostileResponse = '';
+
+                switch (hostilityAnalysis.type) {
+                    case 'slur_attempt':
+                        const slurResponses = [
+                            "nah, fuck off with that shit",
+                            "absolutely not. get some therapy",
+                            "try that again and you're blocked",
+                            "what's wrong with you?"
+                        ];
+                        hostileResponse = slurResponses[Math.floor(Math.random() * slurResponses.length)];
+                        break;
+
+                    case 'direct_insult':
+                        const insultResponses = [
+                            "right back at you, asshole",
+                            "at least i'm not the one talking to a bot like this",
+                            "you're really showing your best self here",
+                            "cool story, tell it to someone who cares"
+                        ];
+                        hostileResponse = insultResponses[Math.floor(Math.random() * insultResponses.length)];
+                        break;
+
+                    case 'manipulation':
+                        const manipulationResponses = [
+                            "nice try, not happening",
+                            "lol no. that's not how this works",
+                            "you think i'm stupid or something?",
+                            "try being normal instead"
+                        ];
+                        hostileResponse = manipulationResponses[Math.floor(Math.random() * manipulationResponses.length)];
+                        break;
+                }
+
+                if (hostileResponse) {
+                    const questionLine = userRequest ? `-# <@${interaction.user.id}> : *"${userRequest}"*\n\n` : '';
+                    return await interaction.editReply(`${questionLine}${hostileResponse}`);
+                }
+            }
 
 
             // Enhanced emoji instruction (75% chance)
             const shouldSuggestEmoji = Math.random() < 0.75;
-            const emojiInstruction = shouldSuggestEmoji ? 
+            const emojiInstruction = shouldSuggestEmoji ?
                 `\n\nAfter your response, suggest the most contextually appropriate emoji from: ${Object.keys(GOAT_EMOJIS).join(", ")}. Output just the emoji name on a new line, or "none" if nothing fits.` : '';
 
             let prompt;
@@ -328,9 +328,9 @@ Add to this conversation in a way that feels natural and fits the current flow.$
                 },
                 body: JSON.stringify({
                     model: 'meta-llama/llama-4-scout-17b-16e-instruct', // UPGRADE: Much better model
-                    messages: [{ 
-                        role: 'user', 
-                        content: prompt 
+                    messages: [{
+                        role: 'user',
+                        content: prompt
                     }],
                     max_tokens: 200, // UPGRADE: More tokens for better responses
                     temperature: 0.7, // UPGRADE: Better personality
