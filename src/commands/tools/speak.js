@@ -159,7 +159,8 @@ module.exports = {
             // Enhanced persona with better social intelligence
             // Build attitude-aware persona
             let attitudeModifier = '';
-
+            // Get the user request FIRST
+            const userRequest = interaction.options.getString('request');
 
             // NEW: Always update user preferences first to ensure user record exists
             await updateUserPreferences(userId, interaction);
@@ -267,7 +268,7 @@ MEMORY & CONTEXT AWARENESS:
                     relevantMemories.map(mem => `- ${mem.summary} (${mem.timeAgo})`).join('\n');
             }
 
-            const userRequest = interaction.options.getString('request');
+
 
             // NEW: Handle immediate hostile responses (keep the old system for extreme cases)
             const hostilityAnalysis = analyzeHostileBehavior(userRequest);
