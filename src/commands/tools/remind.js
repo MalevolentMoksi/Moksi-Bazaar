@@ -65,7 +65,9 @@ async function sendReminderMessage(client, reminder) {
   const userMention = `<@${reminder.user_id}>`;
   const prefix = `${userMention}, the Goat apprises you.`; // your custom phrasing
   const suffix = reminder.reason ? ` ${reminder.reason}` : '';
-  await channel.send(`${prefix}${suffix}`);
+  const epoch = Math.floor(Number(reminder.due_at_utc_ms) / 1000);
+  await channel.send(`${prefix}${suffix} (scheduled for <t:${epoch}:F>)`);
+
 }
 
 // ---------- scheduler ----------
@@ -116,7 +118,7 @@ async function scheduleNext(client) {
     console.error('scheduleNext failed:', e);
     schedulerBusy = false;
     // retry later
-    setTimeout(() => scheduleNext(client).catch(() => {}), 10_000);
+    setTimeout(() => scheduleNext(client).catch(() => { }), 10_000);
   }
 }
 
@@ -305,8 +307,10 @@ module.exports = {
         schedulerBusy = false;
         await scheduleNext(interaction.client);
 
-        const utcStr = new Date(dueAt).toUTCString();
-        return interaction.editReply(`Understood. The Goat will forewarn you\n-# At ${utcStr}`);
+        const epoch = Math.floor(dueAt / 1000);
+        await interaction.editReply(
+          `Understood. The Goat will forewarn you\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
+        )
       }
 
       if (sub === 'at') {
@@ -338,8 +342,10 @@ module.exports = {
         schedulerBusy = false;
         await scheduleNext(interaction.client);
 
-        const utcStr = new Date(dueAt).toUTCString();
-        return interaction.editReply(`Understood. The Goat will forewarn you\n-# At ${utcStr}`);
+        const epoch = Math.floor(dueAt / 1000);
+        await interaction.editReply(
+          `Understood. The Goat will forewarn you\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
+        )
       }
 
       return interaction.editReply('Unknown subcommand.');
@@ -347,7 +353,7 @@ module.exports = {
       console.error('remind command error:', err);
       try {
         await interaction.editReply('There was an error setting your reminder.');
-      } catch {}
+      } catch { }
     }
   },
 };
