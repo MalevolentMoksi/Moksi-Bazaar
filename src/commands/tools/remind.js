@@ -1,5 +1,6 @@
 // src/commands/tools/remind.js
-const { SlashCommandBuilder } = require('discord.js');
+
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { pool } = require('../../utils/db');
 const { randomUUID } = require('crypto');
 
@@ -33,7 +34,6 @@ async function fetchNextReminder() {
   return rows[0] || null;
 }
 
-// Fix #1: Return single row, not array
 async function refetchReminderById(id) {
   const { rows } = await pool.query(
     `SELECT id, user_id, channel_id, due_at_utc_ms, reason
@@ -49,6 +49,17 @@ async function deleteReminder(id) {
   await pool.query(`DELETE FROM reminders WHERE id = $1`, [id]);
 }
 
+// NEW: Get user's reminders
+async function getUserReminders(userId) {
+  const { rows } = await pool.query(`
+    SELECT id, channel_id, due_at_utc_ms, reason, created_at_utc_ms
+    FROM reminders
+    WHERE user_id = $1
+    ORDER BY due_at_utc_ms ASC
+  `, [userId]);
+  return rows;
+}
+
 async function insertReminder(userId, channelId, dueAtMs, reason) {
   const id = randomUUID();
   const created = Date.now();
@@ -61,7 +72,6 @@ async function insertReminder(userId, channelId, dueAtMs, reason) {
 }
 
 // ---------- messaging ----------
-// Fix #2: Complete reminder message with timestamp  
 async function sendReminderMessage(client, reminder) {
   const channel = await client.channels.fetch(reminder.channel_id).catch(() => null);
   if (!channel) return;
@@ -119,7 +129,7 @@ async function scheduleNext(client) {
     console.error('scheduleNext failed:', e);
     schedulerScheduling = false;
     // Retry later
-    setTimeout(() => scheduleNext(client).catch(() => { }), 10_000);
+    setTimeout(() => scheduleNext(client).catch(() => {}), 10_000);
   }
 }
 
@@ -130,14 +140,69 @@ async function initScheduler(client) {
   await scheduleNext(clientRef);
 }
 
-// ---------- parsing ----------
+// ---------- UI helpers ----------
+async function createRemindersEmbed(userId, client) {
+  const reminders = await getUserReminders(userId);
+  
+  if (reminders.length === 0) {
+    return {
+      embed: new EmbedBuilder()
+        .setTitle('📅 Your Reminders')
+        .setDescription('You have no active reminders.')
+        .setColor(0x888888)
+        .setTimestamp(),
+      components: []
+    };
+  }
 
-/**
- * Relative parser that supports:
- * - Explicit tokens: 1d, 2h, 45m, 30s, combos like 1h30m, 2d4h20m5s
- * - Inferred trailing token: "1h30" -> 1h 30m, "5m20" -> 5m 20s, "2d4" -> 2d 4h
- * Returns milliseconds or null.
- */
+  const embed = new EmbedBuilder()
+    .setTitle('📅 Your Reminders')
+    .setColor(0x5865F2)
+    .setTimestamp()
+    .setFooter({ text: 'Click a button to delete a reminder' });
+
+  const fields = [];
+  const buttons = [];
+  
+  for (let i = 0; i < Math.min(reminders.length, 10); i++) { // Limit to 10 for button limits
+    const reminder = reminders[i];
+    const epoch = Math.floor(Number(reminder.due_at_utc_ms) / 1000);
+    const channel = await client.channels.fetch(reminder.channel_id).catch(() => null);
+    const channelName = channel ? `#${channel.name}` : 'Unknown Channel';
+    
+    const reasonText = reminder.reason ? ` - "${reminder.reason}"` : '';
+    const fieldValue = `**Due:** <t:${epoch}:F> (<t:${epoch}:R>)\n**Channel:** ${channelName}${reasonText}`;
+    
+    fields.push({
+      name: `Reminder ${i + 1}`,
+      value: fieldValue,
+      inline: false
+    });
+
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`delete_reminder_${reminder.id}`)
+        .setLabel(`Delete #${i + 1}`)
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🗑️')
+    );
+  }
+
+  embed.addFields(fields);
+
+  // Split buttons into rows of 5 (Discord limit)
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
+  }
+
+  return {
+    embed,
+    components: rows
+  };
+}
+
+// ---------- parsing ----------
 function parseRelative(spec) {
   if (typeof spec !== 'string') return null;
   const cleaned = spec.toLowerCase().replace(/\s+/g, '');
@@ -174,9 +239,6 @@ function parseRelative(spec) {
   return total > 0 ? total : null;
 }
 
-/**
- * Parse absolute wall time in a given IANA timezone to UTC ms.
- */
 function parseAbsoluteToUTCms(dateStr, timeStr, tz) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
   if (!/^\d{2}:\d{2}$/.test(timeStr)) return null;
@@ -267,6 +329,11 @@ module.exports = {
             .setDescription('Optional reason to include in the reminder')
             .setRequired(false)
         )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName('list')
+        .setDescription('View and manage your active reminders')
     ),
 
   async execute(interaction) {
@@ -332,12 +399,81 @@ module.exports = {
         );
       }
 
+      if (sub === 'list') {
+        const { embed, components } = await createRemindersEmbed(interaction.user.id, interaction.client);
+        
+        const reply = await interaction.editReply({
+          embeds: [embed],
+          components: components
+        });
+
+        if (components.length > 0) {
+          // Create collector for button interactions
+          const collector = reply.createMessageComponentCollector({
+            filter: i => i.user.id === interaction.user.id,
+            time: 300_000 // 5 minutes
+          });
+
+          collector.on('collect', async buttonInteraction => {
+            if (buttonInteraction.customId.startsWith('delete_reminder_')) {
+              const reminderId = buttonInteraction.customId.replace('delete_reminder_', '');
+              
+              try {
+                await deleteReminder(reminderId);
+                await scheduleNext(interaction.client); // Reschedule after deletion
+                
+                // Update the embed
+                const { embed: newEmbed, components: newComponents } = await createRemindersEmbed(interaction.user.id, interaction.client);
+                
+                await buttonInteraction.update({
+                  embeds: [newEmbed],
+                  components: newComponents
+                });
+              } catch (error) {
+                console.error('Error deleting reminder:', error);
+                await buttonInteraction.reply({
+                  content: 'Failed to delete reminder. It may have already been removed.',
+                  ephemeral: true
+                });
+              }
+            }
+          });
+
+          collector.on('end', async () => {
+            // Disable all buttons when collector expires
+            const disabledComponents = components.map(row => {
+              const newRow = new ActionRowBuilder();
+              row.components.forEach(button => {
+                newRow.addComponents(
+                  ButtonBuilder.from(button).setDisabled(true)
+                );
+              });
+              return newRow;
+            });
+
+            try {
+              await interaction.editReply({
+                embeds: [embed],
+                components: disabledComponents
+              });
+            } catch (error) {
+              // Interaction might be deleted, ignore error
+            }
+          });
+        }
+
+        return;
+      }
+
       // Unknown subcommand (should never hit if the command is registered correctly)
       return interaction.editReply('Unknown subcommand.');
     } catch (err) {
       console.error('remind command error:', err);
-      try { return interaction.editReply('There was an error setting your reminder.'); }
-      catch { }
+      try { return interaction.editReply('There was an error processing your reminder command.'); }
+      catch {}
     }
   },
+
+  // Export scheduler starter for bot ready event
+  startReminderScheduler: initScheduler
 };
