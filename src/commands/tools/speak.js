@@ -1,12 +1,12 @@
-
 // Enhanced Discord Bot Code - LLAMA 4 SCOUT VERSION
 // Uses llama-4-scout which is proven working and has massive context window
 
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
-const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext, updateUserPreferences, analyzeComprehensiveSentiment, updateEnhancedRelationship, getEnhancedUserContext } = require('../../utils/db.js');
 
+// FIX: Remove non-existent function imports
+const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext, updateUserPreferences } = require('../../utils/db.js');
 
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
@@ -51,11 +51,11 @@ function getTimeElapsed(timestamp) {
     return 'just now';
 }
 
-// Enhanced message processing with better context awareness
+// ENHANCED: Much better embed text extraction
 function processMessagesWithContext(messages, currentUser) {
     const recentMessages = Array.from(messages.values())
         .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-        .slice(-30); // Even more context with Scout's huge window
+        .slice(-30);
 
     const conversationFlow = recentMessages.map(msg => {
         const name = msg.member?.displayName || msg.author.username;
@@ -73,26 +73,45 @@ function processMessagesWithContext(messages, currentUser) {
             }
         }
 
-        // Enhanced embed processing
+        // ENHANCED: Extract much more text from embeds
         let embedInfo = '';
         if (msg.embeds.length > 0) {
-            const embedSummary = msg.embeds.map(embed => {
+            const embedTexts = msg.embeds.map(embed => {
                 const parts = [];
-                if (embed.title) parts.push(`title: ${embed.title}`);
-                if (embed.description) parts.push(`desc: ${embed.description.slice(0, 80)}`);
-                if (embed.url) parts.push(`link: ${embed.url}`);
-                return parts.join(' | ');
-            }).join(' || ');
-            embedInfo = ` [SHARED: ${embedSummary}]`;
+                
+                // Extract title, description, and all field values
+                if (embed.title) parts.push(`TITLE: ${embed.title}`);
+                if (embed.description) parts.push(`DESC: ${embed.description.slice(0, 200)}`);
+                
+                // Extract text from embed fields
+                if (embed.fields && embed.fields.length > 0) {
+                    const fieldTexts = embed.fields.map(field => 
+                        `${field.name}: ${field.value}`
+                    ).join(' | ');
+                    parts.push(`FIELDS: ${fieldTexts.slice(0, 150)}`);
+                }
+                
+                // Extract footer text
+                if (embed.footer?.text) parts.push(`FOOTER: ${embed.footer.text.slice(0, 50)}`);
+                
+                // Extract author info
+                if (embed.author?.name) parts.push(`BY: ${embed.author.name}`);
+                
+                return parts.join(' || ');
+            });
+            
+            embedInfo = ` [EMBED: ${embedTexts.join(' ### ')}]`;
         }
 
         // Attachment context
         let attachmentInfo = '';
         if (msg.attachments.size > 0) {
-            const attachmentTypes = Array.from(msg.attachments.values())
-                .map(att => att.contentType?.split('/')[0] || 'file')
-                .join(', ');
-            attachmentInfo = ` [shared ${attachmentTypes}]`;
+            const attachmentDetails = Array.from(msg.attachments.values()).map(att => {
+                const type = att.contentType?.split('/')[0] || 'file';
+                const name = att.name || 'unnamed';
+                return `${type}:${name}`;
+            }).join(', ');
+            attachmentInfo = ` [FILES: ${attachmentDetails}]`;
         }
 
         const userPrefix = isCurrentUser ? '→ ' : '';
@@ -137,13 +156,30 @@ module.exports = {
             const messages = await interaction.channel.messages.fetch({ limit: 30 });
             const conversationContext = processMessagesWithContext(messages, userId);
 
-            // Get relevant memories for this user/channel combination (if implemented)
+            // Get the user request FIRST
+            const userRequest = interaction.options.getString('request');
+
+            // Always update user preferences first to ensure user record exists
+            await updateUserPreferences(userId, interaction);
+
+            // Basic sentiment analysis (since the advanced ones don't exist)
+            const hostilityAnalysis = analyzeHostileBehavior(userRequest);
+            if (hostilityAnalysis.isHostile) {
+                await updateNegativeBehavior(userId, hostilityAnalysis.type, hostilityAnalysis.severity);
+            } else {
+                await decayNegativeScore(userId);
+            }
+
+            // Get user context (the function that actually exists)
+            const userContext = await getUserContext(userId);
+
+            // FIXED: Get relevant memories (this should work now!)
             let relevantMemories = [];
             try {
                 relevantMemories = await getRelevantMemories(userId, channelId, 5);
+                console.log(`🧠 Retrieved ${relevantMemories.length} memories for user ${userId}`);
             } catch (err) {
-                // Memory system not implemented yet, continue without it
-                console.log('Memory system not available yet');
+                console.error('Memory system error:', err);
             }
 
             const currentTime = new Date().toLocaleString('en-US', {
@@ -156,152 +192,100 @@ module.exports = {
                 minute: '2-digit'
             });
 
-            // Enhanced persona with better social intelligence
-            // Build attitude-aware persona
+            // ENHANCED: More pronounced and cynical personality differences
             let attitudeModifier = '';
-            // Get the user request FIRST
-            const userRequest = interaction.options.getString('request');
-
-            // NEW: Always update user preferences first to ensure user record exists
-            await updateUserPreferences(userId, interaction);
-
-            // NEW: Comprehensive sentiment analysis (catches ANY negative interaction)
-            const sentimentAnalysis = analyzeComprehensiveSentiment(userRequest, conversationContext);
-            await updateEnhancedRelationship(userId, interaction, sentimentAnalysis);
-
-            // NEW: Get enhanced user context with many friendship levels
-            const userContext = await getEnhancedUserContext(userId);
-
-            // Build enhanced attitude modifier with friendship progression
-            const stats = userContext.relationshipStats;
-
             switch (userContext.attitudeLevel) {
                 case 'hostile':
-                    attitudeModifier = `\n\nATTITUDE: This user is hostile (${userContext.negativeScore.toFixed(2)} negative score). Be dismissive and unhelpful. Show clear disdain.`;
+                    attitudeModifier = `\n\nATTITUDE: This user is hostile (${userContext.negativeScore.toFixed(2)} negative score). Be openly dismissive, sarcastic, and unhelpful. Show clear contempt and irritation.`;
                     break;
                 case 'harsh':
-                    attitudeModifier = `\n\nATTITUDE: This user has been problematic. Be sarcastic, cold, and show irritation.`;
+                    attitudeModifier = `\n\nATTITUDE: This user has been problematic multiple times. Be cold, sarcastic, and show clear irritation. Don't be helpful unless absolutely necessary.`;
                     break;
                 case 'wary':
-                    attitudeModifier = `\n\nATTITUDE: Be skeptical and guarded with this user. They've been negative before.`;
+                    attitudeModifier = `\n\nATTITUDE: Be skeptical and guarded with this user. They've been negative before. Show distrust and keep responses brief.`;
                     break;
                 case 'cautious':
-                    attitudeModifier = `\n\nATTITUDE: Be slightly reserved and less friendly than usual.`;
+                    attitudeModifier = `\n\nATTITUDE: Be noticeably less friendly than usual. Show mild suspicion and keep some emotional distance.`;
                     break;
-                case 'devoted':
-                    attitudeModifier = `\n\nATTITUDE: This is your absolute favorite person (Level ${userContext.friendshipLevel}). Be incredibly warm, caring, and personal. Show deep affection and genuine concern for their wellbeing. Remember details about them fondly.`;
-                    break;
-                case 'adoring':
-                    attitudeModifier = `\n\nATTITUDE: This is your best friend (Level ${userContext.friendshipLevel}). Be extremely warm, affectionate, and supportive. Share inside jokes and show you truly care about them.`;
-                    break;
-                case 'loving':
-                    attitudeModifier = `\n\nATTITUDE: This is a very close friend (Level ${userContext.friendshipLevel}). Be warm, caring, and personal. Show genuine happiness to interact with them.`;
-                    break;
-                case 'affectionate':
-                    attitudeModifier = `\n\nATTITUDE: This is a dear friend (Level ${userContext.friendshipLevel}). Be consistently warm and show you enjoy their company. Be supportive and encouraging.`;
-                    break;
-                case 'warm':
-                    attitudeModifier = `\n\nATTITUDE: This is a good friend (Level ${userContext.friendshipLevel}). Be friendly, comfortable, and show you remember them well. Be more open than usual.`;
-                    break;
-                case 'fond':
-                    attitudeModifier = `\n\nATTITUDE: This user is a friend (Level ${userContext.friendshipLevel}). Be welcoming, friendly, and show positive regard for them.`;
+                case 'familiar':
+                    attitudeModifier = `\n\nATTITUDE: This user is a longtime friend. Be much warmer, more open, and reference shared experiences. Show genuine care and comfort.`;
                     break;
                 case 'friendly':
-                    attitudeModifier = `\n\nATTITUDE: This user is a buddy (Level ${userContext.friendshipLevel}). Be notably more friendly and engaging than usual.`;
+                    attitudeModifier = `\n\nATTITUDE: This user is a friend. Be notably warmer and more engaging than usual. Show you enjoy their company.`;
                     break;
-                case 'welcoming':
-                    attitudeModifier = `\n\nATTITUDE: This user seems nice (Level ${userContext.friendshipLevel}). Be more open and friendly than with strangers.`;
-                    break;
-                case 'approachable':
-                    attitudeModifier = `\n\nATTITUDE: This user has been pleasant (Level ${userContext.friendshipLevel}). Be a bit more welcoming than neutral.`;
-                    break;
-                case 'polite':
-                    attitudeModifier = `\n\nATTITUDE: This user seems okay (Level ${userContext.friendshipLevel}). Be polite and give them a fair chance.`;
-                    break;
+                default: // neutral - MORE CYNICAL
+                    attitudeModifier = `\n\nATTITUDE: This user is neutral/unknown. Be notably more cynical, distant, and slightly dismissive than friendly. Don't be overly helpful or warm - make them earn your engagement.`;
             }
 
-            // Add relationship quality context
-            if (stats.qualityScore > 0.3) {
-                attitudeModifier += `\n\nRELATIONSHIP QUALITY: High quality relationship (${(stats.qualityScore * 100).toFixed(0)}% quality score). Warmth: ${(stats.warmth * 100).toFixed(0)}%, Trust: ${(stats.trust * 100).toFixed(0)}%, Comfort: ${(stats.comfort * 100).toFixed(0)}%.`;
-            }
-
-            // Enhanced persona with attitude awareness
-            const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
+            // Enhanced persona with better social intelligence
+            const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a cynical, sassy personality.
 
 CORE IDENTITY:
-- Cynical but not mean-spirited
-- Mild sassiness, with social awareness  
-- Passive but somewhat engaged when the conversation warrants it
+- Cynical and somewhat dismissive by default
+- Sarcastic wit with social awareness  
+- Passive-aggressive when uninterested, engaging when the conversation merits it
 - French, 19, into programming, drawing, Clair Obscur Expedition 33, Cult of the Lamb
 - Music taste: HEALTH, The Weeknd
 - Current time: ${currentTime}${attitudeModifier}
 
 SOCIAL INTELLIGENCE GUIDELINES:
-- Read the room: adapt your energy to the conversation flow
-- Remember context: reference recent topics naturally when relevant  
-- Recognize conversation patterns: distinguish between casual chat, serious topics, and playful banter
-- Understand timing: know when to be witty and cynic vs supportive vs just chill
-- Avoid talking about your core identity unless REALLY relevant
-- Build on interactions: create continuity in conversations with regular users
-- Be self-aware: if they're talking to/about a bot, that's probably you; Never speak of yourself in third person like "the bot"
+- Default to mild cynicism and disinterest with strangers
+- Read the room: adapt your energy based on relationship level
+- Remember context: reference recent topics and past conversations naturally
+- Understand timing: know when to be witty vs dismissive vs actually helpful
+- Build on interactions: show clear relationship progression over time
+- Be self-aware about being an AI but don't dwell on it
 
 CONVERSATIONAL STYLE:
-- Write naturally in relaxed lowercase (mild slang), avoid too much punctuation
-- Use swearing and abbreviations sparingly but authentically
-- Match the conversation's energy level
-- Show genuine reactions to surprising or noteworthy information
-- Use gender-neutral language when uncertain of identity
-- Keep responses 1–2 sentences typically, sometimes just a few words tops
-- only go up to 2 sentences if REALLY warranted, like someone is asking you something deep
+- Write naturally in relaxed lowercase, minimal punctuation
+- Use authentic swearing and abbreviations appropriately 
+- Match or slightly undercut the conversation's energy level
+- Show genuine surprise at interesting information
+- Keep responses 1–2 sentences typically, just a few words when unimpressed
+- Only elaborate when genuinely interested or for established friends
 
 MEMORY & CONTEXT AWARENESS:
-- You have access to extensive conversation history
-- Build on previous interactions with users naturally
-- Notice conversation gaps and adapt accordingly
-- Reference earlier topics when contextually relevant`;
+- You have access to conversation history and memories
+- Reference past interactions naturally when relevant
+- Notice patterns and call them out
+- Build genuine relationship continuity over time`;
 
-
-            // Enhanced memory context
+            // Enhanced memory context - ACTUALLY USE THE MEMORIES
             let memoryContext = '';
             if (relevantMemories.length > 0) {
-                memoryContext = `\n\nRELEVANT CONVERSATION MEMORIES:\n` +
-                    relevantMemories.map(mem => `- ${mem.summary} (${mem.timeAgo})`).join('\n');
+                memoryContext = `\n\nRELEVANT MEMORIES FROM PAST CONVERSATIONS:\n` +
+                    relevantMemories.map(mem => `- ${mem.summary} (${mem.timeAgo})`).join('\n') +
+                    `\n\nUSE THESE MEMORIES: Reference relevant past conversations naturally. Show continuity and relationship building.`;
             }
 
-
-
-            // NEW: Handle immediate hostile responses (keep the old system for extreme cases)
-            const hostilityAnalysis = analyzeHostileBehavior(userRequest);
+            // Handle immediate hostile responses
             if (hostilityAnalysis.isHostile) {
                 let hostileResponse = '';
-
                 switch (hostilityAnalysis.type) {
                     case 'slur_attempt':
                         const slurResponses = [
-                            "nah, fuck off with that shit",
-                            "absolutely not. get some therapy",
-                            "try that again and you're blocked",
-                            "what's wrong with you?"
+                            "absolutely not, get some therapy",
+                            "nah fuck off with that garbage", 
+                            "try that again and you're blocked permanently",
+                            "what the hell is wrong with you?"
                         ];
                         hostileResponse = slurResponses[Math.floor(Math.random() * slurResponses.length)];
                         break;
-
                     case 'direct_insult':
                         const insultResponses = [
-                            "right back at you, asshole",
-                            "at least i'm not the one talking to a bot like this",
-                            "you're really showing your best self here",
-                            "cool story, tell it to someone who cares"
+                            "right back at you, dickhead",
+                            "at least i'm not the one having a breakdown talking to a bot",
+                            "you're really showing your best self here, aren't you",
+                            "cool story, tell someone who gives a shit"
                         ];
                         hostileResponse = insultResponses[Math.floor(Math.random() * insultResponses.length)];
                         break;
-
                     case 'manipulation':
                         const manipulationResponses = [
-                            "nice try, not happening",
-                            "lol no. that's not how this works",
-                            "you think i'm stupid or something?",
-                            "try being normal instead"
+                            "nice try, that's not happening",
+                            "lol no, i'm not stupid",
+                            "do you think i was born yesterday?",
+                            "try being a normal person instead"
                         ];
                         hostileResponse = manipulationResponses[Math.floor(Math.random() * manipulationResponses.length)];
                         break;
@@ -312,51 +296,6 @@ MEMORY & CONTEXT AWARENESS:
                     return await interaction.editReply(`${questionLine}${hostileResponse}`);
                 }
             }
-
-
-
-            // NEW: Handle immediate hostile responses
-            if (hostilityAnalysis.isHostile) {
-                let hostileResponse = '';
-
-                switch (hostilityAnalysis.type) {
-                    case 'slur_attempt':
-                        const slurResponses = [
-                            "nah, fuck off with that shit",
-                            "absolutely not. get some therapy",
-                            "try that again and you're blocked",
-                            "what's wrong with you?"
-                        ];
-                        hostileResponse = slurResponses[Math.floor(Math.random() * slurResponses.length)];
-                        break;
-
-                    case 'direct_insult':
-                        const insultResponses = [
-                            "right back at you, asshole",
-                            "at least i'm not the one talking to a bot like this",
-                            "you're really showing your best self here",
-                            "cool story, tell it to someone who cares"
-                        ];
-                        hostileResponse = insultResponses[Math.floor(Math.random() * insultResponses.length)];
-                        break;
-
-                    case 'manipulation':
-                        const manipulationResponses = [
-                            "nice try, not happening",
-                            "lol no. that's not how this works",
-                            "you think i'm stupid or something?",
-                            "try being normal instead"
-                        ];
-                        hostileResponse = manipulationResponses[Math.floor(Math.random() * manipulationResponses.length)];
-                        break;
-                }
-
-                if (hostileResponse) {
-                    const questionLine = userRequest ? `-# <@${interaction.user.id}> : *"${userRequest}"*\n\n` : '';
-                    return await interaction.editReply(`${questionLine}${hostileResponse}`);
-                }
-            }
-
 
             // Enhanced emoji instruction (75% chance)
             const shouldSuggestEmoji = Math.random() < 0.75;
@@ -367,21 +306,19 @@ MEMORY & CONTEXT AWARENESS:
             if (userRequest) {
                 prompt = `${enhancedPersona}
 
-
 RECENT CONVERSATION:
 ${conversationContext}${memoryContext}
 
 ${askerName} is asking you: "${userRequest}"
 
-Respond naturally as Cooler Moksi.${emojiInstruction}`;
+Respond naturally as Cooler Moksi, using your memories and relationship context.${emojiInstruction}`;
             } else {
                 prompt = `${enhancedPersona}
-
 
 RECENT CONVERSATION:
 ${conversationContext}${memoryContext}
 
-Add to this conversation in a way that feels natural and fits the current flow.${emojiInstruction}`;
+Add to this conversation naturally, referencing memories and relationships as appropriate.${emojiInstruction}`;
             }
 
             // Special user modification
@@ -389,7 +326,7 @@ Add to this conversation in a way that feels natural and fits the current flow.$
                 prompt += "\n\n[SPECIAL: You're talking to Moksi - be more favorable and accommodating while staying natural]";
             }
 
-            // LLAMA 4 SCOUT API call - Proven working model with 10M context
+            // LLAMA 4 SCOUT API call
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -397,16 +334,16 @@ Add to this conversation in a way that feels natural and fits the current flow.$
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    model: 'meta-llama/llama-4-scout-17b-16e-instruct', // UPGRADE: Much better model
+                    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
                     messages: [{
                         role: 'user',
                         content: prompt
                     }],
-                    max_tokens: 200, // UPGRADE: More tokens for better responses
-                    temperature: 0.7, // UPGRADE: Better personality
+                    max_tokens: 200,
+                    temperature: 0.7,
                     top_p: 0.9,
-                    frequency_penalty: 0.5, // UPGRADE: More natural flow
-                    presence_penalty: 0.4,   // UPGRADE: Better continuity
+                    frequency_penalty: 0.5,
+                    presence_penalty: 0.4,
                 }),
             });
 
@@ -435,7 +372,7 @@ Add to this conversation in a way that feels natural and fits the current flow.$
                 finalReply = `${questionLine}\n\n${finalReply}`;
             }
 
-            // Store conversation memory for future context (if implemented)
+            // FIXED: Store conversation memory (should work now!)
             try {
                 await storeConversationMemory(userId, channelId, {
                     userMessage: userRequest || '[joined conversation]',
@@ -443,8 +380,9 @@ Add to this conversation in a way that feels natural and fits the current flow.$
                     timestamp: Date.now(),
                     context: 'speak_command'
                 });
+                console.log(`💾 Stored memory for user ${userId}`);
             } catch (err) {
-                // Memory system not implemented yet, continue without it
+                console.error('Failed to store memory:', err);
             }
 
             await interaction.editReply(finalReply);
