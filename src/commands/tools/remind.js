@@ -1,14 +1,13 @@
 // src/commands/tools/remind.js
-
 const { SlashCommandBuilder } = require('discord.js');
 const { pool } = require('../../utils/db');
 const { randomUUID } = require('crypto');
 
 let schedulerTimer = null;
-let schedulerBusy = false; // prevents overlapping schedules
+let schedulerScheduling = false; // prevents overlapping scheduleNext calls
 let clientRef = null;
 
-// ---------- DB: ensure table ----------
+// ---------- DB bootstrap ----------
 async function ensureTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reminders (
@@ -23,7 +22,7 @@ async function ensureTable() {
   await pool.query(`CREATE INDEX IF NOT EXISTS reminders_due_idx ON reminders (due_at_utc_ms)`);
 }
 
-// ---------- DB: helpers ----------
+// ---------- DB helpers ----------
 async function fetchNextReminder() {
   const { rows } = await pool.query(`
     SELECT id, user_id, channel_id, due_at_utc_ms, reason
@@ -37,10 +36,12 @@ async function fetchNextReminder() {
 async function refetchReminderById(id) {
   const { rows } = await pool.query(
     `SELECT id, user_id, channel_id, due_at_utc_ms, reason
-     FROM reminders WHERE id = $1 LIMIT 1`,
+     FROM reminders
+     WHERE id = $1
+     LIMIT 1`,
     [id]
   );
-  return rows || null;
+  return rows || null; // IMPORTANT: return single row, not the array
 }
 
 async function deleteReminder(id) {
@@ -63,62 +64,60 @@ async function sendReminderMessage(client, reminder) {
   const channel = await client.channels.fetch(reminder.channel_id).catch(() => null);
   if (!channel) return;
   const userMention = `<@${reminder.user_id}>`;
-  const prefix = `${userMention}, the Goat apprises you.`; // your custom phrasing
   const suffix = reminder.reason ? ` ${reminder.reason}` : '';
   const epoch = Math.floor(Number(reminder.due_at_utc_ms) / 1000);
-  await channel.send(`${prefix}${suffix} (scheduled for <t:${epoch}:F>)`);
-
+  await channel.send(`${userMention}, the Goat apprises you.${suffix} (scheduled for <t:${epoch}:F>)`);
 }
 
-// ---------- scheduler ----------
+// ---------- scheduler (single timer) ----------
 async function scheduleNext(client) {
-  // prevent overlapping schedules
-  if (schedulerBusy) return;
-  schedulerBusy = true;
+  if (schedulerScheduling) return;
+  schedulerScheduling = true;
 
   try {
     const next = await fetchNextReminder();
 
-    // no reminders -> clear any existing timer
+    // No work -> clear any existing timer
     if (!next) {
       if (schedulerTimer) {
         clearTimeout(schedulerTimer);
         schedulerTimer = null;
       }
-      schedulerBusy = false;
+      schedulerScheduling = false;
       return;
     }
 
-    // clear previous timer (single timer policy)
+    // Always reset to a single timer
     if (schedulerTimer) {
       clearTimeout(schedulerTimer);
       schedulerTimer = null;
     }
 
-    const now = Date.now();
-    const delay = Math.max(0, Number(next.due_at_utc_ms) - now);
+    const delay = Math.max(0, Number(next.due_at_utc_ms) - Date.now());
 
     schedulerTimer = setTimeout(async () => {
       try {
-        // double-fire guard: re-check row right before sending
+        // Double-fire guard: re-check row is still there and due
         const again = await refetchReminderById(next.id);
         if (again && Number(again.due_at_utc_ms) <= Date.now()) {
           await sendReminderMessage(client, again);
           await deleteReminder(again.id);
         }
-      } catch (e) {
-        console.error('Error during reminder dispatch:', e);
+      } catch (err) {
+        console.error('Error during reminder dispatch:', err);
       } finally {
-        schedulerBusy = false;
-        // schedule the next one
-        scheduleNext(client).catch(err => console.error('scheduleNext follow-up error:', err));
+        schedulerScheduling = false;
+        // Immediately schedule the next one
+        scheduleNext(client).catch(e => console.error('scheduleNext follow-up error:', e));
       }
     }, delay);
+
+    schedulerScheduling = false;
   } catch (e) {
     console.error('scheduleNext failed:', e);
-    schedulerBusy = false;
-    // retry later
-    setTimeout(() => scheduleNext(client).catch(() => { }), 10_000);
+    schedulerScheduling = false;
+    // Retry later
+    setTimeout(() => scheduleNext(client).catch(() => {}), 10_000);
   }
 }
 
@@ -129,29 +128,25 @@ async function initScheduler(client) {
   await scheduleNext(clientRef);
 }
 
-// ---------- parsing helpers ----------
+// ---------- parsing ----------
 
 /**
  * Relative parser that supports:
- *  - Explicit tokens: 1d, 2h, 45m, 30s, combos like 1h30m, 2d4h20m5s
- *  - Inferred trailing token: "1h30" -> 1h 30m, "5m20" -> 5m 20s, "2d4" -> 2d 4h
- *  - Spaces are allowed anywhere
- * Rejects ambiguous/invalid specs, returns ms or null.
+ * - Explicit tokens: 1d, 2h, 45m, 30s, combos like 1h30m, 2d4h20m5s
+ * - Inferred trailing token: "1h30" -> 1h 30m, "5m20" -> 5m 20s, "2d4" -> 2d 4h
+ * Returns milliseconds or null.
  */
 function parseRelative(spec) {
   if (typeof spec !== 'string') return null;
   const cleaned = spec.toLowerCase().replace(/\s+/g, '');
 
   // Tokenize numbers with optional unit
-  // e.g., "1h30m" => ["1h", "30m"], "1h30" => ["1h", "30"]
   const re = /(\d+)([dhms]?)/g;
   const tokens = [];
   let match;
   while ((match = re.exec(cleaned)) !== null) {
-    if (match[0] === '') break;
     tokens.push({ value: parseInt(match[1], 10), unit: match[2] || '' });
   }
-
   if (tokens.length === 0) return null;
 
   const unitMs = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000 };
@@ -162,15 +157,11 @@ function parseRelative(spec) {
     let { value, unit } = tokens[i];
 
     if (!unit) {
-      // infer missing unit from the previous explicit unit
-      // d -> h, h -> m, m -> s
+      // infer missing unit from previous explicit unit
       if (prevUnit === 'd') unit = 'h';
       else if (prevUnit === 'h') unit = 'm';
       else if (prevUnit === 'm') unit = 's';
-      else {
-        // first token without unit or prev was 's' -> ambiguous
-        return null;
-      }
+      else return null; // first token w/o unit is ambiguous
     }
 
     if (!unitMs[unit]) return null;
@@ -183,7 +174,6 @@ function parseRelative(spec) {
 
 /**
  * Parse absolute wall time in a given IANA timezone to UTC ms.
- * dateStr: YYYY-MM-DD, timeStr: HH:MM (24h), tz: IANA tz name.
  */
 function parseAbsoluteToUTCms(dateStr, timeStr, tz) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
@@ -212,7 +202,7 @@ function parseAbsoluteToUTCms(dateStr, timeStr, tz) {
       };
     }
 
-    // Start with naive UTC guess and adjust
+    // Start with naive UTC guess and adjust a few iterations
     let guess = Date.UTC(Y, M - 1, D, HH, MM, 0, 0);
     for (let i = 0; i < 6; i++) {
       const cur = localParts(guess);
@@ -279,20 +269,20 @@ module.exports = {
 
   async execute(interaction) {
     await initScheduler(interaction.client);
-    await interaction.deferReply({});
+    await interaction.deferReply();
 
     try {
       const sub = interaction.options.getSubcommand();
 
       if (sub === 'in') {
-        const durationSpecRaw = interaction.options.getString('duration', true);
+        const spec = interaction.options.getString('duration', true);
         const reason = interaction.options.getString('reason') || '';
-        const deltaMs = parseRelative(durationSpecRaw);
+        const deltaMs = parseRelative(spec);
 
         if (!deltaMs) {
           return interaction.editReply(
             'Invalid duration. Use tokens with units like `10m`, `2h`, `1d`, or combos like `1h30m`.\n' +
-            'You can also write `1h30` (auto‑interpreted as 1h 30m), `2d4` (2d 4h), or `5m20` (5m 20s).'
+            'You can also write `1h30` (auto-interpreted as 1h 30m), `2d4` (2d 4h), or `5m20` (5m 20s).'
           );
         }
 
@@ -302,15 +292,13 @@ module.exports = {
         }
 
         await insertReminder(interaction.user.id, interaction.channel.id, dueAt, reason);
-
-        // reset lock so new timer can be scheduled immediately
-        schedulerBusy = false;
+        // re-schedule safely (single timer policy)
         await scheduleNext(interaction.client);
 
         const epoch = Math.floor(dueAt / 1000);
-        await interaction.editReply(
+        return interaction.editReply(
           `Understood. The Goat will forewarn you\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
-        )
+        );
       }
 
       if (sub === 'at') {
@@ -319,14 +307,10 @@ module.exports = {
         const tz = interaction.options.getString('timezone', true);
         const reason = interaction.options.getString('reason') || '';
 
-        // Validate timezone
-        try {
-          // throws if tz invalid
-          new Intl.DateTimeFormat('en-US', { timeZone: tz });
-        } catch {
-          return interaction.editReply(
-            'Invalid timezone. Please provide a valid IANA timezone like Europe/Paris or America/New_York.'
-          );
+        // Validate timezone early
+        try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); }
+        catch {
+          return interaction.editReply('Invalid timezone. Use a valid IANA name like Europe/Paris or America/New_York.');
         }
 
         const dueAt = parseAbsoluteToUTCms(dateStr, timeStr, tz);
@@ -338,22 +322,20 @@ module.exports = {
         }
 
         await insertReminder(interaction.user.id, interaction.channel.id, dueAt, reason);
-
-        schedulerBusy = false;
         await scheduleNext(interaction.client);
 
         const epoch = Math.floor(dueAt / 1000);
-        await interaction.editReply(
+        return interaction.editReply(
           `Understood. The Goat will forewarn you\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
-        )
+        );
       }
 
+      // Unknown subcommand (should never hit if the command is registered correctly)
       return interaction.editReply('Unknown subcommand.');
     } catch (err) {
       console.error('remind command error:', err);
-      try {
-        await interaction.editReply('There was an error setting your reminder.');
-      } catch { }
+      try { return interaction.editReply('There was an error setting your reminder.'); }
+      catch {}
     }
   },
 };
