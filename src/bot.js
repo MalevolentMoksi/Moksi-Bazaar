@@ -1,21 +1,22 @@
 // src/bot.js
 
 require('dotenv').config();
+
 const { token } = process.env;
+
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
+
 const fs = require('fs');
-const { initUptimePresence } = require('./utils/presence');
-
-
 
 const client = new Client({
   intents: [
-    GatewayIntentBits.Guilds,          // you already had this
-    GatewayIntentBits.GuildMessages,   // to receive messageCreate events
-    GatewayIntentBits.MessageContent,   // to actually read message.content
+    GatewayIntentBits.Guilds, // you already had this
+    GatewayIntentBits.GuildMessages, // to receive messageCreate events
+    GatewayIntentBits.MessageContent, // to actually read message.content
     GatewayIntentBits.GuildVoiceStates // Required for voice functionality
   ]
 });
+
 client.commands = new Collection();
 // client.colour = "";
 client.commandArray = [];
@@ -30,6 +31,8 @@ client.handleEvents();
 client.handleCommands();
 client.login(process.env.TOKEN);
 
+// REMOVE OR COMMENT OUT THIS BLOCK since it's now in ready.js:
+/*
 const { init } = require('./utils/db');
 client.once('ready', async () => {
   await init();
@@ -38,3 +41,4 @@ client.once('ready', async () => {
   console.log('✅ Database initialized, balances table is ready.');
   // ... any other ready logic
 });
+*/
