@@ -183,46 +183,48 @@ async function getRelevantMemories(userId, channelId, limit = 5) {
 }
 
 // Enhanced user preference tracking
-async function updateUserPreferences(userId, interaction) {
-    // Create table with all columns if it doesn't exist
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS user_preferences (
-            user_id TEXT PRIMARY KEY,
-            display_name TEXT,
-            interaction_count INTEGER DEFAULT 0,
-            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            channels TEXT[],
-            recent_topics TEXT[],
-            preferred_style TEXT DEFAULT 'neutral',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            negative_score DECIMAL(3,2) DEFAULT 0.0,
-            hostile_interactions INTEGER DEFAULT 0,
-            last_negative_interaction TIMESTAMP DEFAULT NULL,
-            negative_patterns TEXT[] DEFAULT ARRAY[]::TEXT[]
-        );
-    `);
+ async function updateUserPreferences(userId, interaction) {
+  await ensureUserPreferencesTable();
 
-    const displayName = interaction.member?.displayName || interaction.user.username;
-    const channelId = interaction.channel.id;
-    const topics = extractTopics(interaction.options.getString('request'));
+  const displayName = interaction?.member?.displayName || interaction?.user?.username || 'unknown';
+  const channelId = interaction?.channel?.id || 'unknown';
+  const raw = interaction?.options?.getString('request') || '';
+  const topicsArr = (Array.isArray(extractTopics(raw)) ? extractTopics(raw) : []).filter(Boolean);
 
-    await pool.query(`
-        INSERT INTO user_preferences (
-            user_id, display_name, interaction_count, channels, recent_topics,
-            negative_score, hostile_interactions, last_negative_interaction, negative_patterns
-        )
-        VALUES ($1, $2, 1, ARRAY[$3], $4, 0.0, 0, NULL, ARRAY[]::TEXT[])
-        ON CONFLICT (user_id)
-        DO UPDATE SET
-            display_name = EXCLUDED.display_name,
-            interaction_count = user_preferences.interaction_count + 1,
-            last_seen = CURRENT_TIMESTAMP,
-            channels = array_remove(array_append(user_preferences.channels, $3), NULL),
-            recent_topics = array_remove(array_append(user_preferences.recent_topics, $4), NULL),
-            updated_at = CURRENT_TIMESTAMP
-    `, [userId, displayName, channelId, topics]);
+  // 1) Insert if new
+  await pool.query(`
+    INSERT INTO user_preferences (
+      user_id, display_name, interaction_count, channels, recent_topics
+    )
+    VALUES ($1, $2, 1, ARRAY[$3]::text[], $4::text[])
+    ON CONFLICT (user_id) DO NOTHING
+  `, [userId, displayName, channelId, topicsArr]);
+
+  // 2) Always update (interaction_count, last_seen, arrays with dedupe)
+  await pool.query(`
+    UPDATE user_preferences
+    SET
+      display_name = $2,
+      interaction_count = COALESCE(interaction_count, 0) + 1,
+      last_seen = CURRENT_TIMESTAMP,
+      channels = (
+        SELECT array_agg(DISTINCT e)
+        FROM unnest(
+          COALESCE(channels, ARRAY[]::text[]) || ARRAY[$3]::text[]
+        ) AS e
+      ),
+      recent_topics = (
+        SELECT array_agg(DISTINCT e)
+        FROM unnest(
+          COALESCE(recent_topics, ARRAY[]::text[]) || $4::text[]
+        ) AS e
+      ),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = $1
+  `, [userId, displayName, channelId, topicsArr]);
 }
+
+
 
 
 // Get user interaction history for personalization
@@ -345,43 +347,36 @@ async function cleanupOldMemories(userId, channelId) {
 // ── NEGATIVE BEHAVIOR TRACKING ─────────────────────────────────────────────────
 
 async function updateNegativeBehavior(userId, negativeType, severity = 0.1) {
-    // Ensure user_preferences table has the negative tracking columns
-    await pool.query(`
-        ALTER TABLE user_preferences
-        ADD COLUMN IF NOT EXISTS negative_score DECIMAL(3,2) DEFAULT 0.0,
-        ADD COLUMN IF NOT EXISTS hostile_interactions INTEGER DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS last_negative_interaction TIMESTAMP DEFAULT NULL,
-        ADD COLUMN IF NOT EXISTS negative_patterns TEXT[] DEFAULT ARRAY[]::TEXT[]
-    `);
+  await ensureUserPreferencesTable();
 
-    // Update existing user record (record should exist from updateUserPreferences)
-    const result = await pool.query(`
-        UPDATE user_preferences 
-        SET 
-            negative_score = LEAST(1.0, COALESCE(negative_score, 0.0) + $2),
-            hostile_interactions = COALESCE(hostile_interactions, 0) + 1,
-            last_negative_interaction = CURRENT_TIMESTAMP,
-            negative_patterns = array_remove(array_append(COALESCE(negative_patterns, ARRAY[]::TEXT[]), $3), NULL),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = $1
-    `, [userId, severity, negativeType]);
-
-    // If no user record exists (shouldn't happen with proper updateUserPreferences call)
-    if (result.rowCount === 0) {
-        console.warn(`No user record found for ${userId}, negative behavior not tracked`);
-    }
+  await pool.query(`
+    UPDATE user_preferences
+    SET
+      negative_score = LEAST(1.0, COALESCE(negative_score, 0.0) + $2),
+      hostile_interactions = COALESCE(hostile_interactions, 0) + 1,
+      last_negative_interaction = CURRENT_TIMESTAMP,
+      negative_patterns = array_remove(
+        array_append(COALESCE(negative_patterns, ARRAY[]::text[]), $3::text),
+        NULL
+      ),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = $1
+  `, [userId, severity, negativeType || 'unknown']);
 }
+
 
 async function decayNegativeScore(userId) {
-    // Always try to decay, even if negative_score is 0 (no harm done)
-    await pool.query(`
-        UPDATE user_preferences
-        SET 
-            negative_score = GREATEST(0.0, COALESCE(negative_score, 0.0) - 0.05),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = $1
-    `, [userId]);
+  await ensureUserPreferencesTable();
+
+  await pool.query(`
+    UPDATE user_preferences
+    SET
+      negative_score = GREATEST(0.0, COALESCE(negative_score, 0.0) - 0.05),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = $1
+  `, [userId]);
 }
+
 
 
 function analyzeHostileBehavior(message) {
@@ -539,6 +534,32 @@ async function getAllUserRelationships(limit = 20) {
     });
 }
 
+async function ensureUserPreferencesTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      user_id TEXT PRIMARY KEY,
+      display_name TEXT,
+      interaction_count INTEGER DEFAULT 0,
+      last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      channels TEXT[],
+      recent_topics TEXT[],
+      preferred_style TEXT DEFAULT 'neutral',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  // Add relationship/hostility columns if missing
+  await pool.query(`
+    ALTER TABLE user_preferences
+      ADD COLUMN IF NOT EXISTS negative_score DECIMAL(3,2) DEFAULT 0.0,
+      ADD COLUMN IF NOT EXISTS hostile_interactions INTEGER DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS last_negative_interaction TIMESTAMP DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS negative_patterns TEXT[] DEFAULT ARRAY[]::TEXT[];
+  `);
+}
+
+
 
 module.exports = {
     pool,
@@ -558,4 +579,5 @@ module.exports = {
     decayNegativeScore,
     analyzeHostileBehavior,
     getAllUserRelationships,
+    ensureUserPreferencesTable,
 };
