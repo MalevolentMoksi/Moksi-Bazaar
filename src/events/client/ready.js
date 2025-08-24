@@ -5,7 +5,7 @@ const { initUptimePresence } = require('../../utils/presence');
 const { startReminderScheduler } = require('../../commands/tools/remind.js');
 
 module.exports = {
-  name: 'ready',
+  name: 'clientReady',
   once: true, // This event should only fire once
   async execute(client) {
     await init();

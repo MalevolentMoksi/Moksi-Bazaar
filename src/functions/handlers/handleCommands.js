@@ -28,7 +28,7 @@ module.exports = (client) => {
     }
     const rest = new REST({ version: '9' }).setToken(token);
 
-    client.once('ready', async () => {
+    client.once('clientReady', async () => {
       const appId = process.env.CLIENT_ID ?? client.user.id;
       console.log(`🔑 App ID: ${appId}`);
 
