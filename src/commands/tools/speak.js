@@ -5,8 +5,7 @@
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
-const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext } = require('../../utils/db.js');
-
+const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext, updateUserPreferences } = require('../../utils/db.js');
 
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
@@ -234,6 +233,9 @@ MEMORY & CONTEXT AWARENESS:
             }
 
             const userRequest = interaction.options.getString('request');
+
+            // NEW: Always update user preferences first to ensure user record exists
+            await updateUserPreferences(userId, interaction)
 
             // NEW: Analyze for hostile behavior
             const hostilityAnalysis = analyzeHostileBehavior(userRequest);

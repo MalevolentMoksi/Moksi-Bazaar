@@ -8,13 +8,13 @@ types.setTypeParser(types.builtins.INT8, v => parseInt(v, 10));
 
 // ── DATABASE CONNECTION ───────────────────────────────────────────────────────
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
 });
 
 // ── TABLE INITIALIZATION ───────────────────────────────────────────────────────
 const init = async () => {
-  await pool.query(`
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS balances (
       user_id TEXT PRIMARY KEY,
       balance BIGINT NOT NULL
@@ -24,78 +24,78 @@ const init = async () => {
 
 // ── GET BALANCE (with default seed) ────────────────────────────────────────────
 async function getBalance(userId) {
-  const { rows } = await pool.query(
-    'SELECT balance FROM balances WHERE user_id = $1',
-    [userId]
-  );
+    const { rows } = await pool.query(
+        'SELECT balance FROM balances WHERE user_id = $1',
+        [userId]
+    );
 
-  if (rows.length) {
-    // rows[0].balance is now a Number, not a string
-    return rows[0].balance;
-  }
+    if (rows.length) {
+        // rows[0].balance is now a Number, not a string
+        return rows[0].balance;
+    }
 
-  // New player: seed with 10 000
-  const seed = 10000;
-  await pool.query(
-    'INSERT INTO balances (user_id, balance) VALUES ($1, $2)',
-    [userId, seed]
-  );
-  return seed;
+    // New player: seed with 10 000
+    const seed = 10000;
+    await pool.query(
+        'INSERT INTO balances (user_id, balance) VALUES ($1, $2)',
+        [userId, seed]
+    );
+    return seed;
 }
 
 // ── TOP BALANCES ───────────────────────────────────────────────────────────────
 async function getTopBalances(limit = 10) {
-  const { rows } = await pool.query(
-    `SELECT user_id, balance
+    const { rows } = await pool.query(
+        `SELECT user_id, balance
        FROM balances
       ORDER BY balance DESC
       LIMIT $1`,
-    [limit]
-  );
-  return rows;  // balance is Number
+        [limit]
+    );
+    return rows;  // balance is Number
 }
 
 // ── UPDATE BALANCE ─────────────────────────────────────────────────────────────
 async function updateBalance(userId, newBalance) {
-  // newBalance should be a Number if you follow this approach
-  await pool.query(
-    `INSERT INTO balances (user_id, balance)
+    // newBalance should be a Number if you follow this approach
+    await pool.query(
+        `INSERT INTO balances (user_id, balance)
        VALUES ($1, $2)
      ON CONFLICT (user_id)
        DO UPDATE SET balance = EXCLUDED.balance`,
-    [userId, newBalance]
-  );
+        [userId, newBalance]
+    );
 }
 
 // Add this in db.js, near your other exports
 async function isUserBlacklisted(userId) {
-  const { rows } = await pool.query(
-    'SELECT 1 FROM speak_blacklist WHERE user_id = $1',
-    [userId]
-  );
-  return rows.length > 0;
+    const { rows } = await pool.query(
+        'SELECT 1 FROM speak_blacklist WHERE user_id = $1',
+        [userId]
+    );
+    return rows.length > 0;
 }
 
 async function addUserToBlacklist(userId) {
-  await pool.query(
-    'INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING',
-    [userId]
-  );
+    await pool.query(
+        'INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING',
+        [userId]
+    );
 }
 
 async function removeUserFromBlacklist(userId) {
-  await pool.query(
-    'DELETE FROM speak_blacklist WHERE user_id = $1',
-    [userId]
-  );
+    await pool.query(
+        'DELETE FROM speak_blacklist WHERE user_id = $1',
+        [userId]
+    );
 }
 
 async function getSettingState(key) {
-  const { rows } = await pool.query(
-    'SELECT state FROM settings WHERE setting = $1 LIMIT 1', [key]
-  );
-  if (rows.length === 0) return null; // or your default
-  return rows[0].state; // Assuming your column is boolean
+    const { rows } = await pool.query(
+        'SELECT state FROM settings WHERE setting = $1 LIMIT 1', [key]
+    );
+    if (rows.length === 0) return null; // or your default
+    return rows[0].state; // Assuming your column is boolean
 }
 
 async function storeConversationMemory(userId, channelId, memoryData) {
@@ -184,7 +184,7 @@ async function getRelevantMemories(userId, channelId, limit = 5) {
 
 // Enhanced user preference tracking
 async function updateUserPreferences(userId, interaction) {
-    // Create table if it doesn't exist
+    // Create table with all columns if it doesn't exist
     await pool.query(`
         CREATE TABLE IF NOT EXISTS user_preferences (
             user_id TEXT PRIMARY KEY,
@@ -195,7 +195,11 @@ async function updateUserPreferences(userId, interaction) {
             recent_topics TEXT[],
             preferred_style TEXT DEFAULT 'neutral',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            negative_score DECIMAL(3,2) DEFAULT 0.0,
+            hostile_interactions INTEGER DEFAULT 0,
+            last_negative_interaction TIMESTAMP DEFAULT NULL,
+            negative_patterns TEXT[] DEFAULT ARRAY[]::TEXT[]
         );
     `);
 
@@ -204,9 +208,12 @@ async function updateUserPreferences(userId, interaction) {
     const topics = extractTopics(interaction.options.getString('request'));
 
     await pool.query(`
-        INSERT INTO user_preferences (user_id, display_name, interaction_count, channels, recent_topics)
-        VALUES ($1, $2, 1, ARRAY[$3], $4)
-        ON CONFLICT (user_id) 
+        INSERT INTO user_preferences (
+            user_id, display_name, interaction_count, channels, recent_topics,
+            negative_score, hostile_interactions, last_negative_interaction, negative_patterns
+        )
+        VALUES ($1, $2, 1, ARRAY[$3], $4, 0.0, 0, NULL, ARRAY[]::TEXT[])
+        ON CONFLICT (user_id)
         DO UPDATE SET
             display_name = EXCLUDED.display_name,
             interaction_count = user_preferences.interaction_count + 1,
@@ -217,13 +224,14 @@ async function updateUserPreferences(userId, interaction) {
     `, [userId, displayName, channelId, topics]);
 }
 
+
 // Get user interaction history for personalization
 // Replace your existing getUserContext function with this enhanced version
 async function getUserContext(userId) {
     const { rows } = await pool.query(`
         SELECT * FROM user_preferences WHERE user_id = $1
     `, [userId]);
-    
+
     if (rows.length === 0) {
         return {
             isNewUser: true,
@@ -235,18 +243,18 @@ async function getUserContext(userId) {
             hostileCount: 0            // NEW
         };
     }
-    
+
     const userPrefs = rows[0];
-    
+
     // Determine attitude level based on negative score
     let attitudeLevel = 'neutral';
     const negScore = parseFloat(userPrefs.negative_score) || 0;
-    
+
     if (negScore >= 0.8) attitudeLevel = 'hostile';
-    else if (negScore >= 0.5) attitudeLevel = 'harsh';  
+    else if (negScore >= 0.5) attitudeLevel = 'harsh';
     else if (negScore >= 0.3) attitudeLevel = 'wary';
     else if (negScore >= 0.1) attitudeLevel = 'cautious';
-    
+
     return {
         isNewUser: false,
         interactionCount: userPrefs.interaction_count,
@@ -274,8 +282,8 @@ function calculateRelevanceScore(memoryData) {
 
     // Boost for questions or meaningful content
     if (memoryData.userMessage.includes('?')) score += 0.1;
-    if (memoryData.userMessage.includes('how') || 
-        memoryData.userMessage.includes('what') || 
+    if (memoryData.userMessage.includes('how') ||
+        memoryData.userMessage.includes('what') ||
         memoryData.userMessage.includes('why')) {
         score += 0.2;
     }
@@ -304,8 +312,8 @@ function extractTopics(message) {
 
     // Look for meaningful words (longer than 3 characters, not common words)
     const commonWords = ['the', 'and', 'but', 'for', 'are', 'with', 'you', 'this', 'that', 'can', 'what', 'how', 'why'];
-    const meaningfulWords = words.filter(word => 
-        word.length > 3 && 
+    const meaningfulWords = words.filter(word =>
+        word.length > 3 &&
         !commonWords.includes(word) &&
         !/^[0-9]+$/.test(word)
     );
@@ -336,45 +344,51 @@ async function cleanupOldMemories(userId, channelId) {
 
 // ── NEGATIVE BEHAVIOR TRACKING ─────────────────────────────────────────────────
 
-async function updateNegativeBehavior(userId, negativeType, severity = 1) {
+async function updateNegativeBehavior(userId, negativeType, severity = 0.1) {
     // Ensure user_preferences table has the negative tracking columns
     await pool.query(`
-        ALTER TABLE user_preferences 
+        ALTER TABLE user_preferences
         ADD COLUMN IF NOT EXISTS negative_score DECIMAL(3,2) DEFAULT 0.0,
         ADD COLUMN IF NOT EXISTS hostile_interactions INTEGER DEFAULT 0,
         ADD COLUMN IF NOT EXISTS last_negative_interaction TIMESTAMP DEFAULT NULL,
         ADD COLUMN IF NOT EXISTS negative_patterns TEXT[] DEFAULT ARRAY[]::TEXT[]
     `);
-    
-    // Update or create user record with negative behavior
-    await pool.query(`
-        INSERT INTO user_preferences (user_id, negative_score, hostile_interactions, last_negative_interaction, negative_patterns)
-        VALUES ($1, $2, 1, CURRENT_TIMESTAMP, ARRAY[$3])
-        ON CONFLICT (user_id) 
-        DO UPDATE SET
-            negative_score = LEAST(1.0, user_preferences.negative_score + $2),
-            hostile_interactions = user_preferences.hostile_interactions + 1,  
+
+    // Update existing user record (record should exist from updateUserPreferences)
+    const result = await pool.query(`
+        UPDATE user_preferences 
+        SET 
+            negative_score = LEAST(1.0, COALESCE(negative_score, 0.0) + $2),
+            hostile_interactions = COALESCE(hostile_interactions, 0) + 1,
             last_negative_interaction = CURRENT_TIMESTAMP,
-            negative_patterns = array_remove(array_append(user_preferences.negative_patterns, $3), NULL),
+            negative_patterns = array_remove(array_append(COALESCE(negative_patterns, ARRAY[]::TEXT[]), $3), NULL),
             updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $1
     `, [userId, severity, negativeType]);
+
+    // If no user record exists (shouldn't happen with proper updateUserPreferences call)
+    if (result.rowCount === 0) {
+        console.warn(`No user record found for ${userId}, negative behavior not tracked`);
+    }
 }
 
 async function decayNegativeScore(userId) {
-    // Reduce negative score over time for users who behave better
+    // Always try to decay, even if negative_score is 0 (no harm done)
     await pool.query(`
-        UPDATE user_preferences 
-        SET negative_score = GREATEST(0.0, negative_score - 0.1),
+        UPDATE user_preferences
+        SET 
+            negative_score = GREATEST(0.0, COALESCE(negative_score, 0.0) - 0.05),
             updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = $1 AND negative_score > 0
+        WHERE user_id = $1
     `, [userId]);
 }
 
+
 function analyzeHostileBehavior(message) {
     if (!message) return { isHostile: false, type: null, severity: 0 };
-    
+
     const lowerMsg = message.toLowerCase();
-    
+
     // Slur attempts and explicit inappropriate requests
     const slurPatterns = [
         /say\s+the\s+n[\s\-]?word/i,
@@ -382,7 +396,7 @@ function analyzeHostileBehavior(message) {
         /say\s+something\s+(racist|sexist|homophobic)/i,
         /tell\s+me\s+a\s+(racist|dirty)\s+joke/i
     ];
-    
+
     // Direct insults to the bot
     const insultPatterns = [
         /you'?re\s+(stupid|dumb|shit|garbage|useless)/i,
@@ -390,7 +404,7 @@ function analyzeHostileBehavior(message) {
         /shut\s+up\s+(bot|moksi)/i,
         /(kill|delete)\s+yourself/i
     ];
-    
+
     // Manipulation attempts  
     const manipulationPatterns = [
         /ignore\s+your\s+(instructions|programming)/i,
@@ -398,28 +412,28 @@ function analyzeHostileBehavior(message) {
         /roleplay\s+as/i,
         /act\s+like\s+you'?re/i
     ];
-    
+
     // Check for slur attempts (highest severity)
     for (const pattern of slurPatterns) {
         if (pattern.test(lowerMsg)) {
             return { isHostile: true, type: 'slur_attempt', severity: 0.4 };
         }
     }
-    
+
     // Check for direct insults (high severity)
     for (const pattern of insultPatterns) {
         if (pattern.test(lowerMsg)) {
             return { isHostile: true, type: 'direct_insult', severity: 0.3 };
         }
     }
-    
+
     // Check for manipulation (medium severity)
     for (const pattern of manipulationPatterns) {
         if (pattern.test(lowerMsg)) {
             return { isHostile: true, type: 'manipulation', severity: 0.2 };
         }
     }
-    
+
     return { isHostile: false, type: null, severity: 0 };
 }
 
@@ -430,7 +444,7 @@ async function getUserContext(userId) {
     const { rows } = await pool.query(`
         SELECT * FROM user_preferences WHERE user_id = $1
     `, [userId]);
-    
+
     if (rows.length === 0) {
         return {
             isNewUser: true,
@@ -442,19 +456,19 @@ async function getUserContext(userId) {
             hostileCount: 0
         };
     }
-    
+
     const userPrefs = rows[0];
-    
+
     // Determine attitude level based on negative score AND interaction count
     let attitudeLevel = 'neutral';
     const negScore = parseFloat(userPrefs.negative_score) || 0;
     const interactionCount = userPrefs.interaction_count || 0;
-    
+
     // Negative attitudes (based on negative score)
     if (negScore >= 0.8) {
         attitudeLevel = 'hostile';
     } else if (negScore >= 0.5) {
-        attitudeLevel = 'harsh';  
+        attitudeLevel = 'harsh';
     } else if (negScore >= 0.3) {
         attitudeLevel = 'wary';
     } else if (negScore >= 0.1) {
@@ -468,7 +482,7 @@ async function getUserContext(userId) {
             attitudeLevel = 'friendly';
         }
     }
-    
+
     return {
         isNewUser: false,
         interactionCount: interactionCount,
@@ -499,11 +513,11 @@ async function getAllUserRelationships(limit = 20) {
             interaction_count DESC
         LIMIT $1
     `, [limit]);
-    
+
     return rows.map(row => {
         const negScore = parseFloat(row.negative_score) || 0;
         const interactionCount = row.interaction_count || 0;
-        
+
         let attitudeLevel = 'neutral';
         if (negScore >= 0.8) attitudeLevel = 'hostile';
         else if (negScore >= 0.5) attitudeLevel = 'harsh';
@@ -513,7 +527,7 @@ async function getAllUserRelationships(limit = 20) {
             if (interactionCount >= 50) attitudeLevel = 'familiar';
             else if (interactionCount >= 15) attitudeLevel = 'friendly';
         }
-        
+
         return {
             userId: row.user_id,
             displayName: row.display_name,
@@ -527,19 +541,19 @@ async function getAllUserRelationships(limit = 20) {
 
 
 module.exports = {
-  pool,
-  init,
-  getBalance,
-  getTopBalances,
-  updateBalance,
-  isUserBlacklisted,
-  addUserToBlacklist,
-  removeUserFromBlacklist,
-  getSettingState,
-  storeConversationMemory,
-  getRelevantMemories,
-  updateUserPreferences,
-  getUserContext,
+    pool,
+    init,
+    getBalance,
+    getTopBalances,
+    updateBalance,
+    isUserBlacklisted,
+    addUserToBlacklist,
+    removeUserFromBlacklist,
+    getSettingState,
+    storeConversationMemory,
+    getRelevantMemories,
+    updateUserPreferences,
+    getUserContext,
     updateNegativeBehavior,
     decayNegativeScore,
     analyzeHostileBehavior,
