@@ -548,36 +548,400 @@ async function ensureUserPreferencesTable() {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
-
-  // Add relationship/hostility columns if missing
+  
+  // Add ALL the enhanced relationship columns
   await pool.query(`
     ALTER TABLE user_preferences
-      ADD COLUMN IF NOT EXISTS negative_score DECIMAL(3,2) DEFAULT 0.0,
-      ADD COLUMN IF NOT EXISTS hostile_interactions INTEGER DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS last_negative_interaction TIMESTAMP DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS negative_patterns TEXT[] DEFAULT ARRAY[]::TEXT[];
+    ADD COLUMN IF NOT EXISTS negative_score DECIMAL(3,2) DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS positive_score DECIMAL(3,2) DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS hostile_interactions INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS positive_interactions INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_negative_interaction TIMESTAMP DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS last_positive_interaction TIMESTAMP DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS negative_patterns TEXT[] DEFAULT ARRAY[]::TEXT[],
+    
+    -- Emotional intelligence metrics
+    ADD COLUMN IF NOT EXISTS warmth_level DECIMAL(3,2) DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS trust_level DECIMAL(3,2) DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS comfort_level DECIMAL(3,2) DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS connection_depth DECIMAL(3,2) DEFAULT 0.0,
+    
+    -- Conversation quality tracking
+    ADD COLUMN IF NOT EXISTS meaningful_exchanges INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS humor_compatibility DECIMAL(3,2) DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS emotional_support_given INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS personal_sharing_count INTEGER DEFAULT 0,
+    
+    -- Friendship progression tracking
+    ADD COLUMN IF NOT EXISTS friendship_milestones TEXT[] DEFAULT ARRAY[]::TEXT[],
+    ADD COLUMN IF NOT EXISTS relationship_quality_score DECIMAL(3,2) DEFAULT 0.0,
+    ADD COLUMN IF NOT EXISTS recent_interaction_sentiment DECIMAL(3,2) DEFAULT 0.0;
   `);
+}
+
+// Comprehensive sentiment analysis that catches ANY negative interaction
+function analyzeComprehensiveSentiment(message, conversationContext = '') {
+  if (!message) return { sentiment: 0, type: 'neutral', intensity: 0 };
+  
+  const lowerMsg = message.toLowerCase();
+  let sentimentScore = 0;
+  let negativeIntensity = 0;
+  let positiveIntensity = 0;
+  let interactionType = 'neutral';
+  
+  // NEGATIVE SENTIMENT DETECTION (much more comprehensive)
+  
+  // Explicit hostility (high negative)
+  const hostilePatterns = [
+    /\b(fuck|shit|damn|hell|bastard|bitch)\s+(you|off|this)/i,
+    /\b(stupid|dumb|idiot|moron|retard|braindead)\b/i,
+    /\b(hate|despise|loathe|can't stand)\b/i,
+    /shut\s+up|piss\s+off|go\s+away/i,
+    /\b(useless|worthless|garbage|trash|pathetic)\b/i
+  ];
+  
+  // Moderate negativity
+  const irritatedPatterns = [
+    /\b(annoying|irritating|frustrating|stupid)\b/i,
+    /\b(whatever|fine|sure|okay)\s*[.!]*$/i, // Dismissive responses
+    /\b(boring|lame|cringe|weird)\b/i,
+    /ugh|meh|blah|eww/i,
+    /\b(no|nope|nah)\s*[.!]*$/i, // Curt rejections
+    /why\s+(would|should|do)\s+i\s+care/i
+  ];
+  
+  // Subtle negativity
+  const coolPatterns = [
+    /\b(not\s+really|not\s+interested|don't\s+care)\b/i,
+    /\b(probably\s+not|doubt\s+it|unlikely)\b/i,
+    /\b(busy|later|maybe\s+another\s+time)\b/i,
+    /k\.|ok\.|sure\./i, // Very short, dismissive
+    /\b(tired|exhausted|done)\b/i
+  ];
+  
+  // POSITIVE SENTIMENT DETECTION
+  
+  // High enthusiasm
+  const enthusiasticPatterns = [
+    /\b(love|adore|amazing|awesome|fantastic|incredible|wonderful)\b/i,
+    /\b(excited|thrilled|pumped|stoked)\b/i,
+    /!{2,}|wow|omg|yes!/i,
+    /\b(perfect|excellent|brilliant|outstanding)\b/i,
+    /😍|🥰|❤️|💕|🎉|✨/,
+    /\b(thanks|thank\s+you|appreciate|grateful)\b/i
+  ];
+  
+  // Moderate positivity
+  const friendlyPatterns = [
+    /\b(good|nice|cool|great|fun|interesting)\b/i,
+    /\b(sure|yeah|definitely|absolutely)\b/i,
+    /\b(sounds?\s+good|looks?\s+good)\b/i,
+    /😊|😄|😁|👍|🙂/,
+    /\b(please|kindly|would\s+you)\b/i,
+    /\b(hope|wish|looking\s+forward)\b/i
+  ];
+  
+  // Warmth and connection
+  const warmPatterns = [
+    /\b(friend|buddy|pal)\b/i,
+    /\b(care|worried|concerned)\s+about/i,
+    /\b(miss|missed)\s+you/i,
+    /how\s+are\s+you|how\s+have\s+you\s+been/i,
+    /\b(proud|happy\s+for|glad)\b/i,
+    /\b(support|help|there\s+for\s+you)\b/i
+  ];
+  
+  // Calculate sentiment scores
+  hostilePatterns.forEach(pattern => {
+    if (pattern.test(lowerMsg)) {
+      sentimentScore -= 0.8;
+      negativeIntensity += 0.8;
+      interactionType = 'hostile';
+    }
+  });
+  
+  irritatedPatterns.forEach(pattern => {
+    if (pattern.test(lowerMsg)) {
+      sentimentScore -= 0.4;
+      negativeIntensity += 0.4;
+      if (interactionType === 'neutral') interactionType = 'irritated';
+    }
+  });
+  
+  coolPatterns.forEach(pattern => {
+    if (pattern.test(lowerMsg)) {
+      sentimentScore -= 0.2;
+      negativeIntensity += 0.2;
+      if (interactionType === 'neutral') interactionType = 'cool';
+    }
+  });
+  
+  enthusiasticPatterns.forEach(pattern => {
+    if (pattern.test(lowerMsg)) {
+      sentimentScore += 0.6;
+      positiveIntensity += 0.6;
+      interactionType = 'enthusiastic';
+    }
+  });
+  
+  friendlyPatterns.forEach(pattern => {
+    if (pattern.test(lowerMsg)) {
+      sentimentScore += 0.3;
+      positiveIntensity += 0.3;
+      if (interactionType === 'neutral') interactionType = 'friendly';
+    }
+  });
+  
+  warmPatterns.forEach(pattern => {
+    if (pattern.test(lowerMsg)) {
+      sentimentScore += 0.4;
+      positiveIntensity += 0.4;
+      if (interactionType === 'neutral') interactionType = 'warm';
+    }
+  });
+  
+  // Context bonuses/penalties
+  if (message.includes('?')) sentimentScore += 0.1; // Questions show engagement
+  if (message.length > 100) sentimentScore += 0.1; // Longer messages show investment
+  if (message.length < 5) sentimentScore -= 0.1; // Very short might be dismissive
+  
+  // Cap the scores
+  sentimentScore = Math.max(-2.0, Math.min(2.0, sentimentScore));
+  
+  return {
+    sentiment: sentimentScore,
+    type: interactionType,
+    intensity: Math.max(negativeIntensity, positiveIntensity),
+    isPositive: sentimentScore > 0.1,
+    isNegative: sentimentScore < -0.1
+  };
+}
+
+// Enhanced relationship update function
+async function updateEnhancedRelationship(userId, interaction, sentimentAnalysis) {
+  await ensureUserPreferencesTable();
+  
+  const displayName = interaction?.member?.displayName || interaction?.user?.username || 'unknown';
+  const channelId = interaction?.channel?.id || 'unknown';
+  
+  // Calculate relationship adjustments
+  const isPositive = sentimentAnalysis.isPositive;
+  const isNegative = sentimentAnalysis.isNegative;
+  const intensity = sentimentAnalysis.intensity;
+  
+  // Relationship quality adjustments
+  let warmthAdjustment = 0;
+  let trustAdjustment = 0;
+  let comfortAdjustment = 0;
+  let connectionAdjustment = 0;
+  
+  if (isPositive) {
+    warmthAdjustment = intensity * 0.15;
+    trustAdjustment = intensity * 0.1;
+    comfortAdjustment = intensity * 0.12;
+    connectionAdjustment = intensity * 0.08;
+  } else if (isNegative) {
+    warmthAdjustment = -intensity * 0.2;
+    trustAdjustment = -intensity * 0.15;
+    comfortAdjustment = -intensity * 0.18;
+    connectionAdjustment = -intensity * 0.1;
+  }
+  
+  await pool.query(`
+    UPDATE user_preferences 
+    SET
+      display_name = $2,
+      interaction_count = COALESCE(interaction_count, 0) + 1,
+      last_seen = CURRENT_TIMESTAMP,
+      
+      -- Sentiment tracking
+      positive_score = GREATEST(0.0, LEAST(2.0, COALESCE(positive_score, 0.0) + $3)),
+      negative_score = GREATEST(0.0, LEAST(2.0, COALESCE(negative_score, 0.0) + $4)),
+      positive_interactions = COALESCE(positive_interactions, 0) + $5,
+      hostile_interactions = COALESCE(hostile_interactions, 0) + $6,
+      
+      -- Emotional intelligence metrics
+      warmth_level = GREATEST(0.0, LEAST(1.0, COALESCE(warmth_level, 0.0) + $7)),
+      trust_level = GREATEST(0.0, LEAST(1.0, COALESCE(trust_level, 0.0) + $8)),
+      comfort_level = GREATEST(0.0, LEAST(1.0, COALESCE(comfort_level, 0.0) + $9)),
+      connection_depth = GREATEST(0.0, LEAST(1.0, COALESCE(connection_depth, 0.0) + $10)),
+      
+      -- Track meaningful interactions
+      meaningful_exchanges = COALESCE(meaningful_exchanges, 0) + $11,
+      
+      -- Update relationship quality score (composite)
+      relationship_quality_score = (
+        COALESCE(warmth_level, 0.0) + COALESCE(trust_level, 0.0) + 
+        COALESCE(comfort_level, 0.0) + COALESCE(connection_depth, 0.0)
+      ) / 4.0,
+      
+      recent_interaction_sentiment = $12,
+      last_positive_interaction = CASE WHEN $5 > 0 THEN CURRENT_TIMESTAMP ELSE last_positive_interaction END,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = $1
+  `, [
+    userId, displayName,
+    isPositive ? intensity * 0.3 : 0, // positive_score increase
+    isNegative ? intensity * 0.25 : -0.02, // negative_score (slight decay for non-negative)
+    isPositive ? 1 : 0, // positive_interactions count
+    isNegative ? 1 : 0, // hostile_interactions count
+    warmthAdjustment,
+    trustAdjustment, 
+    comfortAdjustment,
+    connectionAdjustment,
+    (isPositive && intensity > 0.3) ? 1 : 0, // meaningful_exchanges
+    sentimentAnalysis.sentiment
+  ]);
+}
+
+// Enhanced relationship determination with MANY more friendship levels
+async function getEnhancedUserContext(userId) {
+  const { rows } = await pool.query(`
+    SELECT *, 
+           COALESCE(relationship_quality_score, 0) as quality_score,
+           COALESCE(positive_score, 0) - COALESCE(negative_score, 0) as net_sentiment,
+           COALESCE(positive_interactions, 0)::float / GREATEST(COALESCE(interaction_count, 1), 1) as positivity_ratio
+    FROM user_preferences 
+    WHERE user_id = $1
+  `, [userId]);
+
+  if (rows.length === 0) {
+    return {
+      isNewUser: true,
+      attitudeLevel: 'neutral',
+      relationshipType: 'stranger',
+      friendshipLevel: 0,
+      connectionStrength: 0,
+      relationshipStats: {}
+    };
+  }
+
+  const user = rows[0];
+  const negScore = parseFloat(user.negative_score) || 0;
+  const posScore = parseFloat(user.positive_score) || 0;
+  const interactionCount = user.interaction_count || 0;
+  const qualityScore = parseFloat(user.quality_score) || 0;
+  const netSentiment = parseFloat(user.net_sentiment) || 0;
+  const positivityRatio = parseFloat(user.positivity_ratio) || 0;
+  const warmth = parseFloat(user.warmth_level) || 0;
+  const trust = parseFloat(user.trust_level) || 0;
+  const comfort = parseFloat(user.comfort_level) || 0;
+  const connection = parseFloat(user.connection_depth) || 0;
+
+  let attitudeLevel = 'neutral';
+  let relationshipType = 'stranger';
+  let friendshipLevel = 0;
+
+  // NEGATIVE RELATIONSHIPS (any negative interaction counts now)
+  if (negScore > 0.6 || netSentiment < -0.8) {
+    attitudeLevel = 'hostile';
+    relationshipType = 'enemy';
+    friendshipLevel = -3;
+  } else if (negScore > 0.3 || netSentiment < -0.5) {
+    attitudeLevel = 'harsh';
+    relationshipType = 'antagonistic';
+    friendshipLevel = -2;
+  } else if (negScore > 0.15 || netSentiment < -0.2) {
+    attitudeLevel = 'wary';
+    relationshipType = 'distrustful';
+    friendshipLevel = -1;
+  } else if (negScore > 0.05 || netSentiment < -0.1) {
+    attitudeLevel = 'cautious';
+    relationshipType = 'skeptical';
+    friendshipLevel = 0;
+  }
+  
+  // POSITIVE RELATIONSHIPS (much more granular levels)
+  else if (negScore <= 0.05 && netSentiment >= 0) {
+    if (qualityScore >= 0.85 && interactionCount >= 15 && positivityRatio > 0.8) {
+      attitudeLevel = 'devoted';
+      relationshipType = 'soulmate';
+      friendshipLevel = 10;
+    } else if (qualityScore >= 0.75 && interactionCount >= 12 && positivityRatio > 0.7) {
+      attitudeLevel = 'adoring';
+      relationshipType = 'best_friend';
+      friendshipLevel = 9;
+    } else if (qualityScore >= 0.65 && interactionCount >= 10 && positivityRatio > 0.65) {
+      attitudeLevel = 'loving';
+      relationshipType = 'close_friend';
+      friendshipLevel = 8;
+    } else if (qualityScore >= 0.55 && interactionCount >= 8 && positivityRatio > 0.6) {
+      attitudeLevel = 'affectionate';
+      relationshipType = 'dear_friend';
+      friendshipLevel = 7;
+    } else if (qualityScore >= 0.45 && interactionCount >= 6 && positivityRatio > 0.55) {
+      attitudeLevel = 'warm';
+      relationshipType = 'good_friend';
+      friendshipLevel = 6;
+    } else if (qualityScore >= 0.35 && interactionCount >= 5 && positivityRatio > 0.5) {
+      attitudeLevel = 'fond';
+      relationshipType = 'friend';
+      friendshipLevel = 5;
+    } else if (qualityScore >= 0.25 && interactionCount >= 4 && positivityRatio > 0.4) {
+      attitudeLevel = 'friendly';
+      relationshipType = 'buddy';
+      friendshipLevel = 4;
+    } else if (qualityScore >= 0.15 && interactionCount >= 3 && positivityRatio > 0.3) {
+      attitudeLevel = 'welcoming';
+      relationshipType = 'friendly_acquaintance';
+      friendshipLevel = 3;
+    } else if (qualityScore >= 0.08 && interactionCount >= 2 && positivityRatio > 0.2) {
+      attitudeLevel = 'approachable';
+      relationshipType = 'acquaintance';
+      friendshipLevel = 2;
+    } else if (interactionCount >= 1 && netSentiment > 0) {
+      attitudeLevel = 'polite';
+      relationshipType = 'new_acquaintance';
+      friendshipLevel = 1;
+    }
+  }
+
+  return {
+    isNewUser: interactionCount === 0,
+    attitudeLevel,
+    relationshipType,
+    friendshipLevel,
+    interactionCount,
+    connectionStrength: qualityScore,
+    relationshipStats: {
+      warmth,
+      trust,
+      comfort,
+      connection,
+      positivityRatio,
+      netSentiment,
+      qualityScore
+    },
+    negativeScore: negScore,
+    positiveScore: posScore
+  };
 }
 
 
 
+
+
 module.exports = {
-    pool,
-    init,
-    getBalance,
-    getTopBalances,
-    updateBalance,
-    isUserBlacklisted,
-    addUserToBlacklist,
-    removeUserFromBlacklist,
-    getSettingState,
-    storeConversationMemory,
-    getRelevantMemories,
-    updateUserPreferences,
-    getUserContext,
-    updateNegativeBehavior,
-    decayNegativeScore,
-    analyzeHostileBehavior,
-    getAllUserRelationships,
-    ensureUserPreferencesTable,
+  pool,
+  init,
+  getBalance,
+  getTopBalances,
+  updateBalance,
+  isUserBlacklisted,
+  addUserToBlacklist,
+  removeUserFromBlacklist,
+  getSettingState,
+  storeConversationMemory,
+  getRelevantMemories,
+  updateUserPreferences,
+  getUserContext,
+  updateNegativeBehavior,
+  decayNegativeScore,
+  analyzeHostileBehavior,
+  getAllUserRelationships,
+  ensureUserPreferencesTable,
+  // NEW EXPORTS:
+  analyzeComprehensiveSentiment,
+  updateEnhancedRelationship,
+  getEnhancedUserContext,
 };

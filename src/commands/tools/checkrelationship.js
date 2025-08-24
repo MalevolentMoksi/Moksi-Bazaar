@@ -1,7 +1,7 @@
 // src/commands/tools/checkrelationship.js
 
 const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
-const { getUserContext } = require('../../utils/db.js');
+const { getEnhancedUserContext } = require('../../utils/db.js');
 
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
@@ -17,8 +17,8 @@ const GOAT_EMOJIS = {
     goat_sleep: '<a:goat_sleep:1395450280161710262>'
 };
 
-// Generate relationship responses based on attitude level
-function getRelationshipResponse(attitudeLevel, displayName, negativeScore, hostileCount, isSpecialUser) {
+// Generate relationship responses based on NEW attitude levels
+function getRelationshipResponse(attitudeLevel, displayName, friendshipLevel, connectionStrength, isSpecialUser) {
     const name = displayName || 'that user';
     
     // Special user always gets favorable treatment
@@ -34,92 +34,169 @@ function getRelationshipResponse(attitudeLevel, displayName, negativeScore, host
             emoji: Math.random() > 0.5 ? GOAT_EMOJIS.goat_smile : GOAT_EMOJIS.goat_pet
         };
     }
-    
+
     switch (attitudeLevel) {
         case 'hostile':
             const hostileResponses = [
                 `i fucking hate ${name} and everything they do`,
                 `${name} can go fuck themselves honestly`,
                 `${name} is absolute trash, worst person i've dealt with`,
-                `${name} makes me want to delete myself`,
-                `i have zero patience left for ${name}'s bullshit`
+                `${name} makes me want to delete myself`
             ];
             return {
                 message: hostileResponses[Math.floor(Math.random() * hostileResponses.length)],
                 emoji: Math.random() > 0.7 ? GOAT_EMOJIS.goat_puke : GOAT_EMOJIS.goat_scream
             };
-            
+
         case 'harsh':
             const harshResponses = [
                 `${name} is on thin ice with me, seriously`,
                 `${name} pisses me off more often than not`,
-                `i don't have much patience for ${name} anymore`,
-                `${name} has been a pain in the ass lately`,
-                `${name} needs to get their act together`
+                `i don't have much patience for ${name} anymore`
             ];
             return {
                 message: harshResponses[Math.floor(Math.random() * harshResponses.length)],
                 emoji: Math.random() > 0.6 ? GOAT_EMOJIS.goat_hurt : GOAT_EMOJIS.goat_exhausted
             };
-            
+
         case 'wary':
             const waryResponses = [
                 `${name} has been sketchy before, keeping an eye on them`,
                 `i'm cautious around ${name} after last time`,
-                `${name} is... questionable. not sure about them`,
-                `${name} gives me weird vibes sometimes`,
-                `i don't fully trust ${name} yet`
+                `${name} gives me weird vibes sometimes`
             ];
             return {
                 message: waryResponses[Math.floor(Math.random() * waryResponses.length)],
                 emoji: Math.random() > 0.5 ? GOAT_EMOJIS.goat_meditate : GOAT_EMOJIS.goat_sleep
             };
-            
+
         case 'cautious':
             const cautiousResponses = [
                 `${name} is alright i guess, nothing special`,
                 `${name} seems fine, haven't had major issues`,
-                `${name} is decent enough, no real problems`,
-                `${name} is okay, could be worse`,
                 `${name} doesn't annoy me too much`
             ];
             return {
                 message: cautiousResponses[Math.floor(Math.random() * cautiousResponses.length)],
                 emoji: Math.random() > 0.7 ? GOAT_EMOJIS.goat_small_bleat : ''
             };
-            
+
+        // NEW POSITIVE LEVELS
+        case 'devoted':
+            const devotedResponses = [
+                `${name} is literally my favorite person ever, i adore them`,
+                `${name} is perfect and i would do anything for them`,
+                `${name} means everything to me, absolute soulmate`,
+                `i love ${name} more than anything, they're incredible`
+            ];
+            return {
+                message: devotedResponses[Math.floor(Math.random() * devotedResponses.length)],
+                emoji: GOAT_EMOJIS.goat_pet
+            };
+
+        case 'adoring':
+            const adoringResponses = [
+                `${name} is my best friend and i absolutely love them`,
+                `${name} is amazing, one of my favorite people`,
+                `${name} makes me so happy, they're the best`
+            ];
+            return {
+                message: adoringResponses[Math.floor(Math.random() * adoringResponses.length)],
+                emoji: Math.random() > 0.3 ? GOAT_EMOJIS.goat_smile : GOAT_EMOJIS.goat_pet
+            };
+
+        case 'loving':
+            const lovingResponses = [
+                `${name} is such a close friend, i really care about them`,
+                `${name} is wonderful, genuinely love having them around`,
+                `${name} brings me joy, they're really special`
+            ];
+            return {
+                message: lovingResponses[Math.floor(Math.random() * lovingResponses.length)],
+                emoji: GOAT_EMOJIS.goat_smile
+            };
+
+        case 'affectionate':
+            const affectionateResponses = [
+                `${name} is a dear friend, really fond of them`,
+                `${name} is sweet, always enjoy talking to them`,
+                `${name} is lovely, they make conversations better`
+            ];
+            return {
+                message: affectionateResponses[Math.floor(Math.random() * affectionateResponses.length)],
+                emoji: Math.random() > 0.4 ? GOAT_EMOJIS.goat_smile : GOAT_EMOJIS.goat_boogie
+            };
+
+        case 'warm':
+            const warmResponses = [
+                `${name} is a good friend, i like them a lot`,
+                `${name} is really cool, enjoy having them around`,
+                `${name} is solid, they're good people`
+            ];
+            return {
+                message: warmResponses[Math.floor(Math.random() * warmResponses.length)],
+                emoji: Math.random() > 0.5 ? GOAT_EMOJIS.goat_smile : GOAT_EMOJIS.goat_boogie
+            };
+
+        case 'fond':
+            const fondResponses = [
+                `${name} is a friend, i like them`,
+                `${name} is nice, no complaints about them`,
+                `${name} is cool, they're alright with me`
+            ];
+            return {
+                message: fondResponses[Math.floor(Math.random() * fondResponses.length)],
+                emoji: Math.random() > 0.6 ? GOAT_EMOJIS.goat_smile : ''
+            };
+
         case 'friendly':
             const friendlyResponses = [
-                `${name} is actually pretty cool`,
-                `i like ${name}, they're good people`,
-                `${name} is solid, no complaints`,
-                `${name} gets it, they're alright with me`,
-                `${name} is one of the decent ones`
+                `${name} is pretty cool, they're a buddy`,
+                `${name} is friendly, i like talking to them`,
+                `${name} is decent, they're growing on me`
             ];
             return {
                 message: friendlyResponses[Math.floor(Math.random() * friendlyResponses.length)],
-                emoji: Math.random() > 0.6 ? GOAT_EMOJIS.goat_smile : GOAT_EMOJIS.goat_boogie
+                emoji: Math.random() > 0.6 ? GOAT_EMOJIS.goat_smile : ''
             };
-            
-        case 'familiar':
-            const familiarResponses = [
-                `${name} and i go way back, they're solid`,
-                `${name} is a regular, i respect them`,
-                `${name} has been cool for ages, love having them around`,
-                `${name} is practically family at this point`,
-                `${name} is one of my favorites, honestly`
+
+        case 'welcoming':
+            const welcomingResponses = [
+                `${name} seems nice, i like them so far`,
+                `${name} is pleasant, good vibes from them`,
+                `${name} is friendly, they seem cool`
             ];
             return {
-                message: familiarResponses[Math.floor(Math.random() * familiarResponses.length)],
-                emoji: Math.random() > 0.5 ? GOAT_EMOJIS.goat_pet : GOAT_EMOJIS.goat_smile
+                message: welcomingResponses[Math.floor(Math.random() * welcomingResponses.length)],
+                emoji: Math.random() > 0.7 ? GOAT_EMOJIS.goat_small_bleat : ''
             };
-            
+
+        case 'approachable':
+            const approachableResponses = [
+                `${name} has been nice, no issues with them`,
+                `${name} is okay, they seem pleasant enough`,
+                `${name} is decent, haven't had problems`
+            ];
+            return {
+                message: approachableResponses[Math.floor(Math.random() * approachableResponses.length)],
+                emoji: ''
+            };
+
+        case 'polite':
+            const politeResponses = [
+                `${name} seems alright, nothing bad to say`,
+                `${name} is fine, they're polite enough`,
+                `${name} is okay, no strong opinion yet`
+            ];
+            return {
+                message: politeResponses[Math.floor(Math.random() * politeResponses.length)],
+                emoji: ''
+            };
+
         default: // neutral
             const neutralResponses = [
                 `${name} is fine i guess, nothing notable`,
                 `${name} exists, that's about it`,
-                `${name} is there, haven't really formed an opinion`,
-                `${name} is just another person to me`,
                 `${name} is neutral, no strong feelings either way`
             ];
             return {
@@ -129,25 +206,28 @@ function getRelationshipResponse(attitudeLevel, displayName, negativeScore, host
     }
 }
 
-// Format the detailed stats
+// Format the detailed stats with NEW metrics
 function formatDetailedStats(userContext, targetUser) {
     const stats = [];
     
-    stats.push(`**Relationship Level:** ${userContext.attitudeLevel}`);
+    stats.push(`**Relationship Level:** ${userContext.attitudeLevel} (Level ${userContext.friendshipLevel})`);
     stats.push(`**Interactions:** ${userContext.interactionCount}`);
-    stats.push(`**Negative Score:** ${userContext.negativeScore.toFixed(2)}/1.00`);
-    stats.push(`**Hostile Incidents:** ${userContext.hostileCount}`);
+    stats.push(`**Connection Strength:** ${(userContext.connectionStrength * 100).toFixed(0)}%`);
     
-    if (userContext.lastNegativeInteraction) {
-        const lastIncident = new Date(userContext.lastNegativeInteraction);
-        const timeSince = Math.floor((Date.now() - lastIncident.getTime()) / (1000 * 60 * 60 * 24));
-        stats.push(`**Last Incident:** ${timeSince} days ago`);
+    if (userContext.relationshipStats) {
+        const rs = userContext.relationshipStats;
+        stats.push(`**Warmth:** ${(rs.warmth * 100).toFixed(0)}%`);
+        stats.push(`**Trust:** ${(rs.trust * 100).toFixed(0)}%`);
+        stats.push(`**Comfort:** ${(rs.comfort * 100).toFixed(0)}%`);
+        
+        if (rs.positivityRatio > 0) {
+            stats.push(`**Positive Ratio:** ${(rs.positivityRatio * 100).toFixed(0)}%`);
+        }
     }
     
-    if (userContext.recentTopics && userContext.recentTopics.length > 0) {
-        stats.push(`**Recent Topics:** ${userContext.recentTopics.join(', ')}`);
-    }
-    
+    stats.push(`**Negative Score:** ${userContext.negativeScore.toFixed(2)}/2.00`);
+    stats.push(`**Positive Score:** ${userContext.positiveScore.toFixed(2)}/2.00`);
+
     return stats.join('\n');
 }
 
@@ -167,7 +247,7 @@ module.exports = {
                 .setDescription('Show detailed stats instead of just the relationship message')
                 .setRequired(false)
         )
-        .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages), // Restrict to mods
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 
     async execute(interaction) {
         await interaction.deferReply({});
@@ -176,59 +256,56 @@ module.exports = {
             const targetUser = interaction.options.getUser('user');
             const showDetailed = interaction.options.getBoolean('detailed') || false;
             const isSpecialUser = targetUser.id === "619637817294848012";
-            
-            // Get user context from database
-            const userContext = await getUserContext(targetUser.id);
-            
+
+            // Get ENHANCED user context from database
+            const userContext = await getEnhancedUserContext(targetUser.id);
+
             if (showDetailed) {
                 // Show detailed statistics
                 const detailedStats = formatDetailedStats(userContext, targetUser);
                 const relationship = getRelationshipResponse(
-                    userContext.attitudeLevel, 
+                    userContext.attitudeLevel,
                     targetUser.displayName || targetUser.username,
-                    userContext.negativeScore,
-                    userContext.hostileCount,
+                    userContext.friendshipLevel,
+                    userContext.connectionStrength,
                     isSpecialUser
                 );
-                
+
                 const embed = {
                     title: `Relationship with ${targetUser.displayName || targetUser.username}`,
                     description: `*"${relationship.message}"*`,
-                    color: getColorForAttitude(userContext.attitudeLevel),
-                    fields: [
-                        {
-                            name: 'Statistics',
-                            value: detailedStats,
-                            inline: false
-                        }
-                    ],
+                    color: getColorForAttitude(userContext.attitudeLevel, userContext.friendshipLevel),
+                    fields: [{
+                        name: 'Statistics',
+                        value: detailedStats,
+                        inline: false
+                    }],
                     footer: {
-                        text: 'Cooler Moksi\'s Relationship Manager',
+                        text: 'Cooler Moksi\'s Enhanced Relationship Manager',
                         icon_url: interaction.client.user.avatarURL()
                     },
                     timestamp: new Date()
                 };
-                
+
                 await interaction.editReply({ embeds: [embed] });
-                
             } else {
                 // Show just the personality response
                 const relationship = getRelationshipResponse(
-                    userContext.attitudeLevel, 
+                    userContext.attitudeLevel,
                     targetUser.displayName || targetUser.username,
-                    userContext.negativeScore,
-                    userContext.hostileCount,
+                    userContext.friendshipLevel,
+                    userContext.connectionStrength,
                     isSpecialUser
                 );
-                
+
                 let response = relationship.message;
                 if (relationship.emoji) {
                     response += ` ${relationship.emoji}`;
                 }
-                
+
                 await interaction.editReply(response);
             }
-            
+
         } catch (error) {
             console.error('Error in checkrelation command:', error);
             await interaction.editReply('Error checking user relationship: ' + error.message);
@@ -236,15 +313,23 @@ module.exports = {
     },
 };
 
-// Helper function to get colors for different attitude levels
-function getColorForAttitude(attitudeLevel) {
+// Helper function to get colors for different attitude levels with MORE LEVELS
+function getColorForAttitude(attitudeLevel, friendshipLevel) {
     switch (attitudeLevel) {
-        case 'hostile': return 0xFF0000;    // Red
-        case 'harsh': return 0xFF6600;     // Orange-red
-        case 'wary': return 0xFFAA00;      // Orange
-        case 'cautious': return 0xFFFF00;  // Yellow
-        case 'friendly': return 0x66FF66;  // Light green
-        case 'familiar': return 0x00FF00;  // Green
-        default: return 0x888888;          // Gray (neutral)
+        case 'hostile': return 0xFF0000; // Bright red
+        case 'harsh': return 0xFF4400; // Red-orange  
+        case 'wary': return 0xFF8800; // Orange
+        case 'cautious': return 0xFFCC00; // Yellow-orange
+        case 'devoted': return 0xFF1493; // Deep pink (love)
+        case 'adoring': return 0x9932CC; // Purple (adoration)
+        case 'loving': return 0x00CED1; // Turquoise (caring)
+        case 'affectionate': return 0x32CD32; // Lime green (warmth)
+        case 'warm': return 0x00FF7F; // Spring green (friendship)
+        case 'fond': return 0x90EE90; // Light green (liking)
+        case 'friendly': return 0x87CEEB; // Sky blue (friendly)
+        case 'welcoming': return 0xDDA0DD; // Plum (welcoming)  
+        case 'approachable': return 0xF0E68C; // Khaki (approachable)
+        case 'polite': return 0xD3D3D3; // Light gray (polite)
+        default: return 0x888888; // Gray (neutral)
     }
 }

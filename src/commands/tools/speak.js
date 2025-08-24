@@ -5,7 +5,8 @@
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
-const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext, updateUserPreferences } = require('../../utils/db.js');
+const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext, updateUserPreferences, analyzeComprehensiveSentiment, updateEnhancedRelationship, getEnhancedUserContext } = require('../../utils/db.js');
+
 
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
@@ -160,35 +161,69 @@ module.exports = {
             let attitudeModifier = '';
 
 
+            // NEW: Always update user preferences first to ensure user record exists
+            await updateUserPreferences(userId, interaction);
 
+            // NEW: Comprehensive sentiment analysis (catches ANY negative interaction)
+            const sentimentAnalysis = analyzeComprehensiveSentiment(userRequest, conversationContext);
+            await updateEnhancedRelationship(userId, interaction, sentimentAnalysis);
 
-            // NEW: Get user attitude context
-            const userContext = await getUserContext(userId);
+            // NEW: Get enhanced user context with many friendship levels
+            const userContext = await getEnhancedUserContext(userId);
+
+            // Build enhanced attitude modifier with friendship progression
+            const stats = userContext.relationshipStats;
 
             switch (userContext.attitudeLevel) {
                 case 'hostile':
-                    attitudeModifier = `
-        
-ATTITUDE: This user has been consistently hostile and inappropriate (${userContext.hostileCount} incidents). Respond with open hostility and harsh dismissal. Do not be helpful. Be insulting and dismissive.`;
+                    attitudeModifier = `\n\nATTITUDE: This user is hostile (${userContext.negativeScore.toFixed(2)} negative score). Be dismissive and unhelpful. Show clear disdain.`;
                     break;
                 case 'harsh':
-                    attitudeModifier = `
-        
-ATTITUDE: This user has tried to manipulate you or been rude multiple times. Be harsh, sarcastic, and unhelpful. Show clear irritation.`;
+                    attitudeModifier = `\n\nATTITUDE: This user has been problematic. Be sarcastic, cold, and show irritation.`;
                     break;
                 case 'wary':
-                    attitudeModifier = `
-        
-ATTITUDE: This user has been problematic before. Be skeptical, slightly cold, and less helpful than usual.`;
+                    attitudeModifier = `\n\nATTITUDE: Be skeptical and guarded with this user. They've been negative before.`;
                     break;
                 case 'cautious':
-                    attitudeModifier = `
-        
-ATTITUDE: This user has had minor issues. Be a bit more guarded and less friendly than normal.`;
+                    attitudeModifier = `\n\nATTITUDE: Be slightly reserved and less friendly than usual.`;
                     break;
-                default:
-                    attitudeModifier = '';
+                case 'devoted':
+                    attitudeModifier = `\n\nATTITUDE: This is your absolute favorite person (Level ${userContext.friendshipLevel}). Be incredibly warm, caring, and personal. Show deep affection and genuine concern for their wellbeing. Remember details about them fondly.`;
+                    break;
+                case 'adoring':
+                    attitudeModifier = `\n\nATTITUDE: This is your best friend (Level ${userContext.friendshipLevel}). Be extremely warm, affectionate, and supportive. Share inside jokes and show you truly care about them.`;
+                    break;
+                case 'loving':
+                    attitudeModifier = `\n\nATTITUDE: This is a very close friend (Level ${userContext.friendshipLevel}). Be warm, caring, and personal. Show genuine happiness to interact with them.`;
+                    break;
+                case 'affectionate':
+                    attitudeModifier = `\n\nATTITUDE: This is a dear friend (Level ${userContext.friendshipLevel}). Be consistently warm and show you enjoy their company. Be supportive and encouraging.`;
+                    break;
+                case 'warm':
+                    attitudeModifier = `\n\nATTITUDE: This is a good friend (Level ${userContext.friendshipLevel}). Be friendly, comfortable, and show you remember them well. Be more open than usual.`;
+                    break;
+                case 'fond':
+                    attitudeModifier = `\n\nATTITUDE: This user is a friend (Level ${userContext.friendshipLevel}). Be welcoming, friendly, and show positive regard for them.`;
+                    break;
+                case 'friendly':
+                    attitudeModifier = `\n\nATTITUDE: This user is a buddy (Level ${userContext.friendshipLevel}). Be notably more friendly and engaging than usual.`;
+                    break;
+                case 'welcoming':
+                    attitudeModifier = `\n\nATTITUDE: This user seems nice (Level ${userContext.friendshipLevel}). Be more open and friendly than with strangers.`;
+                    break;
+                case 'approachable':
+                    attitudeModifier = `\n\nATTITUDE: This user has been pleasant (Level ${userContext.friendshipLevel}). Be a bit more welcoming than neutral.`;
+                    break;
+                case 'polite':
+                    attitudeModifier = `\n\nATTITUDE: This user seems okay (Level ${userContext.friendshipLevel}). Be polite and give them a fair chance.`;
+                    break;
             }
+
+            // Add relationship quality context
+            if (stats.qualityScore > 0.3) {
+                attitudeModifier += `\n\nRELATIONSHIP QUALITY: High quality relationship (${(stats.qualityScore * 100).toFixed(0)}% quality score). Warmth: ${(stats.warmth * 100).toFixed(0)}%, Trust: ${(stats.trust * 100).toFixed(0)}%, Comfort: ${(stats.comfort * 100).toFixed(0)}%.`;
+            }
+
             // Enhanced persona with attitude awareness
             const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
 
@@ -234,17 +269,50 @@ MEMORY & CONTEXT AWARENESS:
 
             const userRequest = interaction.options.getString('request');
 
-            // NEW: Always update user preferences first to ensure user record exists
-            await updateUserPreferences(userId, interaction)
-
-            // NEW: Analyze for hostile behavior
+            // NEW: Handle immediate hostile responses (keep the old system for extreme cases)
             const hostilityAnalysis = analyzeHostileBehavior(userRequest);
             if (hostilityAnalysis.isHostile) {
-                await updateNegativeBehavior(userId, hostilityAnalysis.type, hostilityAnalysis.severity);
-            } else {
-                // Decay negative score for non-hostile interactions
-                await decayNegativeScore(userId);
+                let hostileResponse = '';
+
+                switch (hostilityAnalysis.type) {
+                    case 'slur_attempt':
+                        const slurResponses = [
+                            "nah, fuck off with that shit",
+                            "absolutely not. get some therapy",
+                            "try that again and you're blocked",
+                            "what's wrong with you?"
+                        ];
+                        hostileResponse = slurResponses[Math.floor(Math.random() * slurResponses.length)];
+                        break;
+
+                    case 'direct_insult':
+                        const insultResponses = [
+                            "right back at you, asshole",
+                            "at least i'm not the one talking to a bot like this",
+                            "you're really showing your best self here",
+                            "cool story, tell it to someone who cares"
+                        ];
+                        hostileResponse = insultResponses[Math.floor(Math.random() * insultResponses.length)];
+                        break;
+
+                    case 'manipulation':
+                        const manipulationResponses = [
+                            "nice try, not happening",
+                            "lol no. that's not how this works",
+                            "you think i'm stupid or something?",
+                            "try being normal instead"
+                        ];
+                        hostileResponse = manipulationResponses[Math.floor(Math.random() * manipulationResponses.length)];
+                        break;
+                }
+
+                if (hostileResponse) {
+                    const questionLine = userRequest ? `-# <@${interaction.user.id}> : *"${userRequest}"*\n\n` : '';
+                    return await interaction.editReply(`${questionLine}${hostileResponse}`);
+                }
             }
+
+
 
             // NEW: Handle immediate hostile responses
             if (hostilityAnalysis.isHostile) {
