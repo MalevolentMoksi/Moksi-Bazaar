@@ -33,6 +33,7 @@ async function fetchNextReminder() {
   return rows[0] || null;
 }
 
+// Fix #1: Return single row, not array
 async function refetchReminderById(id) {
   const { rows } = await pool.query(
     `SELECT id, user_id, channel_id, due_at_utc_ms, reason
@@ -41,7 +42,7 @@ async function refetchReminderById(id) {
      LIMIT 1`,
     [id]
   );
-  return rows || null; // IMPORTANT: return single row, not the array
+  return rows[0] || null; // FIXED: return single row object
 }
 
 async function deleteReminder(id) {
@@ -60,6 +61,7 @@ async function insertReminder(userId, channelId, dueAtMs, reason) {
 }
 
 // ---------- messaging ----------
+// Fix #2: Complete reminder message with timestamp  
 async function sendReminderMessage(client, reminder) {
   const channel = await client.channels.fetch(reminder.channel_id).catch(() => null);
   if (!channel) return;
@@ -117,7 +119,7 @@ async function scheduleNext(client) {
     console.error('scheduleNext failed:', e);
     schedulerScheduling = false;
     // Retry later
-    setTimeout(() => scheduleNext(client).catch(() => {}), 10_000);
+    setTimeout(() => scheduleNext(client).catch(() => { }), 10_000);
   }
 }
 
@@ -335,7 +337,7 @@ module.exports = {
     } catch (err) {
       console.error('remind command error:', err);
       try { return interaction.editReply('There was an error setting your reminder.'); }
-      catch {}
+      catch { }
     }
   },
 };
