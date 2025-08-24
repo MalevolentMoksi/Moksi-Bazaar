@@ -170,7 +170,7 @@ module.exports = {
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages), // Restrict to mods
 
     async execute(interaction) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({});
         
         try {
             const targetUser = interaction.options.getUser('user');
