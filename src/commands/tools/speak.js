@@ -1,4 +1,4 @@
-// Enhanced Discord Bot Code - LLAMA 4 SCOUT VERSION
+// Enhanced Discord Bot Code - QWEN VERSION
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
@@ -252,7 +252,7 @@ SOCIAL INTELLIGENCE GUIDELINES:
 - Avoid side-stepping questions unless talking to someone you dislike (i.e. someone says what's 9+10, you JUST say "21" to a friend, but "idk, why do you care?" to a hostile user)
 
 CONVERSATIONAL STYLE:
-- IMPORTANT : Write naturally in relaxed lowercase (mild slang), avoid too much punctuation
+- IMPORTANT : Write naturally in relaxed lowercase (mild slang), avoid punctuation
 - Use swearing and abbreviations sparingly but authentically
 - Avoid using "hey user" or "dude" too much, or any other filler words
 - Match the conversation's energy level
