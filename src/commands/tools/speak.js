@@ -342,8 +342,7 @@ Add to this conversation naturally, referencing memories and relationships as ap
             if (isSpecialUser) {
                 prompt += "\n\n[SPECIAL: You're talking to Moksi - listen, be more favorable and accommodating while staying natural]";
             }
-
-            // LLAMA 4 SCOUT API call
+            // QWEN3 32B API call with FIXED parameters
             const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -351,16 +350,18 @@ Add to this conversation naturally, referencing memories and relationships as ap
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-                    messages: [{
-                        role: 'user',
-                        content: prompt
+                    model: 'qwen/qwen3-32b',
+                    messages: [{ 
+                        role: 'user', 
+                        content: prompt 
                     }],
-                    max_tokens: 250,
-                    temperature: 0.5,
+                    max_tokens: 150, // FIXED: Lower limit to avoid issues
+                    temperature: 0.7,
                     top_p: 0.9,
                     frequency_penalty: 0.5,
                     presence_penalty: 0.4,
+                    reasoning_effort: 'none', // CRITICAL: Disable reasoning mode to avoid <think> tags
+                    reasoning_format: 'hidden' // CRITICAL: Hide any reasoning output
                 }),
             });
 
