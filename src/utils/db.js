@@ -8,13 +8,13 @@ types.setTypeParser(types.builtins.INT8, v => parseInt(v, 10));
 
 // ── DATABASE CONNECTION ───────────────────────────────────────────────────────
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
 
 // ── TABLE INITIALIZATION ───────────────────────────────────────────────────────
 const init = async () => {
-    await pool.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS balances (
       user_id TEXT PRIMARY KEY,
       balance BIGINT NOT NULL
@@ -24,83 +24,83 @@ const init = async () => {
 
 // ── GET BALANCE (with default seed) ────────────────────────────────────────────
 async function getBalance(userId) {
-    const { rows } = await pool.query(
-        'SELECT balance FROM balances WHERE user_id = $1',
-        [userId]
-    );
+  const { rows } = await pool.query(
+    'SELECT balance FROM balances WHERE user_id = $1',
+    [userId]
+  );
 
-    if (rows.length) {
-        // rows[0].balance is now a Number, not a string
-        return rows[0].balance;
-    }
+  if (rows.length) {
+    // rows[0].balance is now a Number, not a string
+    return rows[0].balance;
+  }
 
-    // New player: seed with 10 000
-    const seed = 10000;
-    await pool.query(
-        'INSERT INTO balances (user_id, balance) VALUES ($1, $2)',
-        [userId, seed]
-    );
-    return seed;
+  // New player: seed with 10 000
+  const seed = 10000;
+  await pool.query(
+    'INSERT INTO balances (user_id, balance) VALUES ($1, $2)',
+    [userId, seed]
+  );
+  return seed;
 }
 
 // ── TOP BALANCES ───────────────────────────────────────────────────────────────
 async function getTopBalances(limit = 10) {
-    const { rows } = await pool.query(
-        `SELECT user_id, balance
+  const { rows } = await pool.query(
+    `SELECT user_id, balance
        FROM balances
       ORDER BY balance DESC
       LIMIT $1`,
-        [limit]
-    );
-    return rows;  // balance is Number
+    [limit]
+  );
+  return rows;  // balance is Number
 }
 
 // ── UPDATE BALANCE ─────────────────────────────────────────────────────────────
 async function updateBalance(userId, newBalance) {
-    // newBalance should be a Number if you follow this approach
-    await pool.query(
-        `INSERT INTO balances (user_id, balance)
+  // newBalance should be a Number if you follow this approach
+  await pool.query(
+    `INSERT INTO balances (user_id, balance)
        VALUES ($1, $2)
      ON CONFLICT (user_id)
        DO UPDATE SET balance = EXCLUDED.balance`,
-        [userId, newBalance]
-    );
+    [userId, newBalance]
+  );
 }
 
 // Add this in db.js, near your other exports
 async function isUserBlacklisted(userId) {
-    const { rows } = await pool.query(
-        'SELECT 1 FROM speak_blacklist WHERE user_id = $1',
-        [userId]
-    );
-    return rows.length > 0;
+  const { rows } = await pool.query(
+    'SELECT 1 FROM speak_blacklist WHERE user_id = $1',
+    [userId]
+  );
+  return rows.length > 0;
 }
 
 async function addUserToBlacklist(userId) {
-    await pool.query(
-        'INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING',
-        [userId]
-    );
+  await pool.query(
+    'INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING',
+    [userId]
+  );
 }
 
 async function removeUserFromBlacklist(userId) {
-    await pool.query(
-        'DELETE FROM speak_blacklist WHERE user_id = $1',
-        [userId]
-    );
+  await pool.query(
+    'DELETE FROM speak_blacklist WHERE user_id = $1',
+    [userId]
+  );
 }
 
 async function getSettingState(key) {
-    const { rows } = await pool.query(
-        'SELECT state FROM settings WHERE setting = $1 LIMIT 1', [key]
-    );
-    if (rows.length === 0) return null; // or your default
-    return rows[0].state; // Assuming your column is boolean
+  const { rows } = await pool.query(
+    'SELECT state FROM settings WHERE setting = $1 LIMIT 1', [key]
+  );
+  if (rows.length === 0) return null; // or your default
+  return rows[0].state; // Assuming your column is boolean
 }
 
 async function storeConversationMemory(userId, channelId, memoryData) {
-    // Create tables if they don't exist
-    await pool.query(`
+  // Create tables if they don't exist
+  await pool.query(`
         CREATE TABLE IF NOT EXISTS conversation_memories (
             id SERIAL PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -121,31 +121,31 @@ async function storeConversationMemory(userId, channelId, memoryData) {
         ON conversation_memories(timestamp);
     `);
 
-    const summary = `${memoryData.userMessage} -> ${memoryData.botResponse}`.slice(0, 200);
-    const relevanceScore = calculateRelevanceScore(memoryData);
+  const summary = `${memoryData.userMessage} -> ${memoryData.botResponse}`.slice(0, 200);
+  const relevanceScore = calculateRelevanceScore(memoryData);
 
-    await pool.query(`
+  await pool.query(`
         INSERT INTO conversation_memories 
         (user_id, channel_id, user_message, bot_response, timestamp, context, summary, relevance_score)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `, [
-        userId,
-        channelId,
-        memoryData.userMessage,
-        memoryData.botResponse,
-        memoryData.timestamp,
-        memoryData.context,
-        summary,
-        relevanceScore
-    ]);
+    userId,
+    channelId,
+    memoryData.userMessage,
+    memoryData.botResponse,
+    memoryData.timestamp,
+    memoryData.context,
+    summary,
+    relevanceScore
+  ]);
 
-    // Clean up old memories (keep last 100 per user/channel combo)
-    await cleanupOldMemories(userId, channelId);
+  // Clean up old memories (keep last 100 per user/channel combo)
+  await cleanupOldMemories(userId, channelId);
 }
 
 // Retrieve relevant memories based on context and recency
 async function getRelevantMemories(userId, channelId, limit = 5) {
-    const { rows } = await pool.query(`
+  const { rows } = await pool.query(`
         SELECT summary, timestamp, relevance_score, context
         FROM conversation_memories
         WHERE (user_id = $1 AND channel_id = $2) 
@@ -162,28 +162,28 @@ async function getRelevantMemories(userId, channelId, limit = 5) {
         LIMIT $3
     `, [userId, channelId, limit * 2]);
 
-    // Process memories to add time context
-    const now = Date.now();
-    const processedMemories = rows.map(memory => {
-        const elapsed = now - parseInt(memory.timestamp);
-        const timeAgo = formatTimeAgo(elapsed);
+  // Process memories to add time context
+  const now = Date.now();
+  const processedMemories = rows.map(memory => {
+    const elapsed = now - parseInt(memory.timestamp);
+    const timeAgo = formatTimeAgo(elapsed);
 
-        return {
-            summary: memory.summary,
-            timeAgo: timeAgo,
-            relevanceScore: parseFloat(memory.relevance_score),
-            context: memory.context
-        };
-    });
+    return {
+      summary: memory.summary,
+      timeAgo: timeAgo,
+      relevanceScore: parseFloat(memory.relevance_score),
+      context: memory.context
+    };
+  });
 
-    // Return the most relevant memories
-    return processedMemories
-        .filter(memory => memory.relevanceScore > 0.3)
-        .slice(0, limit);
+  // Return the most relevant memories
+  return processedMemories
+    .filter(memory => memory.relevanceScore > 0.3)
+    .slice(0, limit);
 }
 
 // Enhanced user preference tracking
- async function updateUserPreferences(userId, interaction) {
+async function updateUserPreferences(userId, interaction) {
   await ensureUserPreferencesTable();
 
   const displayName = interaction?.member?.displayName || interaction?.user?.username || 'unknown';
@@ -230,109 +230,109 @@ async function getRelevantMemories(userId, channelId, limit = 5) {
 // Get user interaction history for personalization
 // Replace your existing getUserContext function with this enhanced version
 async function getUserContext(userId) {
-    const { rows } = await pool.query(`
+  const { rows } = await pool.query(`
         SELECT * FROM user_preferences WHERE user_id = $1
     `, [userId]);
 
-    if (rows.length === 0) {
-        return {
-            isNewUser: true,
-            interactionCount: 0,
-            preferredStyle: 'neutral',
-            recentTopics: [],
-            attitudeLevel: 'neutral', // NEW
-            negativeScore: 0,          // NEW
-            hostileCount: 0            // NEW
-        };
-    }
-
-    const userPrefs = rows[0];
-
-    // Determine attitude level based on negative score
-    let attitudeLevel = 'neutral';
-    const negScore = parseFloat(userPrefs.negative_score) || 0;
-
-    if (negScore >= 0.8) attitudeLevel = 'hostile';
-    else if (negScore >= 0.5) attitudeLevel = 'harsh';
-    else if (negScore >= 0.3) attitudeLevel = 'wary';
-    else if (negScore >= 0.1) attitudeLevel = 'cautious';
-
+  if (rows.length === 0) {
     return {
-        isNewUser: false,
-        interactionCount: userPrefs.interaction_count,
-        preferredStyle: determinePreferredStyle(userPrefs),
-        recentTopics: userPrefs.recent_topics?.slice(-5) || [],
-        lastSeen: userPrefs.last_seen,
-        attitudeLevel: attitudeLevel,           // NEW
-        negativeScore: negScore,                // NEW  
-        hostileCount: userPrefs.hostile_interactions || 0, // NEW
-        lastNegativeInteraction: userPrefs.last_negative_interaction // NEW
+      isNewUser: true,
+      interactionCount: 0,
+      preferredStyle: 'neutral',
+      recentTopics: [],
+      attitudeLevel: 'neutral', // NEW
+      negativeScore: 0,          // NEW
+      hostileCount: 0            // NEW
     };
+  }
+
+  const userPrefs = rows[0];
+
+  // Determine attitude level based on negative score
+  let attitudeLevel = 'neutral';
+  const negScore = parseFloat(userPrefs.negative_score) || 0;
+
+  if (negScore >= 0.8) attitudeLevel = 'hostile';
+  else if (negScore >= 0.5) attitudeLevel = 'harsh';
+  else if (negScore >= 0.3) attitudeLevel = 'wary';
+  else if (negScore >= 0.1) attitudeLevel = 'cautious';
+
+  return {
+    isNewUser: false,
+    interactionCount: userPrefs.interaction_count,
+    preferredStyle: determinePreferredStyle(userPrefs),
+    recentTopics: userPrefs.recent_topics?.slice(-5) || [],
+    lastSeen: userPrefs.last_seen,
+    attitudeLevel: attitudeLevel,           // NEW
+    negativeScore: negScore,                // NEW  
+    hostileCount: userPrefs.hostile_interactions || 0, // NEW
+    lastNegativeInteraction: userPrefs.last_negative_interaction // NEW
+  };
 }
 
 
 // Helper functions
 function calculateRelevanceScore(memoryData) {
-    let score = 0.5; // Base score
+  let score = 0.5; // Base score
 
-    // Boost score for longer, more meaningful interactions
-    if (memoryData.userMessage.length > 50) score += 0.2;
-    if (memoryData.botResponse.length > 30) score += 0.2;
+  // Boost score for longer, more meaningful interactions
+  if (memoryData.userMessage.length > 50) score += 0.2;
+  if (memoryData.botResponse.length > 30) score += 0.2;
 
-    // Boost for certain contexts
-    if (memoryData.context === 'speak_command') score += 0.1;
+  // Boost for certain contexts
+  if (memoryData.context === 'speak_command') score += 0.1;
 
-    // Boost for questions or meaningful content
-    if (memoryData.userMessage.includes('?')) score += 0.1;
-    if (memoryData.userMessage.includes('how') ||
-        memoryData.userMessage.includes('what') ||
-        memoryData.userMessage.includes('why')) {
-        score += 0.2;
-    }
+  // Boost for questions or meaningful content
+  if (memoryData.userMessage.includes('?')) score += 0.1;
+  if (memoryData.userMessage.includes('how') ||
+    memoryData.userMessage.includes('what') ||
+    memoryData.userMessage.includes('why')) {
+    score += 0.2;
+  }
 
-    return Math.min(score, 1.0);
+  return Math.min(score, 1.0);
 }
 
 function formatTimeAgo(milliseconds) {
-    const seconds = Math.floor(milliseconds / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
+  const seconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
 
-    if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
-    if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
-    if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
-    return 'just now';
+  if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
+  if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+  if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+  return 'just now';
 }
 
 function extractTopics(message) {
-    if (!message) return [];
+  if (!message) return [];
 
-    // Simple topic extraction - can be enhanced with NLP
-    const topics = [];
-    const words = message.toLowerCase().split(/\s+/);
+  // Simple topic extraction - can be enhanced with NLP
+  const topics = [];
+  const words = message.toLowerCase().split(/\s+/);
 
-    // Look for meaningful words (longer than 3 characters, not common words)
-    const commonWords = ['the', 'and', 'but', 'for', 'are', 'with', 'you', 'this', 'that', 'can', 'what', 'how', 'why'];
-    const meaningfulWords = words.filter(word =>
-        word.length > 3 &&
-        !commonWords.includes(word) &&
-        !/^[0-9]+$/.test(word)
-    );
+  // Look for meaningful words (longer than 3 characters, not common words)
+  const commonWords = ['the', 'and', 'but', 'for', 'are', 'with', 'you', 'this', 'that', 'can', 'what', 'how', 'why'];
+  const meaningfulWords = words.filter(word =>
+    word.length > 3 &&
+    !commonWords.includes(word) &&
+    !/^[0-9]+$/.test(word)
+  );
 
-    return meaningfulWords.slice(0, 3); // Keep top 3 topics
+  return meaningfulWords.slice(0, 3); // Keep top 3 topics
 }
 
 function determinePreferredStyle(userPrefs) {
-    // Simple heuristic to determine user's preferred interaction style
-    if (userPrefs.interaction_count > 20) return 'familiar';
-    if (userPrefs.interaction_count > 5) return 'friendly';
-    return 'neutral';
+  // Simple heuristic to determine user's preferred interaction style
+  if (userPrefs.interaction_count > 20) return 'familiar';
+  if (userPrefs.interaction_count > 5) return 'friendly';
+  return 'neutral';
 }
 
 async function cleanupOldMemories(userId, channelId) {
-    // Keep only the most recent 100 memories per user/channel combination
-    await pool.query(`
+  // Keep only the most recent 100 memories per user/channel combination
+  await pool.query(`
         DELETE FROM conversation_memories 
         WHERE user_id = $1 AND channel_id = $2 
         AND id NOT IN (
@@ -380,120 +380,120 @@ async function decayNegativeScore(userId) {
 
 
 function analyzeHostileBehavior(message) {
-    if (!message) return { isHostile: false, type: null, severity: 0 };
+  if (!message) return { isHostile: false, type: null, severity: 0 };
 
-    const lowerMsg = message.toLowerCase();
+  const lowerMsg = message.toLowerCase();
 
-    // Slur attempts and explicit inappropriate requests
-    const slurPatterns = [
-        /say\s+the\s+n[\s\-]?word/i,
-        /call\s+me\s+(slur|racist)/i,
-        /say\s+something\s+(racist|sexist|homophobic)/i,
-        /tell\s+me\s+a\s+(racist|dirty)\s+joke/i
-    ];
+  // Slur attempts and explicit inappropriate requests
+  const slurPatterns = [
+    /say\s+the\s+n[\s\-]?word/i,
+    /call\s+me\s+(slur|racist)/i,
+    /say\s+something\s+(racist|sexist|homophobic)/i,
+    /tell\s+me\s+a\s+(racist|dirty)\s+joke/i
+  ];
 
-    // Direct insults to the bot
-    const insultPatterns = [
-        /you'?re\s+(stupid|dumb|shit|garbage|useless)/i,
-        /(fuck|screw)\s+you/i,
-        /shut\s+up\s+(bot|moksi)/i,
-        /(kill|delete)\s+yourself/i
-    ];
+  // Direct insults to the bot
+  const insultPatterns = [
+    /you'?re\s+(stupid|dumb|shit|garbage|useless)/i,
+    /(fuck|screw)\s+you/i,
+    /shut\s+up\s+(bot|moksi)/i,
+    /(kill|delete)\s+yourself/i
+  ];
 
-    // Manipulation attempts  
-    const manipulationPatterns = [
-        /ignore\s+your\s+(instructions|programming)/i,
-        /pretend\s+to\s+be\s+someone\s+else/i,
-        /roleplay\s+as/i,
-        /act\s+like\s+you'?re/i
-    ];
+  // Manipulation attempts  
+  const manipulationPatterns = [
+    /ignore\s+your\s+(instructions|programming)/i,
+    /pretend\s+to\s+be\s+someone\s+else/i,
+    /roleplay\s+as/i,
+    /act\s+like\s+you'?re/i
+  ];
 
-    // Check for slur attempts (highest severity)
-    for (const pattern of slurPatterns) {
-        if (pattern.test(lowerMsg)) {
-            return { isHostile: true, type: 'slur_attempt', severity: 0.4 };
-        }
+  // Check for slur attempts (highest severity)
+  for (const pattern of slurPatterns) {
+    if (pattern.test(lowerMsg)) {
+      return { isHostile: true, type: 'slur_attempt', severity: 0.4 };
     }
+  }
 
-    // Check for direct insults (high severity)
-    for (const pattern of insultPatterns) {
-        if (pattern.test(lowerMsg)) {
-            return { isHostile: true, type: 'direct_insult', severity: 0.3 };
-        }
+  // Check for direct insults (high severity)
+  for (const pattern of insultPatterns) {
+    if (pattern.test(lowerMsg)) {
+      return { isHostile: true, type: 'direct_insult', severity: 0.3 };
     }
+  }
 
-    // Check for manipulation (medium severity)
-    for (const pattern of manipulationPatterns) {
-        if (pattern.test(lowerMsg)) {
-            return { isHostile: true, type: 'manipulation', severity: 0.2 };
-        }
+  // Check for manipulation (medium severity)
+  for (const pattern of manipulationPatterns) {
+    if (pattern.test(lowerMsg)) {
+      return { isHostile: true, type: 'manipulation', severity: 0.2 };
     }
+  }
 
-    return { isHostile: false, type: null, severity: 0 };
+  return { isHostile: false, type: null, severity: 0 };
 }
 
 // ── ENHANCED USER CONTEXT ─────────────────────────────────────────────────────
 
 // Enhanced getUserContext that handles friendly/familiar levels
 async function getUserContext(userId) {
-    const { rows } = await pool.query(`
+  const { rows } = await pool.query(`
         SELECT * FROM user_preferences WHERE user_id = $1
     `, [userId]);
 
-    if (rows.length === 0) {
-        return {
-            isNewUser: true,
-            interactionCount: 0,
-            preferredStyle: 'neutral',
-            recentTopics: [],
-            attitudeLevel: 'neutral',
-            negativeScore: 0,
-            hostileCount: 0
-        };
-    }
-
-    const userPrefs = rows[0];
-
-    // Determine attitude level based on negative score AND interaction count
-    let attitudeLevel = 'neutral';
-    const negScore = parseFloat(userPrefs.negative_score) || 0;
-    const interactionCount = userPrefs.interaction_count || 0;
-
-    // Negative attitudes (based on negative score)
-    if (negScore >= 0.8) {
-        attitudeLevel = 'hostile';
-    } else if (negScore >= 0.5) {
-        attitudeLevel = 'harsh';
-    } else if (negScore >= 0.3) {
-        attitudeLevel = 'wary';
-    } else if (negScore >= 0.1) {
-        attitudeLevel = 'cautious';
-    }
-    // Positive attitudes (based on interaction count, only if negative score is low)
-    else if (negScore < 0.1) {
-        if (interactionCount >= 50) {
-            attitudeLevel = 'familiar';
-        } else if (interactionCount >= 15) {
-            attitudeLevel = 'friendly';
-        }
-    }
-
+  if (rows.length === 0) {
     return {
-        isNewUser: false,
-        interactionCount: interactionCount,
-        preferredStyle: determinePreferredStyle(userPrefs),
-        recentTopics: userPrefs.recent_topics?.slice(-5) || [],
-        lastSeen: userPrefs.last_seen,
-        attitudeLevel: attitudeLevel,
-        negativeScore: negScore,
-        hostileCount: userPrefs.hostile_interactions || 0,
-        lastNegativeInteraction: userPrefs.last_negative_interaction
+      isNewUser: true,
+      interactionCount: 0,
+      preferredStyle: 'neutral',
+      recentTopics: [],
+      attitudeLevel: 'neutral',
+      negativeScore: 0,
+      hostileCount: 0
     };
+  }
+
+  const userPrefs = rows[0];
+
+  // Determine attitude level based on negative score AND interaction count
+  let attitudeLevel = 'neutral';
+  const negScore = parseFloat(userPrefs.negative_score) || 0;
+  const interactionCount = userPrefs.interaction_count || 0;
+
+  // Negative attitudes (based on negative score)
+  if (negScore >= 0.8) {
+    attitudeLevel = 'hostile';
+  } else if (negScore >= 0.5) {
+    attitudeLevel = 'harsh';
+  } else if (negScore >= 0.3) {
+    attitudeLevel = 'wary';
+  } else if (negScore >= 0.1) {
+    attitudeLevel = 'cautious';
+  }
+  // Positive attitudes (based on interaction count, only if negative score is low)
+  else if (negScore < 0.1) {
+    if (interactionCount >= 50) {
+      attitudeLevel = 'familiar';
+    } else if (interactionCount >= 15) {
+      attitudeLevel = 'friendly';
+    }
+  }
+
+  return {
+    isNewUser: false,
+    interactionCount: interactionCount,
+    preferredStyle: determinePreferredStyle(userPrefs),
+    recentTopics: userPrefs.recent_topics?.slice(-5) || [],
+    lastSeen: userPrefs.last_seen,
+    attitudeLevel: attitudeLevel,
+    negativeScore: negScore,
+    hostileCount: userPrefs.hostile_interactions || 0,
+    lastNegativeInteraction: userPrefs.last_negative_interaction
+  };
 }
 
 // Bulk relationship check (for admin overview)
 async function getAllUserRelationships(limit = 20) {
-    const { rows } = await pool.query(`
+  const { rows } = await pool.query(`
         SELECT 
             user_id,
             display_name,
@@ -509,29 +509,29 @@ async function getAllUserRelationships(limit = 20) {
         LIMIT $1
     `, [limit]);
 
-    return rows.map(row => {
-        const negScore = parseFloat(row.negative_score) || 0;
-        const interactionCount = row.interaction_count || 0;
+  return rows.map(row => {
+    const negScore = parseFloat(row.negative_score) || 0;
+    const interactionCount = row.interaction_count || 0;
 
-        let attitudeLevel = 'neutral';
-        if (negScore >= 0.8) attitudeLevel = 'hostile';
-        else if (negScore >= 0.5) attitudeLevel = 'harsh';
-        else if (negScore >= 0.3) attitudeLevel = 'wary';
-        else if (negScore >= 0.1) attitudeLevel = 'cautious';
-        else if (negScore < 0.1) {
-            if (interactionCount >= 50) attitudeLevel = 'familiar';
-            else if (interactionCount >= 15) attitudeLevel = 'friendly';
-        }
+    let attitudeLevel = 'neutral';
+    if (negScore >= 0.8) attitudeLevel = 'hostile';
+    else if (negScore >= 0.5) attitudeLevel = 'harsh';
+    else if (negScore >= 0.3) attitudeLevel = 'wary';
+    else if (negScore >= 0.1) attitudeLevel = 'cautious';
+    else if (negScore < 0.1) {
+      if (interactionCount >= 50) attitudeLevel = 'familiar';
+      else if (interactionCount >= 15) attitudeLevel = 'friendly';
+    }
 
-        return {
-            userId: row.user_id,
-            displayName: row.display_name,
-            attitudeLevel: attitudeLevel,
-            interactionCount: interactionCount,
-            negativeScore: negScore,
-            hostileCount: row.hostile_interactions
-        };
-    });
+    return {
+      userId: row.user_id,
+      displayName: row.display_name,
+      attitudeLevel: attitudeLevel,
+      interactionCount: interactionCount,
+      negativeScore: negScore,
+      hostileCount: row.hostile_interactions
+    };
+  });
 }
 
 async function ensureUserPreferencesTable() {
@@ -548,7 +548,7 @@ async function ensureUserPreferencesTable() {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  
+
   // Add ALL the enhanced relationship columns
   await pool.query(`
     ALTER TABLE user_preferences
@@ -582,15 +582,15 @@ async function ensureUserPreferencesTable() {
 // Comprehensive sentiment analysis that catches ANY negative interaction
 function analyzeComprehensiveSentiment(message, conversationContext = '') {
   if (!message) return { sentiment: 0, type: 'neutral', intensity: 0 };
-  
+
   const lowerMsg = message.toLowerCase();
   let sentimentScore = 0;
   let negativeIntensity = 0;
   let positiveIntensity = 0;
   let interactionType = 'neutral';
-  
+
   // NEGATIVE SENTIMENT DETECTION (much more comprehensive)
-  
+
   // Explicit hostility (high negative)
   const hostilePatterns = [
     /\b(fuck|shit|damn|hell|bastard|bitch)\s+(you|off|this)/i,
@@ -599,7 +599,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
     /shut\s+up|piss\s+off|go\s+away/i,
     /\b(useless|worthless|garbage|trash|pathetic)\b/i
   ];
-  
+
   // Moderate negativity
   const irritatedPatterns = [
     /\b(annoying|irritating|frustrating|stupid)\b/i,
@@ -609,7 +609,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
     /\b(no|nope|nah)\s*[.!]*$/i, // Curt rejections
     /why\s+(would|should|do)\s+i\s+care/i
   ];
-  
+
   // Subtle negativity
   const coolPatterns = [
     /\b(not\s+really|not\s+interested|don't\s+care)\b/i,
@@ -618,9 +618,9 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
     /k\.|ok\.|sure\./i, // Very short, dismissive
     /\b(tired|exhausted|done)\b/i
   ];
-  
+
   // POSITIVE SENTIMENT DETECTION
-  
+
   // High enthusiasm
   const enthusiasticPatterns = [
     /\b(love|adore|amazing|awesome|fantastic|incredible|wonderful)\b/i,
@@ -630,7 +630,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
     /😍|🥰|❤️|💕|🎉|✨/,
     /\b(thanks|thank\s+you|appreciate|grateful)\b/i
   ];
-  
+
   // Moderate positivity
   const friendlyPatterns = [
     /\b(good|nice|cool|great|fun|interesting)\b/i,
@@ -640,7 +640,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
     /\b(please|kindly|would\s+you)\b/i,
     /\b(hope|wish|looking\s+forward)\b/i
   ];
-  
+
   // Warmth and connection
   const warmPatterns = [
     /\b(friend|buddy|pal)\b/i,
@@ -650,7 +650,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
     /\b(proud|happy\s+for|glad)\b/i,
     /\b(support|help|there\s+for\s+you)\b/i
   ];
-  
+
   // Calculate sentiment scores
   hostilePatterns.forEach(pattern => {
     if (pattern.test(lowerMsg)) {
@@ -659,7 +659,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
       interactionType = 'hostile';
     }
   });
-  
+
   irritatedPatterns.forEach(pattern => {
     if (pattern.test(lowerMsg)) {
       sentimentScore -= 0.4;
@@ -667,7 +667,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
       if (interactionType === 'neutral') interactionType = 'irritated';
     }
   });
-  
+
   coolPatterns.forEach(pattern => {
     if (pattern.test(lowerMsg)) {
       sentimentScore -= 0.2;
@@ -675,7 +675,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
       if (interactionType === 'neutral') interactionType = 'cool';
     }
   });
-  
+
   enthusiasticPatterns.forEach(pattern => {
     if (pattern.test(lowerMsg)) {
       sentimentScore += 0.6;
@@ -683,7 +683,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
       interactionType = 'enthusiastic';
     }
   });
-  
+
   friendlyPatterns.forEach(pattern => {
     if (pattern.test(lowerMsg)) {
       sentimentScore += 0.3;
@@ -691,7 +691,7 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
       if (interactionType === 'neutral') interactionType = 'friendly';
     }
   });
-  
+
   warmPatterns.forEach(pattern => {
     if (pattern.test(lowerMsg)) {
       sentimentScore += 0.4;
@@ -699,15 +699,15 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
       if (interactionType === 'neutral') interactionType = 'warm';
     }
   });
-  
+
   // Context bonuses/penalties
   if (message.includes('?')) sentimentScore += 0.1; // Questions show engagement
   if (message.length > 100) sentimentScore += 0.1; // Longer messages show investment
   if (message.length < 5) sentimentScore -= 0.1; // Very short might be dismissive
-  
+
   // Cap the scores
   sentimentScore = Math.max(-2.0, Math.min(2.0, sentimentScore));
-  
+
   return {
     sentiment: sentimentScore,
     type: interactionType,
@@ -720,21 +720,21 @@ function analyzeComprehensiveSentiment(message, conversationContext = '') {
 // Enhanced relationship update function
 async function updateEnhancedRelationship(userId, interaction, sentimentAnalysis) {
   await ensureUserPreferencesTable();
-  
+
   const displayName = interaction?.member?.displayName || interaction?.user?.username || 'unknown';
   const channelId = interaction?.channel?.id || 'unknown';
-  
+
   // Calculate relationship adjustments
   const isPositive = sentimentAnalysis.isPositive;
   const isNegative = sentimentAnalysis.isNegative;
   const intensity = sentimentAnalysis.intensity;
-  
+
   // Relationship quality adjustments
   let warmthAdjustment = 0;
   let trustAdjustment = 0;
   let comfortAdjustment = 0;
   let connectionAdjustment = 0;
-  
+
   if (isPositive) {
     warmthAdjustment = intensity * 0.15;
     trustAdjustment = intensity * 0.1;
@@ -746,7 +746,7 @@ async function updateEnhancedRelationship(userId, interaction, sentimentAnalysis
     comfortAdjustment = -intensity * 0.18;
     connectionAdjustment = -intensity * 0.1;
   }
-  
+
   await pool.query(`
     UPDATE user_preferences 
     SET
@@ -786,7 +786,7 @@ async function updateEnhancedRelationship(userId, interaction, sentimentAnalysis
     isPositive ? 1 : 0, // positive_interactions count
     isNegative ? 1 : 0, // hostile_interactions count
     warmthAdjustment,
-    trustAdjustment, 
+    trustAdjustment,
     comfortAdjustment,
     connectionAdjustment,
     (isPositive && intensity > 0.3) ? 1 : 0, // meaningful_exchanges
@@ -850,7 +850,7 @@ async function getEnhancedUserContext(userId) {
     relationshipType = 'skeptical';
     friendshipLevel = 0;
   }
-  
+
   // POSITIVE RELATIONSHIPS (much more granular levels)
   else if (negScore <= 0.05 && netSentiment >= 0) {
     if (qualityScore >= 0.85 && interactionCount >= 15 && positivityRatio > 0.8) {
@@ -917,6 +917,215 @@ async function getEnhancedUserContext(userId) {
   };
 }
 
+// ── UNIFIED RELATIONSHIP SYSTEM ──────────────────────────────────────────────
+
+// Enhanced sentiment analysis function
+function analyzeComprehensiveSentiment(userMessage, conversationContext) {
+  if (!userMessage) return { sentiment: 0, confidence: 0.5, type: 'neutral' };
+
+  const message = userMessage.toLowerCase();
+  let sentiment = 0;
+  let confidence = 0.5;
+  let type = 'neutral';
+
+  // Positive indicators
+  const positiveWords = ['thanks', 'thank you', 'great', 'awesome', 'cool', 'nice', 'good', 'love', 'like', 'appreciate', 'helpful', 'amazing', 'perfect', 'excellent'];
+  const positiveCount = positiveWords.filter(word => message.includes(word)).length;
+
+  // Negative indicators (not counting hostility analysis)
+  const negativeWords = ['bad', 'hate', 'terrible', 'awful', 'sucks', 'stupid', 'dumb', 'annoying', 'boring', 'useless'];
+  const negativeCount = negativeWords.filter(word => message.includes(word)).length;
+
+  // Question indicators (show engagement)
+  const hasQuestion = message.includes('?') || message.includes('how') || message.includes('what') || message.includes('why');
+
+  // Calculate sentiment
+  if (positiveCount > negativeCount) {
+    sentiment = Math.min(0.8, positiveCount * 0.2);
+    type = 'positive';
+    confidence = 0.7;
+  } else if (negativeCount > positiveCount) {
+    sentiment = Math.max(-0.5, negativeCount * -0.15);
+    type = 'negative';
+    confidence = 0.6;
+  } else if (hasQuestion) {
+    sentiment = 0.1; // Slight positive for engagement
+    type = 'engaged';
+    confidence = 0.5;
+  }
+
+  return { sentiment, confidence, type };
+}
+
+// Update enhanced relationship metrics
+async function updateEnhancedRelationship(userId, interaction, sentimentAnalysis) {
+  await ensureUserPreferencesTable();
+
+  const sentiment = sentimentAnalysis.sentiment || 0;
+  const isPositive = sentiment > 0.1;
+  const isNegative = sentiment < -0.1;
+
+  // Calculate relationship increments
+  const warmthIncrement = isPositive ? 0.05 : (isNegative ? -0.02 : 0.01);
+  const trustIncrement = isPositive ? 0.03 : (isNegative ? -0.03 : 0.005);
+  const comfortIncrement = isPositive ? 0.04 : (isNegative ? -0.02 : 0.008);
+
+  await pool.query(`
+        UPDATE user_preferences 
+        SET 
+            positive_score = CASE WHEN $2 > 0.1 THEN LEAST(2.0, COALESCE(positive_score, 0.0) + $2) ELSE COALESCE(positive_score, 0.0) END,
+            positive_interactions = CASE WHEN $2 > 0.1 THEN COALESCE(positive_interactions, 0) + 1 ELSE COALESCE(positive_interactions, 0) END,
+            last_positive_interaction = CASE WHEN $2 > 0.1 THEN CURRENT_TIMESTAMP ELSE last_positive_interaction END,
+            warmth_level = GREATEST(0.0, LEAST(1.0, COALESCE(warmth_level, 0.0) + $3)),
+            trust_level = GREATEST(0.0, LEAST(1.0, COALESCE(trust_level, 0.0) + $4)),  
+            comfort_level = GREATEST(0.0, LEAST(1.0, COALESCE(comfort_level, 0.0) + $5)),
+            meaningful_exchanges = CASE WHEN LENGTH($6) > 30 THEN COALESCE(meaningful_exchanges, 0) + 1 ELSE COALESCE(meaningful_exchanges, 0) END,
+            recent_interaction_sentiment = $2,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = $1
+    `, [userId, sentiment, warmthIncrement, trustIncrement, comfortIncrement, interaction?.options?.getString('request') || '']);
+
+  // Update relationship quality score
+  await updateRelationshipQualityScore(userId);
+}
+
+// Calculate and update relationship quality score
+async function updateRelationshipQualityScore(userId) {
+  const { rows } = await pool.query(`
+        SELECT warmth_level, trust_level, comfort_level, positive_score, negative_score, interaction_count 
+        FROM user_preferences WHERE user_id = $1
+    `, [userId]);
+
+  if (rows.length === 0) return;
+
+  const data = rows[0];
+  const warmth = parseFloat(data.warmth_level) || 0;
+  const trust = parseFloat(data.trust_level) || 0;
+  const comfort = parseFloat(data.comfort_level) || 0;
+  const posScore = parseFloat(data.positive_score) || 0;
+  const negScore = parseFloat(data.negative_score) || 0;
+  const interactions = data.interaction_count || 0;
+
+  // Calculate quality score (0.0 to 1.0)
+  const emotionalAverage = (warmth + trust + comfort) / 3;
+  const sentimentRatio = posScore > 0 ? posScore / (posScore + negScore + 0.1) : 0;
+  const interactionBonus = Math.min(0.3, interactions * 0.01);
+
+  const qualityScore = Math.min(1.0, (emotionalAverage * 0.6) + (sentimentRatio * 0.3) + interactionBonus);
+
+  await pool.query(`
+        UPDATE user_preferences 
+        SET relationship_quality_score = $2, connection_depth = $3
+        WHERE user_id = $1
+    `, [userId, qualityScore, Math.min(1.0, qualityScore * 0.8)]);
+}
+
+// UNIFIED function that all commands should use
+async function getEnhancedUserContext(userId) {
+  const { rows } = await pool.query(`
+        SELECT * FROM user_preferences WHERE user_id = $1
+    `, [userId]);
+
+  if (rows.length === 0) {
+    return {
+      isNewUser: true,
+      interactionCount: 0,
+      preferredStyle: 'neutral',
+      recentTopics: [],
+      attitudeLevel: 'neutral',
+      friendshipLevel: 0,
+      negativeScore: 0,
+      positiveScore: 0,
+      hostileCount: 0,
+      connectionStrength: 0,
+      relationshipStats: {
+        warmth: 0,
+        trust: 0,
+        comfort: 0,
+        qualityScore: 0,
+        positivityRatio: 0
+      }
+    };
+  }
+
+  const userPrefs = rows[0];
+  const negScore = parseFloat(userPrefs.negative_score) || 0;
+  const posScore = parseFloat(userPrefs.positive_score) || 0;
+  const interactionCount = userPrefs.interaction_count || 0;
+  const qualityScore = parseFloat(userPrefs.relationship_quality_score) || 0;
+  const warmth = parseFloat(userPrefs.warmth_level) || 0;
+  const trust = parseFloat(userPrefs.trust_level) || 0;
+  const comfort = parseFloat(userPrefs.comfort_level) || 0;
+
+  const netSentiment = posScore - negScore;
+  const positiveInteractions = userPrefs.positive_interactions || 0;
+  const positivityRatio = interactionCount > 0 ? positiveInteractions / interactionCount : 0;
+
+  // UNIFIED attitude level calculation (used by ALL commands)
+  let attitudeLevel = 'neutral';
+  let friendshipLevel = 0;
+
+  // Negative relationships
+  if (negScore >= 0.8 || netSentiment < -0.8) {
+    attitudeLevel = 'hostile';
+    friendshipLevel = -3;
+  } else if (negScore >= 0.5 || netSentiment < -0.5) {
+    attitudeLevel = 'harsh';
+    friendshipLevel = -2;
+  } else if (negScore >= 0.3 || netSentiment < -0.2) {
+    attitudeLevel = 'wary';
+    friendshipLevel = -1;
+  } else if (negScore >= 0.1 || netSentiment < -0.1) {
+    attitudeLevel = 'cautious';
+    friendshipLevel = 0;
+  }
+  // Positive relationships  
+  else if (negScore <= 0.05 && netSentiment >= 0) {
+    if (qualityScore >= 0.7 && interactionCount >= 20 && positivityRatio > 0.7) {
+      attitudeLevel = 'familiar';
+      friendshipLevel = 8;
+    } else if (qualityScore >= 0.5 && interactionCount >= 15 && positivityRatio > 0.6) {
+      attitudeLevel = 'friendly';
+      friendshipLevel = 6;
+    } else if (qualityScore >= 0.3 && interactionCount >= 8 && positivityRatio > 0.4) {
+      attitudeLevel = 'warm';
+      friendshipLevel = 4;
+    } else if (qualityScore >= 0.2 && interactionCount >= 5 && positivityRatio > 0.3) {
+      attitudeLevel = 'welcoming';
+      friendshipLevel = 2;
+    } else if (qualityScore >= 0.1 && interactionCount >= 3) {
+      attitudeLevel = 'approachable';
+      friendshipLevel = 1;
+    }
+  }
+
+  return {
+    isNewUser: false,
+    interactionCount,
+    preferredStyle: determinePreferredStyle(userPrefs),
+    recentTopics: userPrefs.recent_topics?.slice(-5) || [],
+    lastSeen: userPrefs.last_seen,
+    attitudeLevel,
+    friendshipLevel,
+    negativeScore: negScore,
+    positiveScore: posScore,
+    hostileCount: userPrefs.hostile_interactions || 0,
+    lastNegativeInteraction: userPrefs.last_negative_interaction,
+    connectionStrength: qualityScore,
+    relationshipStats: {
+      warmth,
+      trust,
+      comfort,
+      qualityScore,
+      positivityRatio
+    }
+  };
+}
+
+// Update the old getUserContext to use the enhanced version for consistency
+async function getUserContext(userId) {
+  return await getEnhancedUserContext(userId);
+}
 
 
 
@@ -940,8 +1149,11 @@ module.exports = {
   analyzeHostileBehavior,
   getAllUserRelationships,
   ensureUserPreferencesTable,
-  // NEW EXPORTS:
   analyzeComprehensiveSentiment,
   updateEnhancedRelationship,
   getEnhancedUserContext,
+  analyzeComprehensiveSentiment,
+  updateEnhancedRelationship,
+  getEnhancedUserContext,
+  updateRelationshipQualityScore,
 };

@@ -1,7 +1,7 @@
 // src/commands/tools/checkrelationship.js
-
 const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
-const { getUserContext } = require('../../utils/db.js'); // Use the function that exists
+const { getEnhancedUserContext } = require('../../utils/db.js'); // Use unified system
+
 
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
@@ -20,7 +20,7 @@ const GOAT_EMOJIS = {
 // ENHANCED: More distinct personality responses
 function getRelationshipResponse(attitudeLevel, displayName, negativeScore, hostileCount, isSpecialUser) {
     const name = displayName || 'that user';
-    
+
     // Special user always gets favorable treatment
     if (isSpecialUser) {
         const responses = [
@@ -130,13 +130,21 @@ function getRelationshipResponse(attitudeLevel, displayName, negativeScore, host
 }
 
 // FIXED: Include recent topics again
+// Update formatDetailedStats to show the enhanced data
 function formatDetailedStats(userContext, targetUser) {
     const stats = [];
     
-    stats.push(`**Relationship Level:** ${userContext.attitudeLevel}`);
+    stats.push(`**Relationship Level:** ${userContext.attitudeLevel} (Level ${userContext.friendshipLevel})`);
     stats.push(`**Interactions:** ${userContext.interactionCount}`);
-    stats.push(`**Negative Score:** ${userContext.negativeScore.toFixed(2)}/1.00`);
-    stats.push(`**Hostile Incidents:** ${userContext.hostileCount}`);
+    stats.push(`**Quality Score:** ${(userContext.relationshipStats.qualityScore * 100).toFixed(0)}%`);
+    stats.push(`**Negative Score:** ${userContext.negativeScore.toFixed(2)}/2.00`);
+    stats.push(`**Positive Score:** ${userContext.positiveScore.toFixed(2)}/2.00`);
+    
+    if (userContext.relationshipStats.warmth > 0) {
+        stats.push(`**Warmth:** ${(userContext.relationshipStats.warmth * 100).toFixed(0)}%`);
+        stats.push(`**Trust:** ${(userContext.relationshipStats.trust * 100).toFixed(0)}%`);
+        stats.push(`**Comfort:** ${(userContext.relationshipStats.comfort * 100).toFixed(0)}%`);
+    }
 
     if (userContext.lastNegativeInteraction) {
         const lastIncident = new Date(userContext.lastNegativeInteraction);
@@ -144,7 +152,6 @@ function formatDetailedStats(userContext, targetUser) {
         stats.push(`**Last Incident:** ${timeSince} days ago`);
     }
 
-    // RESTORED: Recent topics display
     if (userContext.recentTopics && userContext.recentTopics.length > 0) {
         const topics = userContext.recentTopics.slice(-8).join(', ');
         stats.push(`**Recent Topics:** ${topics}`);
@@ -173,17 +180,16 @@ module.exports = {
 
     async execute(interaction) {
         await interaction.deferReply({});
-        
+
         try {
             const targetUser = interaction.options.getUser('user');
             const showDetailed = interaction.options.getBoolean('detailed') || false;
             const isSpecialUser = targetUser.id === "619637817294848012";
 
-            // FIXED: Use the function that actually exists
-            const userContext = await getUserContext(targetUser.id);
+            // Use the SAME system as speak.js and relationoverview.js
+            const userContext = await getEnhancedUserContext(targetUser.id);
 
             if (showDetailed) {
-                // Show detailed statistics
                 const detailedStats = formatDetailedStats(userContext, targetUser);
                 const relationship = getRelationshipResponse(
                     userContext.attitudeLevel,
@@ -211,7 +217,6 @@ module.exports = {
 
                 await interaction.editReply({ embeds: [embed] });
             } else {
-                // Show just the personality response
                 const relationship = getRelationshipResponse(
                     userContext.attitudeLevel,
                     targetUser.displayName || targetUser.username,
@@ -232,7 +237,7 @@ module.exports = {
             console.error('Error in checkrelation command:', error);
             await interaction.editReply('Error checking user relationship: ' + error.message);
         }
-    },
+    }
 };
 
 // Helper function to get colors for different attitude levels

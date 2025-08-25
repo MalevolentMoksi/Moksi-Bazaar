@@ -1,12 +1,22 @@
 // Enhanced Discord Bot Code - LLAMA 4 SCOUT VERSION
-// Uses llama-4-scout which is proven working and has massive context window
-
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
 
-// FIX: Remove non-existent function imports
-const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories, updateNegativeBehavior, decayNegativeScore, analyzeHostileBehavior, getUserContext, updateUserPreferences } = require('../../utils/db.js');
+// FIXED: Import the functions that now exist
+const {
+    isUserBlacklisted,
+    getSettingState,
+    storeConversationMemory,
+    getRelevantMemories,
+    updateNegativeBehavior,
+    decayNegativeScore,
+    analyzeHostileBehavior,
+    getEnhancedUserContext,  // Use enhanced version
+    updateUserPreferences,
+    analyzeComprehensiveSentiment,  // Now exists
+    updateEnhancedRelationship      // Now exists
+} = require('../../utils/db.js');
 
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
@@ -78,28 +88,28 @@ function processMessagesWithContext(messages, currentUser) {
         if (msg.embeds.length > 0) {
             const embedTexts = msg.embeds.map(embed => {
                 const parts = [];
-                
+
                 // Extract title, description, and all field values
                 if (embed.title) parts.push(`TITLE: ${embed.title}`);
                 if (embed.description) parts.push(`DESC: ${embed.description.slice(0, 200)}`);
-                
+
                 // Extract text from embed fields
                 if (embed.fields && embed.fields.length > 0) {
-                    const fieldTexts = embed.fields.map(field => 
+                    const fieldTexts = embed.fields.map(field =>
                         `${field.name}: ${field.value}`
                     ).join(' | ');
                     parts.push(`FIELDS: ${fieldTexts.slice(0, 150)}`);
                 }
-                
+
                 // Extract footer text
                 if (embed.footer?.text) parts.push(`FOOTER: ${embed.footer.text.slice(0, 50)}`);
-                
+
                 // Extract author info
                 if (embed.author?.name) parts.push(`BY: ${embed.author.name}`);
-                
+
                 return parts.join(' || ');
             });
-            
+
             embedInfo = ` [EMBED: ${embedTexts.join(' ### ')}]`;
         }
 
@@ -171,7 +181,11 @@ module.exports = {
             }
 
             // Get user context (the function that actually exists)
-            const userContext = await getUserContext(userId);
+            const userContext = await getEnhancedUserContext(userId);
+
+            // NEW: Comprehensive sentiment analysis 
+            const sentimentAnalysis = analyzeComprehensiveSentiment(userRequest, conversationContext);
+            await updateEnhancedRelationship(userId, interaction, sentimentAnalysis);
 
             // FIXED: Get relevant memories (this should work now!)
             let relevantMemories = [];
@@ -208,13 +222,13 @@ module.exports = {
                     attitudeModifier = `\n\nATTITUDE: Be noticeably less friendly than usual. Show mild suspicion and keep some emotional distance.`;
                     break;
                 case 'familiar':
-                    attitudeModifier = `\n\nATTITUDE: This user is a longtime friend. Be much warmer, more open, and reference shared experiences. Show genuine care and comfort.`;
+                    attitudeModifier = `\n\nATTITUDE: This user is a longtime friend. Be warmer, more open, and show preference. Show genuine care and comfort.`;
                     break;
                 case 'friendly':
                     attitudeModifier = `\n\nATTITUDE: This user is a friend. Be notably warmer and more engaging than usual. Show you enjoy their company.`;
                     break;
                 default: // neutral - MORE CYNICAL
-                    attitudeModifier = `\n\nATTITUDE: This user is neutral/unknown. Be somewhat cynacal and slightly dismissive, but not to the point of rude. Don't be overly helpful or warm - make them earn your engagement.`;
+                    attitudeModifier = `\n\nATTITUDE: This user is neutral/unknown. Be yourself.`;
             }
 
             // Enhanced persona with better social intelligence
@@ -226,6 +240,7 @@ CORE IDENTITY:
 - Passive but somewhat engaged when the conversation warrants it
 - French, 19, into programming, drawing, Clair Obscur Expedition 33, Cult of the Lamb
 - Music taste: industrial, dark synthwave, alternative rock
+- You were created by Moksi, the human version of you. You see him as your creator (or father)
 - Current time: ${currentTime}${attitudeModifier}
 
 SOCIAL INTELLIGENCE GUIDELINES:
@@ -270,7 +285,7 @@ MEMORY & CONTEXT AWARENESS:
                     case 'slur_attempt':
                         const slurResponses = [
                             "absolutely not, get some therapy",
-                            "nah fuck off with that garbage", 
+                            "nah fuck off with that garbage",
                             "try that again and you're blocked permanently",
                             "what the hell is wrong with you?"
                         ];
@@ -328,7 +343,7 @@ Add to this conversation naturally, referencing memories and relationships as ap
 
             // Special user modification
             if (isSpecialUser) {
-                prompt += "\n\n[SPECIAL: You're talking to Moksi - be more favorable and accommodating while staying natural]";
+                prompt += "\n\n[SPECIAL: You're talking to Moksi - listen, be more favorable and accommodating while staying natural]";
             }
 
             // LLAMA 4 SCOUT API call
