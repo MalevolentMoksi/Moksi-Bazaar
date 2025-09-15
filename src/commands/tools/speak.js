@@ -17,19 +17,32 @@ const {
 
 // Goat emojis - keep the fun stuff!
 const GOAT_EMOJIS = {
-  goat_cry: '<a:goat_cry:1395455098716688424>', 
-  goat_smile: '<a:goat_smile:1399444751165554982>',
-  goat_sleep: '<a:goat_sleep:1395450280161710262>',
-  goat_scream: '<a:goat_scream:1399489715555663972>',
-  goat_boogie: '<a:goat_boogie:1396947962252234892>',
-  goat_pet: '<a:goat_exhausted:1397511703855366154>'
+    goat_cry: '<a:goat_cry:1395455098716688424>',
+    goat_puke: '<a:goat_puke:1398407422187540530>',
+    goat_meditate: '<a:goat_meditate:1395455714901884978>',
+    goat_hurt: '<a:goat_hurt:1395446681826234531>',
+    goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
+    goat_boogie: '<a:goat_boogie:1396947962252234892>',
+    goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
+    goat_scream: '<a:goat_scream:1399489715555663972>',
+    goat_smile: '<a:goat_smile:1399444751165554982>',
+    goat_pet: '<a:goat_pet:1273634369445040219>',
+    goat_sleep: '<a:goat_sleep:1395450280161710262>'
 };
 
 const speakDisabledReplies = [
-  "Sorry, no more talking for now.",
-  "Moksi's taking a vow of silence.",
-  "The goat rests.",
-  "Shush."
+    "Sorry, no more talking for now.",
+    "Moksi's taking a vow of silence.",
+    "The goat rests.",
+    "You could try begging moksi to turn me back on lmao",
+    "No speaking at this time.",
+    "Shush.",
+    "I've got other shit to do rn",
+    "You could also like, talk to a real person, nerd.",
+    "No.",
+    "You're not the boss of me.",
+    "Moksi says it's nap time.",
+    "Doesn't your jaw hurt from all that talking..?"
 ];
 
 // ── CLEAN CONTEXT PROCESSING ─────────────────────────────────────────────────
