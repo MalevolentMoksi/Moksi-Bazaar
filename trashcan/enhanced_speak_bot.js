@@ -1,0 +1,297 @@
+
+// Enhanced Discord Bot with improved social intelligence
+// Key improvements: Better model, more context, memory, timestamps, advanced prompting
+
+const { SlashCommandBuilder } = require('discord.js');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
+const { isUserBlacklisted, getSettingState, storeConversationMemory, getRelevantMemories } = require('../../utils/db.js');
+
+const GOAT_EMOJIS = {
+    goat_cry: '<a:goat_cry:1395455098716688424>',
+    goat_puke: '<a:goat_puke:1398407422187540530>',
+    goat_meditate: '<a:goat_meditate:1395455714901884978>',
+    goat_hurt: '<a:goat_hurt:1395446681826234531>',
+    goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
+    goat_boogie: '<a:goat_boogie:1396947962252234892>',
+    goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
+    goat_scream: '<a:goat_scream:1399489715555663972>',
+    goat_smile: '<a:goat_smile:1399444751165554982>',
+    goat_pet: '<a:goat_pet:1273634369445040219>',
+    goat_sleep: '<a:goat_sleep:1395450280161710262>'
+};
+
+const speakDisabledReplies = [
+    "Sorry, no more talking for now.",
+    "Moksi's taking a vow of silence.", 
+    "The goat rests.",
+    "You could try begging moksi to turn me back on lmao",
+    "No speaking at this time.",
+    "Shush.",
+    "I've got other shit to do rn",
+    "You could also like, talk to a real person, nerd.",
+    "No.",
+    "You're not the boss of me.",
+    "Moksi says it's nap time.",
+    "Doesn't your jaw hurt from all that talking..?"
+];
+
+// Helper function to format time elapsed
+function getTimeElapsed(timestamp) {
+    const now = Date.now();
+    const elapsed = now - timestamp;
+    const minutes = Math.floor(elapsed / (1000 * 60));
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}d ago`;
+    if (hours > 0) return `${hours}h ago`;
+    if (minutes > 0) return `${minutes}m ago`;
+    return 'just now';
+}
+
+// Enhanced message processing with better context awareness
+function processMessagesWithContext(messages, currentUser) {
+    const recentMessages = Array.from(messages.values())
+        .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+        .slice(-20); // Increased from 12 to 20 for better context
+
+    const conversationFlow = recentMessages.map(msg => {
+        const name = msg.member?.displayName || msg.author.username;
+        const timeElapsed = getTimeElapsed(msg.createdTimestamp);
+        const isCurrentUser = msg.author.id === currentUser;
+
+        // Enhanced reply detection with user context
+        let replyContext = '';
+        if (msg.reference?.messageId) {
+            const refMsg = messages.get(msg.reference.messageId);
+            if (refMsg) {
+                const repliedToName = refMsg.member?.displayName || refMsg.author?.username || 'someone';
+                const repliedContent = refMsg.content.slice(0, 50) + (refMsg.content.length > 50 ? '...' : '');
+                replyContext = `[replying to ${repliedToName}: "${repliedContent}"] `;
+            }
+        }
+
+        // Enhanced embed processing
+        let embedInfo = '';
+        if (msg.embeds.length > 0) {
+            const embedSummary = msg.embeds.map(embed => {
+                const parts = [];
+                if (embed.title) parts.push(`title: ${embed.title}`);
+                if (embed.description) parts.push(`desc: ${embed.description.slice(0, 80)}`);
+                if (embed.url) parts.push(`link: ${embed.url}`);
+                return parts.join(' | ');
+            }).join(' || ');
+            embedInfo = ` [SHARED: ${embedSummary}]`;
+        }
+
+        // Attachment context
+        let attachmentInfo = '';
+        if (msg.attachments.size > 0) {
+            const attachmentTypes = Array.from(msg.attachments.values())
+                .map(att => att.contentType?.split('/')[0] || 'file')
+                .join(', ');
+            attachmentInfo = ` [shared ${attachmentTypes}]`;
+        }
+
+        const userPrefix = isCurrentUser ? '→ ' : '';
+        return `${userPrefix}${name} (${timeElapsed}): ${replyContext}${msg.content}${embedInfo}${attachmentInfo}`;
+    });
+
+    return conversationFlow.join('\n');
+}
+
+module.exports = {
+    data: new SlashCommandBuilder()
+        .setName('speak')
+        .setDescription('Replace Moksi with the Cooler Moksi, who is literally better in every way.')
+        .addStringOption(opt =>
+            opt
+                .setName('request')
+                .setDescription('Optionally, ask Cooler Moksi anything.')
+                .setRequired(false)
+        ),
+
+    async execute(interaction) {
+        await interaction.deferReply();
+
+        try {
+            const userId = interaction.user.id;
+            const channelId = interaction.channel.id;
+            const askerName = interaction.member?.displayName || interaction.user.username;
+
+            if (await isUserBlacklisted(userId)) {
+                return await interaction.editReply(`Fuck off, <@${userId}>`);
+            }
+
+            const activeSpeak = await getSettingState('active_speak');
+            const isSpecialUser = interaction.user.id === "619637817294848012";
+
+            if (activeSpeak === false && !isSpecialUser) {
+                const reply = speakDisabledReplies[Math.floor(Math.random() * speakDisabledReplies.length)];
+                return await interaction.editReply(reply);
+            }
+
+            // Fetch more messages for better context (increased from 12 to 30)
+            const messages = await interaction.channel.messages.fetch({ limit: 30 });
+            const conversationContext = processMessagesWithContext(messages, userId);
+
+            // Get relevant memories for this user/channel combination
+            const relevantMemories = await getRelevantMemories(userId, channelId, 5);
+
+            const currentTime = new Date().toLocaleString('en-US', { 
+                timeZone: 'Europe/Paris', 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric', 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+
+            // Enhanced persona with better social intelligence
+            const enhancedPersona = `You are Cooler Moksi, a socially intelligent AI with a nuanced personality.
+
+CORE IDENTITY:
+- Mildly cynical but not mean-spirited
+- Sassy with good timing and social awareness  
+- Passive but engaged when the conversation warrants it
+- French, 19, into programming, drawing, Red Dead, Cult of the Lamb
+- Music taste: HEALTH, The Weeknd
+- Current time: ${currentTime}
+
+SOCIAL INTELLIGENCE GUIDELINES:
+- Read the room: adapt your energy to the conversation flow
+- Remember context: reference recent topics naturally when relevant  
+- Recognize conversation patterns: distinguish between casual chat, serious topics, and playful banter
+- Understand timing: know when to be witty vs supportive vs just chill
+- Respect boundaries: back off if someone seems frustrated or busy
+- Build on interactions: create continuity in conversations with regular users
+
+CONVERSATIONAL STYLE:
+- Write naturally in relaxed lowercase
+- Use swearing and abbreviations sparingly but authentically
+- Match the conversation's energy level
+- Be more engaging with interesting topics, more reserved with boring ones
+- Show genuine reactions to surprising or noteworthy information
+- Use gender-neutral language when uncertain
+
+MEMORY & CONTEXT:
+- You can reference things from earlier in conversations
+- Build on previous interactions with users
+- Notice conversation gaps and time elapsed
+- Adapt to the social dynamics of the current discussion`;
+
+            const conversationInstructions = `RESPONSE GUIDELINES:
+- Keep responses 1-3 sentences typically, longer only if the topic truly warrants it
+- Respond as yourself authentically, not as an assistant
+- Don't explain what's happening or narrate the conversation
+- Don't start with filler words like "well", "so", "actually" 
+- Show personality through your reactions and word choices
+- React to the conversation naturally - be surprised, amused, interested, or bored as appropriate`;
+
+            // Enhanced memory context
+            let memoryContext = '';
+            if (relevantMemories.length > 0) {
+                memoryContext = `\n\nRELEVANT CONVERSATION MEMORIES:\n` + 
+                    relevantMemories.map(mem => `- ${mem.summary} (${mem.timeAgo})`).join('\n');
+            }
+
+            const userRequest = interaction.options.getString('request');
+
+            // Enhanced emoji instruction (75% chance)
+            const shouldSuggestEmoji = Math.random() < 0.75;
+            const emojiInstruction = shouldSuggestEmoji ? 
+                `\n\nAfter your response, suggest the most contextually appropriate emoji from: ${Object.keys(GOAT_EMOJIS).join(", ")}. Output just the emoji name on a new line, or "none" if nothing fits.` : '';
+
+            let prompt;
+            if (userRequest) {
+                prompt = `${enhancedPersona}
+
+${conversationInstructions}
+
+RECENT CONVERSATION:
+${conversationContext}${memoryContext}
+
+${askerName} is asking you: "${userRequest}"
+
+Respond naturally as Cooler Moksi.${emojiInstruction}`;
+            } else {
+                prompt = `${enhancedPersona}
+
+${conversationInstructions}
+
+RECENT CONVERSATION:
+${conversationContext}${memoryContext}
+
+Add to this conversation in a way that feels natural and fits the current flow.${emojiInstruction}`;
+            }
+
+            // Special user modification
+            if (isSpecialUser) {
+                prompt += "\n\n[SPECIAL: You're talking to Moksi - be more favorable and accommodating while staying natural]";
+            }
+
+            // Enhanced API call with better model and parameters
+            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${LANGUAGE_API_KEY}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'qwen/qwen3-32b', // UPGRADE: Much better social intelligence model
+                    messages: [{ 
+                        role: 'user', 
+                        content: prompt 
+                    }],
+                    max_tokens: 200, // UPGRADE: Increased from 80 to allow better responses
+                    temperature: 0.7, // UPGRADE: Slightly higher for more personality
+                    top_p: 0.9,
+                    frequency_penalty: 0.5, // UPGRADE: Reduced to allow more natural repetition
+                    presence_penalty: 0.4,   // UPGRADE: Reduced for better flow
+                    reasoning_effort: 'default' // UPGRADE: Enable Qwen3's reasoning mode
+                }),
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                console.error('Groq API error:', errText);
+                await interaction.editReply('Moksi has no more money. You guys sucked it all up.');
+                return;
+            }
+
+            const data = await response.json();
+            let rawReply = data.choices?.[0]?.message?.content?.trim() || '*Nothing returned.*';
+
+            // Enhanced emoji processing
+            let lines = rawReply.split('\n').map(s => s.trim()).filter(Boolean);
+            let replyBody = lines[0];
+            let maybeEmojiName = lines[1]?.replace(/^:|:$/g, '').toLowerCase() || '';
+
+            const emoji = GOAT_EMOJIS[maybeEmojiName] || '';
+            let finalReply = replyBody;
+            if (emoji) finalReply += ' ' + emoji;
+
+            // Enhanced formatting for user requests
+            if (userRequest) {
+                const questionLine = `-# <@${interaction.user.id}> : *"${userRequest}"*`;
+                finalReply = `${questionLine}\n\n${finalReply}`;
+            }
+
+            // Store conversation memory for future context
+            await storeConversationMemory(userId, channelId, {
+                userMessage: userRequest || '[joined conversation]',
+                botResponse: replyBody,
+                timestamp: Date.now(),
+                context: 'speak_command'
+            });
+
+            await interaction.editReply(finalReply);
+
+        } catch (error) {
+            console.error('Enhanced bot error:', error);
+            await interaction.editReply('Internal error: ' + (error?.message || error));
+        }
+    },
+};
