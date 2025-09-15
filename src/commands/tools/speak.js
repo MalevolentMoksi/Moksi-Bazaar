@@ -192,7 +192,9 @@ Output the emoji name on a new line.`;
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 100, // Keep it concise
           temperature: 0.7,
-          top_p: 0.9
+          top_p: 0.9,
+          reasoning_effort: 'none', // CRITICAL: Disable reasoning mode to avoid <think> tags
+          reasoning_format: 'hidden' // CRITICAL: Hide any reasoning output
         }),
       });
 
