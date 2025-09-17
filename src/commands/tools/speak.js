@@ -206,7 +206,6 @@ Output the emoji name on a new line.`;
           max_tokens: 125, // Keep it concise
           temperature: 0.7,
           top_p: 0.9,
-          reasoning_format: 'hidden' // CRITICAL: Hide any reasoning output
         }),
       });
 
