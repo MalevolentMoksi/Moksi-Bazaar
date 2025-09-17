@@ -201,12 +201,11 @@ Output the emoji name on a new line.`;
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'qwen/qwen3-32b',
+          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 100, // Keep it concise
+          max_tokens: 125, // Keep it concise
           temperature: 0.7,
           top_p: 0.9,
-          reasoning_effort: 'none', // CRITICAL: Disable reasoning mode to avoid <think> tags
           reasoning_format: 'hidden' // CRITICAL: Hide any reasoning output
         }),
       });
