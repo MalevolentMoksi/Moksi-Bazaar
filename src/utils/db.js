@@ -1,4 +1,4 @@
-// ENHANCED DB.JS - AI-Powered Sentiment Analysis + Media Analysis (FIXED)
+// ENHANCED DB.JS - AI-Powered Sentiment Analysis + Media Analysis (FULLY FIXED)
 
 const { Pool, types } = require('pg');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
@@ -119,7 +119,7 @@ async function cacheMediaDescription(mediaId, description, mediaType, originalUr
   `, [mediaId, description, mediaType, originalUrl]);
 }
 
-// FIXED: Analyze media with AI - handles videos properly
+// Analyze media with AI - handles videos properly
 async function analyzeMediaWithAI(mediaUrl, mediaType, fileName = '') {
   const provider = await getMediaAnalysisProvider();
 
@@ -144,7 +144,7 @@ async function analyzeMediaWithAI(mediaUrl, mediaType, fileName = '') {
   return null;
 }
 
-// FIXED: Analyze with Google Gemini - proper video support
+// Analyze with Google Gemini - proper video support
 async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY not configured');
@@ -169,7 +169,6 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
                 text: `Describe this video briefly in one sentence for conversation context. Focus on key visual elements, actions, people, objects, or scenes. Keep it concise and relevant.`
               },
               {
-                // Try inline video data
                 inlineData: {
                   mimeType: mediaType,
                   data: await getMediaAsBase64(mediaUrl)
@@ -249,7 +248,7 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
   }
 }
 
-// FIXED: Analyze with Groq - correct model name
+// Analyze with Groq - correct model name
 async function analyzeWithGroq(mediaUrl, mediaType, fileName = '') {
   if (!LANGUAGE_API_KEY) {
     throw new Error('LANGUAGE_API_KEY not configured');
@@ -271,7 +270,7 @@ async function analyzeWithGroq(mediaUrl, mediaType, fileName = '') {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct', // FIXED: Correct model
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct', // CORRECT MODEL
       messages: [{
         role: 'user',
         content: [
@@ -308,16 +307,13 @@ async function analyzeWithGroq(mediaUrl, mediaType, fileName = '') {
   return description;
 }
 
-// NEW: Video thumbnail fallback analysis
+// Video thumbnail fallback analysis
 async function analyzeVideoThumbnail(videoUrl, provider) {
   try {
     console.log(`[MEDIA] Generating thumbnail for video analysis with ${provider}`);
 
-    // For Discord CDN videos, try getting a thumbnail
-    // Discord sometimes provides thumbnails automatically
     const thumbnailUrl = videoUrl.replace(/\.mp4$/, '_thumbnail.jpg');
 
-    // Try to analyze thumbnail
     let description = null;
 
     try {
@@ -333,7 +329,6 @@ async function analyzeVideoThumbnail(videoUrl, provider) {
     if (description) {
       return `Video thumbnail shows: ${description}`;
     } else {
-      // Generic fallback for videos
       const videoName = videoUrl.split('/').pop().split('?')[0];
       return `Video file (${videoName}) - unable to analyze content, thumbnail not available`;
     }
@@ -355,7 +350,7 @@ async function getMediaAsBase64(mediaUrl) {
     }
 
     const contentLength = response.headers.get('content-length');
-    if (contentLength && parseInt(contentLength) > 20 * 1024 * 1024) { // 20MB limit
+    if (contentLength && parseInt(contentLength) > 20 * 1024 * 1024) {
       throw new Error(`Media too large: ${contentLength} bytes`);
     }
 
@@ -377,7 +372,7 @@ async function getMediaAnalysisProvider() {
   `);
 
   if (rows.length === 0) {
-    return 'gemini'; // Default to Gemini
+    return 'gemini';
   }
 
   const activeSetting = rows[0].setting;
@@ -385,7 +380,7 @@ async function getMediaAnalysisProvider() {
   if (activeSetting === 'media_provider_groq') return 'groq';
   if (activeSetting === 'media_provider_disabled') return 'disabled';
 
-  return 'gemini'; // fallback
+  return 'gemini';
 }
 
 // Set media analysis provider
@@ -401,7 +396,7 @@ async function setMediaAnalysisProvider(provider) {
   `, [settingName]);
 }
 
-// ENHANCED: Process media from Discord message attachments/embeds
+// Process media from Discord message attachments/embeds
 async function processMediaInMessage(message) {
   const mediaDescriptions = [];
 
@@ -465,29 +460,25 @@ async function processMediaInMessage(message) {
   return mediaDescriptions;
 }
 
-// ENHANCED: Process individual media item with better type detection
+// Process individual media item with better type detection
 async function processMediaItem(url, fileName, contentType) {
   try {
     console.log(`[MEDIA] Processing item: ${fileName} (${contentType || 'unknown'})`);
 
-    // Generate media ID
     const mediaId = generateMediaId(url);
 
-    // Check cache first
     const cached = await getCachedMediaDescription(mediaId);
     if (cached) {
       console.log(`[MEDIA] Found cached description for ${fileName}`);
       return cached;
     }
 
-    // Determine if we can analyze this media type
     const mediaTypeInfo = determineMediaType(contentType, fileName, url);
     if (!mediaTypeInfo.analyzable) {
       console.log(`[MEDIA] Media type not analyzable: ${fileName}`);
       return null;
     }
 
-    // Analyze with AI
     console.log(`[MEDIA] Analyzing ${fileName} as ${mediaTypeInfo.type}`);
     const description = await analyzeMediaWithAI(url, mediaTypeInfo.type, fileName);
 
@@ -496,7 +487,6 @@ async function processMediaItem(url, fileName, contentType) {
       return null;
     }
 
-    // Cache the result
     await cacheMediaDescription(mediaId, description, mediaTypeInfo.type, url);
     console.log(`[MEDIA] Cached analysis for ${fileName}: "${description}"`);
 
@@ -512,9 +502,8 @@ async function processMediaItem(url, fileName, contentType) {
   }
 }
 
-// NEW: Better media type determination
+// Better media type determination
 function determineMediaType(contentType, fileName, url) {
-  // Check content type first
   if (contentType) {
     if (contentType.startsWith('image/')) {
       return { type: contentType, analyzable: true };
@@ -524,22 +513,18 @@ function determineMediaType(contentType, fileName, url) {
     }
   }
 
-  // Fallback to file extension
   if (fileName) {
     const ext = fileName.toLowerCase().split('.').pop();
 
-    // Images
     if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext)) {
       return { type: `image/${ext === 'jpg' ? 'jpeg' : ext}`, analyzable: true };
     }
 
-    // Videos  
     if (['mp4', 'mov', 'avi', 'webm', 'mkv'].includes(ext)) {
       return { type: `video/${ext}`, analyzable: true };
     }
   }
 
-  // Check URL patterns (for Discord CDN)
   if (url && url.includes('cdn.discordapp.com/emojis/')) {
     return { type: 'emoji', analyzable: true };
   }
@@ -547,7 +532,7 @@ function determineMediaType(contentType, fileName, url) {
   return { type: 'unknown', analyzable: false };
 }
 
-// Clean old cache entries (optional maintenance function)
+// Clean old cache entries
 async function cleanupMediaCache() {
   const result = await pool.query(`
     DELETE FROM media_cache 
@@ -560,9 +545,9 @@ async function cleanupMediaCache() {
   return result.rowCount;
 }
 
-// ── AI-POWERED SENTIMENT ANALYSIS (unchanged) ────────────────────────────────
-// REPLACE the analyzeMessageSentiment function in your db.js with this:
+// ── FIXED SENTIMENT ANALYSIS ──────────────────────────────────────────────────
 
+// FIXED: Sentiment analysis with proper JSON parsing and correct model
 async function analyzeMessageSentiment(userMessage, conversationContext = '') {
   if (!userMessage || userMessage.trim().length === 0) {
     return { sentiment: 0, confidence: 0.5, reasoning: 'Empty message' };
@@ -607,7 +592,7 @@ Examples:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-3.2-3b-preview', // UNCHANGED - keep this model
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct', // FIXED: Use correct model
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 150,
         temperature: 0.2,
@@ -628,7 +613,6 @@ Examples:
 
       // Remove markdown code blocks if present
       if (jsonString.includes('```')) {
-        // Remove opening ```json or ``` and closing ```
         jsonString = jsonString.replace(/^```(?:json)?\n?/gm, '').replace(/\n?```$/gm, '');
       }
 
@@ -661,6 +645,43 @@ Examples:
     console.error('Sentiment analysis failed:', error);
     return simpleBackupSentiment(userMessage);
   }
+}
+
+// FIXED: Simple backup sentiment analysis function (was missing!)
+function simpleBackupSentiment(message) {
+  const text = message.toLowerCase();
+  let sentiment = 0;
+
+  const strongNegative = ['fuck', 'shit', 'stupid', 'hate', 'terrible', 'awful', 'garbage', 'useless', 'pathetic'];
+  const negative = ['bad', 'sucks', 'annoying', 'boring', 'whatever', 'dumb'];
+  const positive = ['thanks', 'thank you', 'great', 'awesome', 'cool', 'nice', 'good', 'love', 'amazing'];
+  const strongPositive = ['incredible', 'fantastic', 'perfect', 'brilliant', 'excellent'];
+
+  strongNegative.forEach(word => {
+    if (text.includes(word)) sentiment -= 0.4;
+  });
+
+  negative.forEach(word => {
+    if (text.includes(word)) sentiment -= 0.2;
+  });
+
+  positive.forEach(word => {
+    if (text.includes(word)) sentiment += 0.3;
+  });
+
+  strongPositive.forEach(word => {
+    if (text.includes(word)) sentiment += 0.5;
+  });
+
+  if (text.includes('?')) sentiment += 0.1;
+
+  sentiment = Math.max(-1, Math.min(1, sentiment));
+
+  return {
+    sentiment,
+    confidence: 0.6,
+    reasoning: 'Backup keyword analysis'
+  };
 }
 
 // ── ALL OTHER EXISTING FUNCTIONS (unchanged) ─────────────────────────────────
