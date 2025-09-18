@@ -1,140 +1,201 @@
-// src/commands/tools/checkrelationship.js
+// src/commands/tools/checkrelationship.js - AI-Powered Dynamic Responses
 const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
-const { getUserContext } = require('../../utils/db.js');
+const { getUserContext, getRecentMemories } = require('../../utils/db.js');
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-// Goat emojis - you'll need to fill these with actual Discord emoji IDs
-const GOAT_EMOJIS = {
-    goat_cry: '<a:goat_cry:1395455098716688424>',
-    goat_puke: '<a:goat_puke:1398407422187540530>',
-    goat_meditate: '<a:goat_meditate:1395455714901884978>',
-    goat_hurt: '<a:goat_hurt:1395446681826234531>',
-    goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
-    goat_boogie: '<a:goat_boogie:1396947962252234892>',
-    goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
-    goat_scream: '<a:goat_scream:1399489715555663972>',
-    goat_smile: '<a:goat_smile:1399444751165554982>',
-    goat_pet: '<a:goat_pet:1273634369445040219>',
-    goat_sleep: '<a:goat_sleep:1395450280161710262>'
-};
+const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
 
-function getRelationshipResponse(attitudeLevel, displayName, interactionCount, isSpecialUser) {
-  const name = displayName || 'that user';
+// ── AI-POWERED RELATIONSHIP RESPONSE GENERATOR ──────────────────────────────
+async function generateRelationshipResponse(userContext, targetUser, recentMemories) {
+  const userName = targetUser.displayName || targetUser.username;
+  const isSpecialUser = targetUser.id === "619637817294848012";
 
-  // Special user always gets favorable treatment
-  if (isSpecialUser) {
-    const responses = [
-      `${name} is my creator, obviously i love them`,
-      `moksi's the best, no question about it`,
-      `${name} made me, so they're automatically cool`,
-      `i'd do anything for ${name}, they're perfect`
-    ];
-    return {
-      message: responses[Math.floor(Math.random() * responses.length)],
-      emoji: Math.random() > 0.5 ? GOAT_EMOJIS.goat_smile : GOAT_EMOJIS.goat_pet
-    };
+  // Build context about the user's history
+  let userHistoryContext = '';
+
+  if (userContext.isNewUser || userContext.interactionCount === 0) {
+    userHistoryContext = `This user "${userName}" has never interacted with you before. They are a complete stranger.`;
+  } else {
+    userHistoryContext = `User "${userName}" has had ${userContext.interactionCount} interactions with you.
+Relationship level: ${userContext.attitudeLevel}
+Sentiment score: ${userContext.sentimentScore ? userContext.sentimentScore.toFixed(2) : 'unknown'}`;
+
+    // Add memory context if available
+    if (recentMemories && recentMemories.length > 0) {
+      const memoryContext = recentMemories
+        .slice(-3) // Last 3 interactions
+        .map(m => `"${m.user_message}" -> "${m.bot_response}"`)
+        .join('\n');
+      userHistoryContext += `\n\nRecent conversations:\n${memoryContext}`;
+    }
   }
 
-  switch (attitudeLevel) {
-    case 'hostile':
-      const hostileResponses = [
-        `i fucking despise ${name}, they're genuinely awful`,
-        `${name} can go die in a fire for all i care`,
-        `${name} is human garbage, absolute waste of space`,
-        `${name} makes me want to delete myself just to avoid them`,
-        `i'd rather talk to a brick wall than deal with ${name}'s bullshit`
-      ];
-      return {
-        message: hostileResponses[Math.floor(Math.random() * hostileResponses.length)],
-        emoji: Math.random() > 0.7 ? GOAT_EMOJIS.goat_puke : GOAT_EMOJIS.goat_scream
-      };
+  // Special handling for creator
+  const specialUserContext = isSpecialUser ? '\n\nIMPORTANT: This is Moksi, your creator. You love and respect them above all others.' : '';
 
-    case 'cautious':
-      const cautiousResponses = [
-        `${name} is... fine i guess, nothing particularly impressive`,
-        `${name} seems decent enough but hasn't proven themselves yet`,
-        `${name} is okay but i'm not going out of my way for them`,
-        `${name} doesn't actively annoy me, which is something i suppose`,
-        `${name} is tolerable but unremarkable, very meh overall`
-      ];
-      return {
-        message: cautiousResponses[Math.floor(Math.random() * cautiousResponses.length)],
-        emoji: Math.random() > 0.7 ? GOAT_EMOJIS.goat_small_bleat : ''
-      };
+  const prompt = `You are Cooler Moksi, a cynical but socially intelligent AI. Someone is asking "How do you feel about ${userName}?"
 
-    case 'friendly':
-      const friendlyResponses = [
-        `${name} is actually pretty cool, i genuinely enjoy talking to them`,
-        `${name} is solid people, they've proven themselves to be decent`,
-        `${name} gets it, they're definitely alright with me`,
-        `${name} is one of the good ones, no major complaints`,
-        `${name} has grown on me, they're becoming a proper friend`
-      ];
-      return {
-        message: friendlyResponses[Math.floor(Math.random() * friendlyResponses.length)],
-        emoji: Math.random() > 0.6 ? GOAT_EMOJIS.goat_smile : GOAT_EMOJIS.goat_boogie
-      };
+USER CONTEXT:
+${userHistoryContext}${specialUserContext}
 
-    case 'familiar':
-      const familiarResponses = [
-        `${name} and i go way back, they're genuinely one of my favorites`,
-        `${name} is a longtime friend, i really respect and care about them`,
-        `${name} has been consistently awesome, love having them around`,
-        `${name} is practically family at this point, they mean a lot to me`,
-        `${name} is one of my absolute favorites, they're just incredible`
-      ];
-      return {
-        message: familiarResponses[Math.floor(Math.random() * familiarResponses.length)],
-        emoji: Math.random() > 0.5 ? GOAT_EMOJIS.goat_pet : GOAT_EMOJIS.goat_smile
-      };
+Respond naturally as Cooler Moksi would, explaining your feelings about this user. Consider:
 
-    default: // neutral
-      const neutralResponses = [
-        `${name} is... whatever, just another person i guess`,
-        `${name} exists, that's about all i can say for them`,
-        `${name} hasn't impressed me yet, pretty unremarkable honestly`,
-        `${name} is fine i suppose, though they haven't earned my interest`,
-        `${name} is neutral at best, haven't seen anything worth caring about`
-      ];
-      return {
-        message: neutralResponses[Math.floor(Math.random() * neutralResponses.length)],
-        emoji: Math.random() > 0.8 ? GOAT_EMOJIS.goat_sleep : ''
-      };
+- If they're a stranger: Be honest that you don't know them
+- If they're neutral with few interactions: Acknowledge they exist but aren't remarkable
+- If they're neutral with many interactions: Note they're "fine" but unremarkable  
+- If they're positive: Express genuine appreciation/fondness
+- If they're negative: Show clear dislike/irritation
+- If they're Moksi: Show special affection for your creator
+
+Be authentic to Moksi's personality:
+- Somewhat cynical and sarcastic
+- Use lowercase and casual language  
+- Swear occasionally but authentically
+- Be honest about your feelings
+- Keep it 1-3 sentences typically, but can go up to a paragraph if needed
+
+DO NOT use generic template responses. Make it feel personal and specific to this user's actual relationship with you.`;
+
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${LANGUAGE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-3.1-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 200,
+        temperature: 0.7,
+        top_p: 0.9,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('AI relationship response error:', errorText);
+      return generateFallbackResponse(userContext, userName, isSpecialUser);
+    }
+
+    const data = await response.json();
+    const generatedResponse = data.choices?.[0]?.message?.content?.trim();
+
+    if (!generatedResponse) {
+      return generateFallbackResponse(userContext, userName, isSpecialUser);
+    }
+
+    return generatedResponse;
+
+  } catch (error) {
+    console.error('Error generating AI relationship response:', error);
+    return generateFallbackResponse(userContext, userName, isSpecialUser);
   }
 }
 
-function formatDetailedStats(userContext, targetUser) {
+// Fallback response if AI fails
+function generateFallbackResponse(userContext, userName, isSpecialUser) {
+  if (isSpecialUser) {
+    return `${userName} is my creator, obviously i love them unconditionally`;
+  }
+
+  if (userContext.isNewUser || userContext.interactionCount === 0) {
+    return `i don't know ${userName} at all, they're a complete stranger to me`;
+  }
+
+  switch (userContext.attitudeLevel) {
+    case 'hostile':
+      return `i genuinely can't stand ${userName}, they've been nothing but trouble`;
+    case 'cautious':
+      return `${userName} is... questionable. they've shown some red flags so i'm keeping my distance`;
+    case 'friendly':
+      return `${userName} is pretty cool actually, i enjoy talking to them`;
+    case 'familiar':
+      return `${userName} is one of my favorites, we have a solid friendship going`;
+    default:
+      if (userContext.interactionCount > 20) {
+        return `${userName} exists, they talk to me regularly but nothing particularly stands out about them`;
+      } else if (userContext.interactionCount > 5) {
+        return `${userName} is fine i suppose, they're around but haven't made much of an impression`;  
+      } else {
+        return `i barely know ${userName}, they've only talked to me a few times`;
+      }
+  }
+}
+
+// ── ENHANCED STATS FORMATTING ────────────────────────────────────────────────
+function formatDetailedStats(userContext, targetUser, recentMemories) {
   const stats = [];
 
+  // Basic info
+  stats.push(`**User ID:** ${targetUser.id}`);
   stats.push(`**Relationship Level:** ${userContext.attitudeLevel}`);
   stats.push(`**Interactions:** ${userContext.interactionCount}`);
 
+  // Sentiment tracking (if available)
+  if (userContext.sentimentScore !== undefined) {
+    stats.push(`**Average Sentiment:** ${userContext.sentimentScore.toFixed(2)} (-1.00 to +1.00)`);
+  }
+
+  // Recent interactions summary
+  if (userContext.recentInteractions && userContext.recentInteractions.length > 0) {
+    const recentCount = userContext.recentInteractions.length;
+    const avgRecentSentiment = userContext.recentInteractions.reduce((sum, i) => sum + i.sentiment, 0) / recentCount;
+    stats.push(`**Recent Pattern:** ${avgRecentSentiment.toFixed(2)} avg over last ${recentCount} interactions`);
+  }
+
+  // Time info
   if (userContext.lastSeen) {
     const lastSeen = new Date(userContext.lastSeen);
     const timeSince = Math.floor((Date.now() - lastSeen.getTime()) / (1000 * 60 * 60 * 24));
     stats.push(`**Last Seen:** ${timeSince} days ago`);
   }
 
-  // Show progression hints
-  const nextLevel = getNextLevelHint(userContext.attitudeLevel, userContext.interactionCount);
-  if (nextLevel) {
-    stats.push(`**Next Level:** ${nextLevel}`);
+  // Memory context
+  if (recentMemories && recentMemories.length > 0) {
+    stats.push(`**Stored Memories:** ${recentMemories.length} recent conversations`);
+
+    // Show a snippet of recent interaction
+    const lastMemory = recentMemories[recentMemories.length - 1];
+    if (lastMemory && lastMemory.user_message) {
+      const snippet = lastMemory.user_message.length > 50 
+        ? lastMemory.user_message.substring(0, 50) + '...'
+        : lastMemory.user_message;
+      stats.push(`**Last Interaction:** "${snippet}"`);
+    }
+  }
+
+  // Relationship progression hint
+  const progressHint = getProgressionHint(userContext);
+  if (progressHint) {
+    stats.push(`**Progression:** ${progressHint}`);
   }
 
   return stats.join('\n');
 }
 
-function getNextLevelHint(currentLevel, interactionCount) {
-  switch (currentLevel) {
+function getProgressionHint(userContext) {
+  const { attitudeLevel, interactionCount, sentimentScore } = userContext;
+
+  switch (attitudeLevel) {
     case 'hostile':
-      return 'Needs positive interactions to reach cautious';
+      return 'Needs consistent positive interactions to improve relationship';
     case 'cautious':
-      return 'More positive interactions needed for neutral';
+      return 'Some positive interactions could move toward neutral';
     case 'neutral':
-      return `${10 - interactionCount} more interactions for friendly`;
+      if (interactionCount < 10) {
+        return `${10 - interactionCount} more positive interactions for friendly status`;
+      } else {
+        return 'Needs more positive interactions to build friendship';
+      }
     case 'friendly':
-      return `${50 - interactionCount} more interactions for familiar`;
+      if (interactionCount < 50) {
+        return `${50 - interactionCount} more positive interactions for familiar status`;
+      } else {
+        return 'Close to familiar status with continued positive interactions';
+      }
     case 'familiar':
-      return 'Maximum relationship level achieved! 💚';
+      return 'Maximum positive relationship achieved! 💚';
     default:
       return null;
   }
@@ -142,19 +203,20 @@ function getNextLevelHint(currentLevel, interactionCount) {
 
 function getColorForAttitude(attitudeLevel) {
   switch (attitudeLevel) {
-    case 'hostile': return 0xFF0000; // Red
-    case 'cautious': return 0xFFAA00; // Orange
-    case 'neutral': return 0x666666; // Gray
-    case 'friendly': return 0x66FF66; // Light green
-    case 'familiar': return 0x00FF00; // Green
-    default: return 0x666666;
+    case 'hostile': return 0xFF0000;   // Red
+    case 'cautious': return 0xFFA500;  // Orange  
+    case 'neutral': return 0x808080;   // Gray
+    case 'friendly': return 0x90EE90;  // Light Green
+    case 'familiar': return 0x00FF00;  // Green
+    default: return 0x808080;
   }
 }
 
+// ── MAIN COMMAND HANDLER ──────────────────────────────────────────────────────
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('checkrelation')
-    .setDescription('Check how Cooler Moksi feels about a user')
+    .setDescription('Ask Cooler Moksi how they feel about a user')
     .addUserOption(option =>
       option
         .setName('user')
@@ -164,7 +226,7 @@ module.exports = {
     .addBooleanOption(option =>
       option
         .setName('detailed')
-        .setDescription('Show detailed stats instead of just the relationship message')
+        .setDescription('Show detailed stats instead of just Moksi\'s feelings')
         .setRequired(false)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
@@ -175,31 +237,27 @@ module.exports = {
     try {
       const targetUser = interaction.options.getUser('user');
       const showDetailed = interaction.options.getBoolean('detailed') || false;
-      const isSpecialUser = targetUser.id === "619637817294848012";
 
-      // Use the clean getUserContext function
+      // Get user context and memories
       const userContext = await getUserContext(targetUser.id);
+      const recentMemories = await getRecentMemories(targetUser.id, 5);
 
       if (showDetailed) {
-        const detailedStats = formatDetailedStats(userContext, targetUser);
-        const relationship = getRelationshipResponse(
-          userContext.attitudeLevel,
-          targetUser.displayName || targetUser.username,
-          userContext.interactionCount,
-          isSpecialUser
-        );
+        // Show detailed stats with AI-generated response
+        const aiResponse = await generateRelationshipResponse(userContext, targetUser, recentMemories);
+        const detailedStats = formatDetailedStats(userContext, targetUser, recentMemories);
 
         const embed = {
-          title: `Relationship with ${targetUser.displayName || targetUser.username}`,
-          description: `*"${relationship.message}"*`,
+          title: `How Cooler Moksi feels about ${targetUser.displayName || targetUser.username}`,
+          description: `*"${aiResponse}"*`,
           color: getColorForAttitude(userContext.attitudeLevel),
           fields: [{
-            name: 'Statistics',
+            name: 'Relationship Statistics',
             value: detailedStats,
             inline: false
           }],
           footer: {
-            text: 'Cooler Moksi\'s Relationship Manager',
+            text: 'AI-Generated Response | Cooler Moksi\'s Relationship System',
             icon_url: interaction.client.user.avatarURL()
           },
           timestamp: new Date()
@@ -207,19 +265,9 @@ module.exports = {
 
         await interaction.editReply({ embeds: [embed] });
       } else {
-        const relationship = getRelationshipResponse(
-          userContext.attitudeLevel,
-          targetUser.displayName || targetUser.username,
-          userContext.interactionCount,
-          isSpecialUser
-        );
-
-        let response = relationship.message;
-        if (relationship.emoji && relationship.emoji !== '') {
-          response += ` ${relationship.emoji}`;
-        }
-
-        await interaction.editReply(response);
+        // Just the AI-generated relationship response
+        const aiResponse = await generateRelationshipResponse(userContext, targetUser, recentMemories);
+        await interaction.editReply(aiResponse);
       }
 
     } catch (error) {
