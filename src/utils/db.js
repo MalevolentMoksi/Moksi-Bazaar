@@ -545,34 +545,50 @@ async function cleanupMediaCache() {
   return result.rowCount;
 }
 
-// ── FIXED SENTIMENT ANALYSIS ──────────────────────────────────────────────────
+// ── ENHANCED SENTIMENT ANALYSIS WITH CONTEXTUAL AWARENESS ────────────────────
 
-// FIXED: Sentiment analysis with proper JSON parsing and correct model
-// FIXED: Sentiment analysis with strict JSON enforcement
-
+// ENHANCED: Sentiment analysis with previous context to detect patterns
 async function analyzeMessageSentiment(userMessage, conversationContext = '') {
   if (!userMessage || userMessage.trim().length === 0) {
     return { sentiment: 0, confidence: 0.5, reasoning: 'Empty message' };
   }
 
-  // MUCH MORE SPECIFIC PROMPT to force JSON output
-  const prompt = `You are a sentiment analysis system. Respond ONLY with valid JSON.
+  // ENHANCED: Build contextual prompt that analyzes behavioral patterns
+  const prompt = `You are a sentiment analysis system that detects user behavior patterns. Respond ONLY with valid JSON.
 
-USER MESSAGE: "${userMessage}"
+CONVERSATION HISTORY:
+${conversationContext}
 
-Analyze sentiment toward the AI/bot on scale -1.0 to 1.0:
-- Negative: insults, anger, dismissiveness 
-- Neutral: casual chat, questions, statements
-- Positive: thanks, compliments, enthusiasm
+CURRENT MESSAGE: "${userMessage}"
+
+Analyze sentiment toward the AI/bot on scale -1.0 to 1.0, considering:
+
+BEHAVIORAL PATTERNS:
+- Complete 180s: Sudden shift from hostile to overly nice (suspicious, reduce positive impact)
+- Excessive sucking up: Constant compliments without substance (reduce positive impact, consider decrease)  
+- Consistent negativity: Pattern of complaints/insults (amplify negative)
+- Genuine progression: Natural improvement in tone over time (reward positive growth)
+- Authentic engagement: Questions, genuine interest, natural conversation
+
+SENTIMENT GUIDELINES:
+- Negative: insults, dismissiveness, hostility, complaints
+- Neutral: casual chat, questions, normal statements  
+- Positive: genuine thanks, authentic compliments, helpful engagement
+
+PATTERN DETECTION:
+- If recent history shows sudden personality flip, reduce sentiment magnitude by 50%
+- If showing excessive fake positivity, cap positive sentiment at 0.3
+- If genuinely hostile then genuinely improving, reward authentic change
+- Consider message substance, not just tone
 
 Reply with EXACTLY this JSON format:
-{"sentiment": 0.5, "confidence": 0.8, "reasoning": "brief explanation"}
+{"sentiment": 0.5, "confidence": 0.8, "reasoning": "brief explanation including pattern analysis"}
 
 Examples:
 "fuck you" -> {"sentiment": -0.9, "confidence": 0.95, "reasoning": "Direct insult"}
-"thanks" -> {"sentiment": 0.6, "confidence": 0.8, "reasoning": "Expression of gratitude"}  
-"mwah" -> {"sentiment": 0.4, "confidence": 0.7, "reasoning": "Affectionate expression"}
-"hey" -> {"sentiment": 0.0, "confidence": 0.8, "reasoning": "Neutral greeting"}`;
+"omg you're the best!" (after being hostile) -> {"sentiment": -0.2, "confidence": 0.6, "reasoning": "Overly positive after hostility, likely insincere"}
+"thanks, that actually helped" -> {"sentiment": 0.6, "confidence": 0.8, "reasoning": "Genuine appreciation with substance"}
+"you always suck" -> {"sentiment": -0.8, "confidence": 0.9, "reasoning": "Pattern of consistent negativity"}`;
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -586,16 +602,16 @@ Examples:
         messages: [
           {
             role: 'system', 
-            content: 'You are a JSON sentiment analyzer. Always respond with valid JSON only.'
+            content: 'You are a contextual sentiment analyzer that detects behavioral patterns. Always respond with valid JSON only.'
           },
           {
             role: 'user', 
             content: prompt
           }
         ],
-        max_tokens: 80,  // Reduced to force conciseness
-        temperature: 0.2, // Much lower temperature for consistency
-        stop: ["}"]  // Stop after closing brace
+        max_tokens: 120,  // Slightly increased for pattern analysis
+        temperature: 0.1,
+        stop: ["}"]
       }),
     });
 
@@ -611,23 +627,19 @@ Examples:
       // Clean up the response
       let jsonString = rawResponse;
 
-      // If it doesn't end with }, add it
       if (!jsonString.endsWith('}')) {
         jsonString += '}';
       }
 
-      // Remove any markdown code blocks
       if (jsonString.includes('```')) {
         jsonString = jsonString.replace(/^```(?:json)?\n?/gm, '').replace(/\n?```$/gm, '');
       }
 
-      // Remove any text before the first {
       const firstBrace = jsonString.indexOf('{');
       if (firstBrace > 0) {
         jsonString = jsonString.substring(firstBrace);
       }
 
-      // Remove any text after the last }
       const lastBrace = jsonString.lastIndexOf('}');
       if (lastBrace !== -1 && lastBrace < jsonString.length - 1) {
         jsonString = jsonString.substring(0, lastBrace + 1);
@@ -638,7 +650,6 @@ Examples:
 
       const sentimentData = JSON.parse(jsonString);
 
-      // Validate the parsed data
       if (typeof sentimentData.sentiment === 'number' && 
           sentimentData.sentiment >= -1 && sentimentData.sentiment <= 1) {
         console.log('[SENTIMENT] Successfully parsed:', sentimentData);
@@ -655,7 +666,6 @@ Examples:
       console.error('Raw response:', rawResponse);
       console.error('Cleaned string:', jsonString);
 
-      // Try to extract sentiment from malformed response
       const fallbackSentiment = extractSentimentFromText(rawResponse, userMessage);
       if (fallbackSentiment) {
         return fallbackSentiment;
@@ -669,13 +679,11 @@ Examples:
   }
 }
 
-// NEW: Try to extract sentiment from malformed AI response
+// Try to extract sentiment from malformed AI response
 function extractSentimentFromText(text, originalMessage) {
   try {
-    // Look for sentiment patterns in the malformed response
     const lowerText = text.toLowerCase();
 
-    // Try to find numeric sentiment values
     const sentimentMatch = text.match(/["']?sentiment["']?\s*:\s*([+-]?\d*\.?\d+)/i);
     if (sentimentMatch) {
       const sentiment = parseFloat(sentimentMatch[1]);
@@ -688,7 +696,6 @@ function extractSentimentFromText(text, originalMessage) {
       }
     }
 
-    // Look for positive/negative indicators
     if (lowerText.includes('positive') || lowerText.includes('friendly') || lowerText.includes('affectionate')) {
       return { sentiment: 0.4, confidence: 0.6, reasoning: 'Positive indicators found' };
     }
@@ -736,43 +743,6 @@ function simpleBackupSentiment(message) {
 
   affectionate.forEach(word => {
     if (text.includes(word)) sentiment += 0.4;
-  });
-
-  if (text.includes('?')) sentiment += 0.1;
-
-  sentiment = Math.max(-1, Math.min(1, sentiment));
-
-  return {
-    sentiment,
-    confidence: 0.6,
-    reasoning: 'Backup keyword analysis'
-  };
-}
-
-// FIXED: Simple backup sentiment analysis function (was missing!)
-function simpleBackupSentiment(message) {
-  const text = message.toLowerCase();
-  let sentiment = 0;
-
-  const strongNegative = ['fuck', 'shit', 'stupid', 'hate', 'terrible', 'awful', 'garbage', 'useless', 'pathetic'];
-  const negative = ['bad', 'sucks', 'annoying', 'boring', 'whatever', 'dumb'];
-  const positive = ['thanks', 'thank you', 'great', 'awesome', 'cool', 'nice', 'good', 'love', 'amazing'];
-  const strongPositive = ['incredible', 'fantastic', 'perfect', 'brilliant', 'excellent'];
-
-  strongNegative.forEach(word => {
-    if (text.includes(word)) sentiment -= 0.4;
-  });
-
-  negative.forEach(word => {
-    if (text.includes(word)) sentiment -= 0.2;
-  });
-
-  positive.forEach(word => {
-    if (text.includes(word)) sentiment += 0.3;
-  });
-
-  strongPositive.forEach(word => {
-    if (text.includes(word)) sentiment += 0.5;
   });
 
   if (text.includes('?')) sentiment += 0.1;

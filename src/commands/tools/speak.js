@@ -177,22 +177,49 @@ DO NOT use similar patterns. Be creative with different:
   return antiRepetitionInstructions;
 }
 
-// ── EMOJI SUGGESTION LOGIC ────────────────────────────────────────────────────
-function selectEmoji(message, sentimentScore) {
-  if (Math.random() > 0.6) return null;
-
+// ── ENHANCED CONTEXTUAL EMOJI SELECTION ───────────────────────────────────────
+function selectContextualEmoji(message, sentimentScore, conversationContext = '') {
   const text = message.toLowerCase();
+  const context = conversationContext.toLowerCase();
 
-  if (text.includes('sleep') || text.includes('tired')) return 'goat_sleep';
-  if (text.includes('party') || text.includes('celebrate')) return 'goat_boogie';  
-  if (text.includes('pet') || text.includes('cute')) return 'goat_pet';
-  if (text.includes('loud') || text.includes('scream')) return 'goat_scream';
+  // Context-based selection (higher priority)
+  if (context.includes('coding') || context.includes('programming') || context.includes('bug')) {
+    if (sentimentScore < -0.3) return 'goat_exhausted';
+    if (sentimentScore > 0.3) return 'goat_smile';
+    return 'goat_meditate';
+  }
 
-  if (sentimentScore >= 0.4) return 'goat_smile';
-  if (sentimentScore <= -0.4) return 'goat_cry';
-  if (sentimentScore <= -0.7) return 'goat_puke';
+  if (context.includes('sleep') || context.includes('tired') || text.includes('goodnight')) {
+    return 'goat_sleep';
+  }
 
-  return null;
+  if (context.includes('party') || context.includes('celebration') || text.includes('yay')) {
+    return 'goat_boogie';
+  }
+
+  // Direct message content
+  if (text.includes('pet') || text.includes('cute') || text.includes('adorable')) {
+    return 'goat_pet';
+  }
+
+  if (text.includes('loud') || text.includes('scream') || text.includes('!!!')) {
+    return 'goat_scream';
+  }
+
+  if (text.includes('mwah') || text.includes('kiss') || text.includes('love')) {
+    return 'goat_pet';
+  }
+
+  // Sentiment-based fallback
+  if (sentimentScore >= 0.5) return 'goat_smile';
+  if (sentimentScore <= -0.6) return 'goat_cry';
+  if (sentimentScore <= -0.8) return 'goat_puke';
+  if (sentimentScore >= -0.3 && sentimentScore <= 0.3) return 'goat_meditate';
+
+  // Random chance of no emoji (30% chance)
+  if (Math.random() > 0.7) return null;
+
+  return 'goat_small_bleat'; // Default mild reaction
 }
 
 // ── MAIN COMMAND HANDLER ──────────────────────────────────────────────────────
@@ -207,7 +234,11 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // ENHANCED: Show "thinking..." status immediately
     await interaction.deferReply();
+
+    // ENHANCED: Update to "Cooler Moksi is thinking..." 
+    await interaction.editReply('Cooler Moksi is thinking...');
 
     try {
       const userId = interaction.user.id;
@@ -246,7 +277,7 @@ module.exports = {
       const userContext = await getUserContext(userId);
       const recentMemories = await getRecentMemories(userId, 5);
 
-      // AI-POWERED SENTIMENT ANALYSIS
+      // AI-POWERED SENTIMENT ANALYSIS (now with enhanced context awareness)
       let sentimentAnalysis = { sentiment: 0, reasoning: 'No message' };
       if (userRequest && userRequest.trim()) {
         sentimentAnalysis = await updateUserAttitudeWithAI(userId, userRequest, conversationContext);
@@ -307,7 +338,7 @@ Respond as Cooler Moksi. CRITICAL: Do not repeat patterns from your recent respo
 After your response, suggest ONE emoji from: ${Object.keys(GOAT_EMOJIS).join(', ')} or "none".
 Output the emoji name on a new line.`;
 
-      // FIXED: Call AI with correct model
+      // Call AI with correct model
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -333,20 +364,21 @@ Output the emoji name on a new line.`;
       const data = await response.json();
       let rawReply = data.choices?.[0]?.message?.content?.trim() || 'Nothing returned.';
 
-      // Process emoji suggestion with enhanced logic
+      // Process emoji suggestion with ENHANCED contextual logic
       const lines = rawReply.split('\n').filter(line => line.trim());
       let replyText = lines[0].replace(/:[a-z0-9_]+:/gi, '').trim();
 
       const suggestedEmoji = lines[1]?.toLowerCase().replace(/^:|:$/g, '') || '';
-      let emoji = GOAT_EMOJIS[suggestedEmoji] || '';
+      let emojiKey = null;
 
-      // Fallback emoji selection if none suggested or invalid
-      if (!emoji) {
-        const fallbackKey = selectEmoji(replyText, sentimentAnalysis.sentiment);
-        if (fallbackKey) {
-          emoji = GOAT_EMOJIS[fallbackKey] || '';
-        }
+      // ENHANCED: Use contextual emoji selection (single strategy)
+      if (suggestedEmoji && GOAT_EMOJIS[suggestedEmoji]) {
+        emojiKey = suggestedEmoji;
+      } else {
+        emojiKey = selectContextualEmoji(replyText, sentimentAnalysis.sentiment, conversationContext);
       }
+
+      const emoji = emojiKey ? GOAT_EMOJIS[emojiKey] : '';
 
       // Build final reply
       let finalReply = replyText;
@@ -354,9 +386,17 @@ Output the emoji name on a new line.`;
         finalReply += ' ' + emoji;
       }
 
-      // Add question context if user asked something
+      // ENHANCED: Fix multi-line request formatting
       if (userRequest) {
-        finalReply = `-# <@${userId}> : *"${userRequest}"*\n\n${finalReply}`;
+        const requestLines = userRequest.split('\n');
+        if (requestLines.length === 1) {
+          // Single line - original format
+          finalReply = `-# <@${userId}> : *"${userRequest}"*\n\n${finalReply}`;
+        } else {
+          // Multi-line - apply -# to each line
+          const formattedRequest = requestLines.map(line => `-# *"${line}"*`).join('\n');
+          finalReply = `-# <@${userId}> :\n${formattedRequest}\n\n${finalReply}`;
+        }
       }
 
       // Store conversation memory with sentiment score
