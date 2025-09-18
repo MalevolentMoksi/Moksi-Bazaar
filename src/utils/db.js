@@ -1,4 +1,4 @@
-// ENHANCED DB.JS - AI-Powered Sentiment Analysis + Media Analysis
+// ENHANCED DB.JS - AI-Powered Sentiment Analysis + Media Analysis (FIXED)
 
 const { Pool, types } = require('pg');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
@@ -27,8 +27,8 @@ const init = async () => {
       interaction_count INTEGER DEFAULT 0,
       last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       attitude_level TEXT DEFAULT 'neutral',
-      sentiment_score DECIMAL(4,2) DEFAULT 0.00, -- Running average sentiment
-      recent_interactions JSONB DEFAULT '[]'::jsonb, -- Last 10 interactions with sentiment
+      sentiment_score DECIMAL(4,2) DEFAULT 0.00,
+      recent_interactions JSONB DEFAULT '[]'::jsonb,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -39,7 +39,7 @@ const init = async () => {
       channel_id TEXT NOT NULL,
       user_message TEXT,
       bot_response TEXT,
-      sentiment_score DECIMAL(4,2), -- AI-analyzed sentiment for this interaction
+      sentiment_score DECIMAL(4,2),
       timestamp BIGINT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -54,10 +54,10 @@ const init = async () => {
     );
 
     CREATE TABLE IF NOT EXISTS media_cache (
-      media_id TEXT PRIMARY KEY, -- URL hash or unique identifier
-      description TEXT NOT NULL, -- AI-generated description
-      media_type TEXT NOT NULL, -- image, gif, video, emoji, etc.
-      original_url TEXT, -- The original URL (nullable for privacy)
+      media_id TEXT PRIMARY KEY,
+      description TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      original_url TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       accessed_count INTEGER DEFAULT 1,
       last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -74,7 +74,7 @@ const init = async () => {
   `);
 };
 
-// ── MEDIA ANALYSIS SYSTEM ─────────────────────────────────────────────────────
+// ── MEDIA ANALYSIS SYSTEM (FIXED) ─────────────────────────────────────────────
 
 // Generate unique identifier for media (based on URL/content)
 function generateMediaId(url, contentHash = null) {
@@ -91,7 +91,6 @@ async function getCachedMediaDescription(mediaId) {
   );
 
   if (rows.length > 0) {
-    // Update access count and timestamp
     await pool.query(`
       UPDATE media_cache 
       SET accessed_count = accessed_count + 1, last_accessed = CURRENT_TIMESTAMP
@@ -120,76 +119,150 @@ async function cacheMediaDescription(mediaId, description, mediaType, originalUr
   `, [mediaId, description, mediaType, originalUrl]);
 }
 
-// Analyze media with AI
-async function analyzeMediaWithAI(imageUrl, mediaType) {
+// FIXED: Analyze media with AI - handles videos properly
+async function analyzeMediaWithAI(mediaUrl, mediaType, fileName = '') {
   const provider = await getMediaAnalysisProvider();
 
   if (provider === 'disabled') {
+    console.log('[MEDIA] Analysis disabled by settings');
     return null;
   }
 
+  console.log(`[MEDIA] Analyzing ${mediaType} with ${provider}: ${fileName}`);
+
   try {
     if (provider === 'gemini') {
-      return await analyzeWithGemini(imageUrl, mediaType);
+      return await analyzeWithGemini(mediaUrl, mediaType, fileName);
     } else if (provider === 'groq') {
-      return await analyzeWithGroq(imageUrl, mediaType);
+      return await analyzeWithGroq(mediaUrl, mediaType, fileName);
     }
   } catch (error) {
-    console.error(`Media analysis failed with ${provider}:`, error.message);
+    console.error(`[MEDIA] Analysis failed with ${provider}:`, error.message);
     return null;
   }
 
   return null;
 }
 
-// Analyze with Google Gemini
-async function analyzeWithGemini(imageUrl, mediaType) {
+// FIXED: Analyze with Google Gemini - proper video support
+async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
   if (!GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY not configured');
   }
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          {
-            text: `Describe this ${mediaType} briefly in one sentence for conversation context. Focus on key visual elements, people, objects, text, or actions. Keep it concise and relevant.`
-          },
-          {
-            inlineData: {
-              mimeType: mediaType.includes('gif') ? 'image/gif' : 'image/jpeg',
-              data: await getImageAsBase64(imageUrl)
-            }
-          }
-        ]
-      }]
-    }),
-  });
+  const isVideo = mediaType.includes('video') || fileName.match(/\.(mp4|mov|avi|webm|mkv)$/i);
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini API error: ${errorText}`);
+  try {
+    if (isVideo) {
+      console.log('[MEDIA] Gemini: Attempting video analysis');
+
+      // Try direct video upload to Gemini
+      const videoResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              {
+                text: `Describe this video briefly in one sentence for conversation context. Focus on key visual elements, actions, people, objects, or scenes. Keep it concise and relevant.`
+              },
+              {
+                // Try inline video data
+                inlineData: {
+                  mimeType: mediaType,
+                  data: await getMediaAsBase64(mediaUrl)
+                }
+              }
+            ]
+          }]
+        }),
+      });
+
+      if (videoResponse.ok) {
+        const videoData = await videoResponse.json();
+        const description = videoData.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+        if (description) {
+          console.log('[MEDIA] Gemini video analysis successful');
+          return description;
+        }
+      } else {
+        console.log('[MEDIA] Gemini video analysis failed, trying thumbnail fallback');
+      }
+
+      // Fallback: analyze thumbnail for videos
+      return await analyzeVideoThumbnail(mediaUrl, 'gemini');
+
+    } else {
+      // Handle images normally
+      console.log('[MEDIA] Gemini: Analyzing image');
+
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              {
+                text: `Describe this ${mediaType} briefly in one sentence for conversation context. Focus on key visual elements, people, objects, text, or actions. Keep it concise and relevant.`
+              },
+              {
+                inlineData: {
+                  mimeType: mediaType.includes('gif') ? 'image/gif' : 'image/jpeg',
+                  data: await getMediaAsBase64(mediaUrl)
+                }
+              }
+            ]
+          }]
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[MEDIA] Gemini API error:', errorText);
+        throw new Error(`Gemini API error: ${errorText}`);
+      }
+
+      const data = await response.json();
+      const description = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+      if (!description) {
+        throw new Error('No description returned from Gemini');
+      }
+
+      return description;
+    }
+  } catch (error) {
+    console.error('[MEDIA] Gemini analysis error:', error.message);
+
+    // For videos, try thumbnail fallback
+    if (isVideo) {
+      console.log('[MEDIA] Trying thumbnail fallback for video');
+      return await analyzeVideoThumbnail(mediaUrl, 'gemini');
+    }
+
+    throw error;
   }
-
-  const data = await response.json();
-  const description = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-
-  if (!description) {
-    throw new Error('No description returned from Gemini');
-  }
-
-  return description;
 }
 
-// Analyze with Groq
-async function analyzeWithGroq(imageUrl, mediaType) {
+// FIXED: Analyze with Groq - correct model name
+async function analyzeWithGroq(mediaUrl, mediaType, fileName = '') {
   if (!LANGUAGE_API_KEY) {
     throw new Error('LANGUAGE_API_KEY not configured');
   }
+
+  const isVideo = mediaType.includes('video') || fileName.match(/\.(mp4|mov|avi|webm|mkv)$/i);
+
+  if (isVideo) {
+    console.log('[MEDIA] Groq does not support video analysis, using thumbnail fallback');
+    return await analyzeVideoThumbnail(mediaUrl, 'groq');
+  }
+
+  console.log('[MEDIA] Groq: Analyzing image with correct model');
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -198,7 +271,7 @@ async function analyzeWithGroq(imageUrl, mediaType) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'llama-3.2-90b-vision-preview',
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct', // FIXED: Correct model
       messages: [{
         role: 'user',
         content: [
@@ -209,7 +282,7 @@ async function analyzeWithGroq(imageUrl, mediaType) {
           {
             type: 'image_url',
             image_url: {
-              url: imageUrl
+              url: mediaUrl
             }
           }
         ]
@@ -221,6 +294,7 @@ async function analyzeWithGroq(imageUrl, mediaType) {
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error('[MEDIA] Groq API error:', errorText);
     throw new Error(`Groq API error: ${errorText}`);
   }
 
@@ -234,17 +308,63 @@ async function analyzeWithGroq(imageUrl, mediaType) {
   return description;
 }
 
-// Helper function to convert image URL to base64 for Gemini
-async function getImageAsBase64(imageUrl) {
+// NEW: Video thumbnail fallback analysis
+async function analyzeVideoThumbnail(videoUrl, provider) {
   try {
-    const response = await fetch(imageUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.status}`);
+    console.log(`[MEDIA] Generating thumbnail for video analysis with ${provider}`);
+
+    // For Discord CDN videos, try getting a thumbnail
+    // Discord sometimes provides thumbnails automatically
+    const thumbnailUrl = videoUrl.replace(/\.mp4$/, '_thumbnail.jpg');
+
+    // Try to analyze thumbnail
+    let description = null;
+
+    try {
+      if (provider === 'gemini') {
+        description = await analyzeWithGemini(thumbnailUrl, 'image/jpeg', 'thumbnail');
+      } else if (provider === 'groq') {
+        description = await analyzeWithGroq(thumbnailUrl, 'image/jpeg', 'thumbnail');
+      }
+    } catch (thumbnailError) {
+      console.log('[MEDIA] Thumbnail URL failed, using generic video description');
     }
+
+    if (description) {
+      return `Video thumbnail shows: ${description}`;
+    } else {
+      // Generic fallback for videos
+      const videoName = videoUrl.split('/').pop().split('?')[0];
+      return `Video file (${videoName}) - unable to analyze content, thumbnail not available`;
+    }
+
+  } catch (error) {
+    console.error('[MEDIA] Video thumbnail fallback failed:', error.message);
+    return 'Video content - unable to analyze';
+  }
+}
+
+// Helper function to convert media URL to base64 
+async function getMediaAsBase64(mediaUrl) {
+  try {
+    console.log(`[MEDIA] Converting to base64: ${mediaUrl.substring(0, 80)}...`);
+
+    const response = await fetch(mediaUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch media: ${response.status}`);
+    }
+
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && parseInt(contentLength) > 20 * 1024 * 1024) { // 20MB limit
+      throw new Error(`Media too large: ${contentLength} bytes`);
+    }
+
     const buffer = await response.buffer();
+    console.log(`[MEDIA] Converted ${buffer.length} bytes to base64`);
     return buffer.toString('base64');
   } catch (error) {
-    throw new Error(`Failed to convert image to base64: ${error.message}`);
+    console.error('[MEDIA] Base64 conversion failed:', error.message);
+    throw new Error(`Failed to convert media to base64: ${error.message}`);
   }
 }
 
@@ -270,27 +390,29 @@ async function getMediaAnalysisProvider() {
 
 // Set media analysis provider
 async function setMediaAnalysisProvider(provider) {
-  // Clear all media provider settings
   await pool.query(`
     DELETE FROM settings 
     WHERE setting IN ('media_provider_gemini', 'media_provider_groq', 'media_provider_disabled')
   `);
 
-  // Set the new provider
   const settingName = `media_provider_${provider}`;
   await pool.query(`
     INSERT INTO settings (setting, state) VALUES ($1, true)
   `, [settingName]);
 }
 
-// Process media from Discord message attachments/embeds
+// ENHANCED: Process media from Discord message attachments/embeds
 async function processMediaInMessage(message) {
   const mediaDescriptions = [];
 
   try {
     // Process attachments
     if (message.attachments && message.attachments.size > 0) {
+      console.log(`[MEDIA] Processing ${message.attachments.size} attachments`);
+
       for (const [, attachment] of message.attachments) {
+        console.log(`[MEDIA] Processing attachment: ${attachment.name} (${attachment.contentType})`);
+
         const mediaInfo = await processMediaItem(attachment.url, attachment.name, attachment.contentType);
         if (mediaInfo) {
           mediaDescriptions.push(`[${attachment.name}: ${mediaInfo.description}]`);
@@ -300,6 +422,8 @@ async function processMediaInMessage(message) {
 
     // Process embeds with images
     if (message.embeds && message.embeds.length > 0) {
+      console.log(`[MEDIA] Processing ${message.embeds.length} embeds`);
+
       for (const embed of message.embeds) {
         if (embed.image?.url) {
           const mediaInfo = await processMediaItem(embed.image.url, 'embedded image', 'image');
@@ -320,11 +444,13 @@ async function processMediaInMessage(message) {
     if (message.content) {
       const customEmojiRegex = /<a?:([^:]+):(\d+)>/g;
       let match;
+
       while ((match = customEmojiRegex.exec(message.content)) !== null) {
         const emojiName = match[1];
         const emojiId = match[2];
-        const emojiUrl = `https://cdn.discordapp.com/emojis/${emojiId}.png`;
+        const emojiUrl = `https://cdn.discordapp.com/emojis/${emojiId}.${match[0].startsWith('<a:') ? 'gif' : 'png'}`;
 
+        console.log(`[MEDIA] Processing custom emoji: ${emojiName}`);
         const mediaInfo = await processMediaItem(emojiUrl, emojiName, 'emoji');
         if (mediaInfo) {
           mediaDescriptions.push(`[emoji ${emojiName}: ${mediaInfo.description}]`);
@@ -332,76 +458,106 @@ async function processMediaInMessage(message) {
       }
     }
   } catch (error) {
-    console.error('Error processing media in message:', error.message);
+    console.error('[MEDIA] Error processing media in message:', error.message);
   }
 
+  console.log(`[MEDIA] Processed message, found ${mediaDescriptions.length} media items`);
   return mediaDescriptions;
 }
 
-// Process individual media item
+// ENHANCED: Process individual media item with better type detection
 async function processMediaItem(url, fileName, contentType) {
   try {
+    console.log(`[MEDIA] Processing item: ${fileName} (${contentType || 'unknown'})`);
+
     // Generate media ID
     const mediaId = generateMediaId(url);
 
     // Check cache first
     const cached = await getCachedMediaDescription(mediaId);
     if (cached) {
+      console.log(`[MEDIA] Found cached description for ${fileName}`);
       return cached;
     }
 
     // Determine if we can analyze this media type
-    const isAnalyzable = isMediaAnalyzable(contentType, fileName);
-    if (!isAnalyzable) {
+    const mediaTypeInfo = determineMediaType(contentType, fileName, url);
+    if (!mediaTypeInfo.analyzable) {
+      console.log(`[MEDIA] Media type not analyzable: ${fileName}`);
       return null;
     }
 
     // Analyze with AI
-    const description = await analyzeMediaWithAI(url, contentType || 'image');
+    console.log(`[MEDIA] Analyzing ${fileName} as ${mediaTypeInfo.type}`);
+    const description = await analyzeMediaWithAI(url, mediaTypeInfo.type, fileName);
+
     if (!description) {
+      console.log(`[MEDIA] No description returned for ${fileName}`);
       return null;
     }
 
     // Cache the result
-    await cacheMediaDescription(mediaId, description, contentType || 'image', url);
+    await cacheMediaDescription(mediaId, description, mediaTypeInfo.type, url);
+    console.log(`[MEDIA] Cached analysis for ${fileName}: "${description}"`);
 
     return {
       description,
-      mediaType: contentType || 'image',
+      mediaType: mediaTypeInfo.type,
       cached: false
     };
 
   } catch (error) {
-    console.error(`Failed to process media ${fileName}:`, error.message);
+    console.error(`[MEDIA] Failed to process media ${fileName}:`, error.message);
     return null;
   }
 }
 
-// Check if media type can be analyzed
-function isMediaAnalyzable(contentType, fileName) {
-  if (!contentType && fileName) {
-    const ext = fileName.toLowerCase().split('.').pop();
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-      return true;
+// NEW: Better media type determination
+function determineMediaType(contentType, fileName, url) {
+  // Check content type first
+  if (contentType) {
+    if (contentType.startsWith('image/')) {
+      return { type: contentType, analyzable: true };
+    }
+    if (contentType.startsWith('video/')) {
+      return { type: contentType, analyzable: true };
     }
   }
 
-  if (contentType) {
-    return contentType.startsWith('image/');
+  // Fallback to file extension
+  if (fileName) {
+    const ext = fileName.toLowerCase().split('.').pop();
+
+    // Images
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext)) {
+      return { type: `image/${ext === 'jpg' ? 'jpeg' : ext}`, analyzable: true };
+    }
+
+    // Videos  
+    if (['mp4', 'mov', 'avi', 'webm', 'mkv'].includes(ext)) {
+      return { type: `video/${ext}`, analyzable: true };
+    }
   }
 
-  return false;
+  // Check URL patterns (for Discord CDN)
+  if (url && url.includes('cdn.discordapp.com/emojis/')) {
+    return { type: 'emoji', analyzable: true };
+  }
+
+  return { type: 'unknown', analyzable: false };
 }
 
 // Clean old cache entries (optional maintenance function)
 async function cleanupMediaCache() {
-  // Remove entries older than 30 days that haven't been accessed recently
-  await pool.query(`
+  const result = await pool.query(`
     DELETE FROM media_cache 
     WHERE created_at < NOW() - INTERVAL '30 days'
     AND last_accessed < NOW() - INTERVAL '7 days'
     AND accessed_count < 3
   `);
+
+  console.log(`[MEDIA] Cleaned up ${result.rowCount} old cache entries`);
+  return result.rowCount;
 }
 
 // ── AI-POWERED SENTIMENT ANALYSIS (unchanged) ────────────────────────────────
@@ -431,15 +587,7 @@ Respond with JSON only:
   "sentiment": <number from -1.0 to 1.0>,
   "confidence": <number from 0.0 to 1.0>,
   "reasoning": "<brief explanation>"
-}
-
-Examples:
-- "fuck you bot" = {"sentiment": -0.9, "confidence": 0.95, "reasoning": "Direct insult"}
-- "you're stupid" = {"sentiment": -0.8, "confidence": 0.9, "reasoning": "Direct negative judgment"}
-- "whatever" = {"sentiment": -0.3, "confidence": 0.7, "reasoning": "Dismissive tone"}
-- "hey" = {"sentiment": 0.0, "confidence": 0.8, "reasoning": "Neutral greeting"}
-- "thanks" = {"sentiment": 0.6, "confidence": 0.8, "reasoning": "Expression of gratitude"}
-- "that's awesome!" = {"sentiment": 0.8, "confidence": 0.9, "reasoning": "Enthusiastic positive"}`;
+}`;
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -449,7 +597,7 @@ Examples:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        model: 'meta-llama/llama-3.2-3b-preview', // Keep this one for sentiment analysis
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 150,
         temperature: 0.2,
@@ -704,7 +852,7 @@ module.exports = {
   analyzeMessageSentiment,
   storeConversationMemory,
   getRecentMemories,
-  // NEW: Media analysis functions
+  // Media analysis functions
   processMediaInMessage,
   getCachedMediaDescription,
   cacheMediaDescription,

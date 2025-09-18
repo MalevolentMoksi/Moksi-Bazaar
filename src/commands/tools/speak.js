@@ -1,4 +1,4 @@
-// ENHANCED SPEAK.JS - AI Sentiment Analysis & Anti-Repetition System WITH DEBUGGING
+// ENHANCED SPEAK.JS - AI Sentiment Analysis & Anti-Repetition System (CORRECTED)
 
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
@@ -10,13 +10,13 @@ const {
   getSettingState,
   getUserContext,
   updateUserPreferences,
-  updateUserAttitudeWithAI,  // NEW: AI-powered sentiment analysis
+  updateUserAttitudeWithAI,
   storeConversationMemory,
   getRecentMemories,
-  processMediaInMessage  // NEW: Media analysis
+  processMediaInMessage
 } = require('../../utils/db.js');
 
-// Goat emojis - YOUR ACTUAL IDs
+// FIXED: Goat emojis with actual IDs
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
     goat_puke: '<a:goat_puke:1398407422187540530>',
@@ -46,7 +46,7 @@ const speakDisabledReplies = [
     "Doesn't your jaw hurt from all that talking..?"
 ];
 
-// ── DEBUG-ENABLED CONTEXT PROCESSING WITH MEDIA ANALYSIS ─────────────────────
+// ── ENHANCED CONTEXT PROCESSING WITH MEDIA ANALYSIS ──────────────────────────
 async function buildConversationContext(messages, currentUserId, limit = 10) {
   console.log('[MEDIA DEBUG] Starting buildConversationContext');
 
@@ -307,7 +307,7 @@ Respond as Cooler Moksi. CRITICAL: Do not repeat patterns from your recent respo
 After your response, suggest ONE emoji from: ${Object.keys(GOAT_EMOJIS).join(', ')} or "none".
 Output the emoji name on a new line.`;
 
-      // Call AI with anti-repetition measures
+      // FIXED: Call AI with correct model
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -315,7 +315,7 @@ Output the emoji name on a new line.`;
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'meta-llama/llama-3.1-70b-versatile',
+          model: 'meta-llama/llama-4-scout-17b-16e-instruct', // FIXED: Correct model for text generation
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 100,
           temperature: 0.8,
