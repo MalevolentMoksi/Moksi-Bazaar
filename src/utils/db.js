@@ -449,7 +449,7 @@ Examples:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-3.2-3b-preview',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 150,
         temperature: 0.2,

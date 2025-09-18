@@ -64,7 +64,7 @@ DO NOT use generic template responses. Make it feel personal and specific to thi
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-3.1-70b-versatile',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 200,
         temperature: 0.7,

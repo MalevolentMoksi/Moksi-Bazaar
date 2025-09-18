@@ -106,7 +106,7 @@ Write 2-3 sentences as Moksi reflecting on your social life. Be authentic, sligh
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-3.1-70b-versatile',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 150,
         temperature: 0.7,
