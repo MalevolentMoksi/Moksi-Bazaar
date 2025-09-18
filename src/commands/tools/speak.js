@@ -293,7 +293,7 @@ Output the emoji name on a new line.`;
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'meta-llama/llama-3.1-70b-versatile', // Use larger model for better creativity
+          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 100,
           temperature: 0.8, // Higher temperature for more creativity 
@@ -563,7 +563,7 @@ Output the emoji name on a new line.`;
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'meta-llama/llama-3.1-70b-versatile', // Use larger model for better creativity
+          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 100,
           temperature: 0.8, // Higher temperature for more creativity 
