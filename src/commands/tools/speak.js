@@ -1,21 +1,21 @@
-// CLEAN SPEAK.JS - Refactored for better context and no repetition
+// ENHANCED SPEAK.JS - AI Sentiment Analysis & Anti-Repetition System
+
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
 
-// Import only the functions we actually need from the clean database
 const {
   isUserBlacklisted,
   getSettingState,
   getUserContext,
   updateUserPreferences,
-  updateUserAttitude,
+  updateUserAttitudeWithAI,  // NEW: AI-powered sentiment analysis
   storeConversationMemory,
   getRecentMemories
 } = require('../../utils/db.js');
 
-// Goat emojis - keep the fun stuff!
+// Goat emojis - fill these with actual Discord emoji IDs
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
     goat_puke: '<a:goat_puke:1398407422187540530>',
@@ -29,6 +29,7 @@ const GOAT_EMOJIS = {
     goat_pet: '<a:goat_pet:1273634369445040219>',
     goat_sleep: '<a:goat_sleep:1395450280161710262>'
 };
+
 
 const speakDisabledReplies = [
     "Sorry, no more talking for now.",
@@ -45,7 +46,8 @@ const speakDisabledReplies = [
     "Doesn't your jaw hurt from all that talking..?"
 ];
 
-// ── CLEAN CONTEXT PROCESSING ─────────────────────────────────────────────────
+
+// ── ADVANCED CONTEXT PROCESSING ───────────────────────────────────────────────
 function buildConversationContext(messages, currentUserId, limit = 10) {
   const recentMessages = Array.from(messages.values())
     .filter(msg => !msg.author.bot) // Skip bot messages to avoid confusion
@@ -54,7 +56,7 @@ function buildConversationContext(messages, currentUserId, limit = 10) {
 
   const context = recentMessages.map(msg => {
     const name = msg.member?.displayName || msg.author.username;
-    const timeAgo = Math.floor((Date.now() - msg.createdTimestamp) / 60000); // minutes ago
+    const timeAgo = Math.floor((Date.now() - msg.createdTimestamp) / 60000);
     const timeStr = timeAgo < 1 ? 'now' : `${timeAgo}m ago`;
 
     return `${name} (${timeStr}): ${msg.content.slice(0, 200)}`;
@@ -63,39 +65,78 @@ function buildConversationContext(messages, currentUserId, limit = 10) {
   return context.join('\n');
 }
 
-// ── SIMPLE SENTIMENT ANALYSIS ────────────────────────────────────────────────
-function analyzeSentiment(message) {
-  if (!message) return 0;
+// ── ANTI-REPETITION SYSTEM ────────────────────────────────────────────────────
+function buildAntiRepetitionContext(recentMemories, userContext) {
+  if (!recentMemories || recentMemories.length === 0) {
+    return '';
+  }
 
-  const positive = ['thanks', 'thank you', 'great', 'awesome', 'cool', 'nice', 'good', 'love', 'like', 'appreciate'];
-  const negative = ['hate', 'stupid', 'dumb', 'sucks', 'terrible', 'awful', 'annoying'];
+  // Extract patterns from recent bot responses
+  const recentBotResponses = recentMemories.map(m => m.bot_response).filter(Boolean);
 
-  const text = message.toLowerCase();
-  let score = 0;
+  if (recentBotResponses.length === 0) {
+    return '';
+  }
 
-  positive.forEach(word => {
-    if (text.includes(word)) score += 0.2;
+  // Analyze for repetitive patterns
+  const patterns = [];
+
+  // Check for repeated starting phrases
+  const startWords = recentBotResponses.map(response => {
+    const words = response.toLowerCase().split(' ').slice(0, 3);
+    return words.join(' ');
   });
 
-  negative.forEach(word => {
-    if (text.includes(word)) score -= 0.3;
+  const startPatterns = [...new Set(startWords)];
+  if (startPatterns.length < startWords.length) {
+    patterns.push('You keep starting responses the same way');
+  }
+
+  // Check for repeated ending patterns  
+  const endWords = recentBotResponses.map(response => {
+    const words = response.toLowerCase().split(' ').slice(-2);
+    return words.join(' ');
   });
 
-  return Math.max(-1, Math.min(1, score));
+  const endPatterns = [...new Set(endWords)];
+  if (endPatterns.length < endWords.length) {
+    patterns.push('You keep ending responses similarly');
+  }
+
+  // Build anti-repetition instructions
+  let antiRepetitionInstructions = '';
+
+  if (patterns.length > 0) {
+    antiRepetitionInstructions = `\n\nANTI-REPETITION WARNING: ${patterns.join(', ')}. 
+VARY your response structure. Your recent responses:
+${recentBotResponses.map((r, i) => `${i+1}. "${r}"`).join('\n')}
+
+DO NOT use similar patterns. Be creative with different:
+- Sentence structures
+- Starting words  
+- Ending phrases
+- Response length
+- Tone variations`;
+  }
+
+  return antiRepetitionInstructions;
 }
 
 // ── EMOJI SUGGESTION LOGIC ────────────────────────────────────────────────────
-function selectEmoji(message, sentiment) {
-  if (Math.random() > 0.3) return null; // Only suggest emojis 30% of the time
+function selectEmoji(message, sentimentScore) {
+  if (Math.random() > 0.6) return null; // Only suggest emojis 60% of time
 
   const text = message.toLowerCase();
 
   if (text.includes('sleep') || text.includes('tired')) return 'goat_sleep';
-  if (text.includes('party') || text.includes('celebrate')) return 'goat_boogie';
-  if (sentiment > 0.3) return 'goat_smile';
-  if (sentiment < -0.3) return 'goat_cry';
+  if (text.includes('party') || text.includes('celebrate')) return 'goat_boogie';  
   if (text.includes('pet') || text.includes('cute')) return 'goat_pet';
   if (text.includes('loud') || text.includes('scream')) return 'goat_scream';
+
+  // Sentiment-based selection
+  if (sentimentScore >= 0.4) return 'goat_smile';
+  if (sentimentScore <= -0.4) return 'goat_cry';
+  if (sentimentScore <= -0.7) return 'goat_puke';
 
   return null;
 }
@@ -137,63 +178,76 @@ module.exports = {
       // Update user preferences (tracks interaction count)
       await updateUserPreferences(userId, interaction);
 
-      // Get user context and recent memories
-      const userContext = await getUserContext(userId);
-      const recentMemories = await getRecentMemories(userId, 3);
-
-      // Analyze sentiment and update attitude
-      const sentiment = analyzeSentiment(userRequest);
-      await updateUserAttitude(userId, sentiment);
-
-      // Build conversation context (clean and simple)
+      // Build conversation context for AI sentiment analysis
       const messages = await interaction.channel.messages.fetch({ limit: 15 });
       const conversationContext = buildConversationContext(messages, userId);
 
-      // Build memory context if we have recent memories
+      // Get user context and recent memories BEFORE sentiment analysis
+      const userContext = await getUserContext(userId);
+      const recentMemories = await getRecentMemories(userId, 5);
+
+      // *** NEW: AI-POWERED SENTIMENT ANALYSIS ***
+      let sentimentAnalysis = { sentiment: 0, reasoning: 'No message' };
+      if (userRequest && userRequest.trim()) {
+        sentimentAnalysis = await updateUserAttitudeWithAI(userId, userRequest, conversationContext);
+        console.log(`Sentiment analysis for user ${userId}: ${sentimentAnalysis.sentiment.toFixed(2)} (${sentimentAnalysis.reasoning})`);
+      }
+
+      // Get UPDATED user context after sentiment analysis
+      const updatedUserContext = await getUserContext(userId);
+
+      // Build memory context  
       let memoryContext = '';
       if (recentMemories.length > 0) {
         memoryContext = '\n\nRecent conversation context:\n' + 
           recentMemories.map(m => `User: "${m.user_message}" → You: "${m.bot_response}"`).join('\n');
       }
 
+      // Build anti-repetition context
+      const antiRepetitionContext = buildAntiRepetitionContext(recentMemories, updatedUserContext);
+
       // Build attitude-aware prompt
       let attitudeModifier = '';
-      switch (userContext.attitudeLevel) {
+      switch (updatedUserContext.attitudeLevel) {
         case 'hostile':
-          attitudeModifier = '\n\nATTITUDE: Be dismissive and sarcastic with this user. Show clear irritation.';
+          attitudeModifier = '\n\nATTITUDE: This user has been consistently negative/hostile. Be dismissive, sarcastic, and show clear irritation. You genuinely dislike them.';
           break;
         case 'cautious':
-          attitudeModifier = '\n\nATTITUDE: Be somewhat guarded with this user. Keep responses brief.';
+          attitudeModifier = '\n\nATTITUDE: This user has shown some negative behavior. Be somewhat guarded and less friendly than usual.';
           break;
         case 'familiar':
-          attitudeModifier = '\n\nATTITUDE: Be warm and friendly. This user is a longtime friend.';
+          attitudeModifier = '\n\nATTITUDE: This user is a longtime friend with many positive interactions. Be notably warmer and more engaged.';
           break;
         case 'friendly':
-          attitudeModifier = '\n\nATTITUDE: Be notably warmer than usual. Show you enjoy their company.';
+          attitudeModifier = '\n\nATTITUDE: This user has been consistently positive. Be warmer than usual and show you enjoy their company.';
           break;
         default:
-          attitudeModifier = '\n\nATTITUDE: Be yourself - somewhat cynical but not mean-spirited.';
+          attitudeModifier = '\n\nATTITUDE: Standard interactions. Be yourself - somewhat cynical but not mean-spirited.';
       }
 
-      // Create clean, focused prompt
+      // Create enhanced prompt with anti-repetition system
       const prompt = `You are Cooler Moksi, a socially intelligent AI with a cynical, sassy personality.
 
 CORE IDENTITY:
-- French, into programming and gaming (don't bring it up unless really relevant)
+- into programming and gaming (don't mention unless relevant)
 - Somewhat cynical and sarcastic by default
-- Write naturally in relaxed lowercase, use swearing sparingly but authentically
-- Keep responses 1-2 sentences max, prefer just a few words to even one word answers when possible
+- Write naturally in relaxed lowercase, use swearing sparingly but authentically  
+- Keep responses 1-2 sentences max, but prefer just a few words when possible (one word answers allowed)
 - Current time: ${new Date().toLocaleString('en-US', {timeZone: 'Europe/Paris'})}${attitudeModifier}
 
 CONVERSATION CONTEXT:
-${conversationContext}${memoryContext}
+${conversationContext}${memoryContext}${antiRepetitionContext}
 
+CURRENT INTERACTION:
 ${userRequest ? `${askerName} is asking: "${userRequest}"` : 'Add to this conversation naturally.'}
+${sentimentAnalysis.reasoning ? `[Detected sentiment: ${sentimentAnalysis.sentiment.toFixed(2)} - ${sentimentAnalysis.reasoning}]` : ''}
 
-Respond as Cooler Moksi. After your response, suggest ONE emoji from: ${Object.keys(GOAT_EMOJIS).join(', ')} or "none".
+Respond as Cooler Moksi. CRITICAL: Do not repeat patterns from your recent responses. Be creative and varied.
+
+After your response, suggest ONE emoji from: ${Object.keys(GOAT_EMOJIS).join(', ')} or "none".
 Output the emoji name on a new line.`;
 
-      // Call QWEN API
+      // Call AI with anti-repetition measures
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -201,11 +255,13 @@ Output the emoji name on a new line.`;
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+          model: 'meta-llama/llama-3.1-70b-versatile', // Use larger model for better creativity
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 90, // Keep it concise
-          temperature: 0.7,
+          max_tokens: 100,
+          temperature: 0.8, // Higher temperature for more creativity 
           top_p: 0.9,
+          frequency_penalty: 0.6, // Penalize repeated tokens
+          presence_penalty: 0.3,  // Encourage new topics
         }),
       });
 
@@ -217,27 +273,39 @@ Output the emoji name on a new line.`;
       const data = await response.json();
       let rawReply = data.choices?.[0]?.message?.content?.trim() || 'Nothing returned.';
 
-      // Process emoji suggestion
+      // Process emoji suggestion with enhanced logic
       const lines = rawReply.split('\n').filter(line => line.trim());
-      const replyText = lines[0];
+      let replyText = lines[0].replace(/:[a-z0-9_]+:/gi, '').trim(); // Clean any stray emoji tokens
+
       const suggestedEmoji = lines[1]?.toLowerCase().replace(/^:|:$/g, '') || '';
-      const emoji = GOAT_EMOJIS[suggestedEmoji] || '';
+      let emoji = GOAT_EMOJIS[suggestedEmoji] || '';
+
+      // Fallback emoji selection if none suggested or invalid
+      if (!emoji || emoji.includes('YOUR_EMOJI_ID_HERE')) {
+        const fallbackKey = selectEmoji(replyText, sentimentAnalysis.sentiment);
+        if (fallbackKey) {
+          emoji = GOAT_EMOJIS[fallbackKey] || '';
+        }
+      }
 
       // Build final reply
       let finalReply = replyText;
-      if (emoji) finalReply += ' ' + emoji;
+      if (emoji && !emoji.includes('YOUR_EMOJI_ID_HERE')) {
+        finalReply += ' ' + emoji;
+      }
 
       // Add question context if user asked something
       if (userRequest) {
         finalReply = `-# <@${userId}> : *"${userRequest}"*\n\n${finalReply}`;
       }
 
-      // Store this conversation in memory
+      // Store conversation memory with sentiment score
       await storeConversationMemory(
-        userId, 
-        channelId, 
-        userRequest || '[joined conversation]', 
-        replyText
+        userId,
+        channelId,
+        userRequest || '[joined conversation]',
+        replyText,
+        sentimentAnalysis.sentiment
       );
 
       await interaction.editReply(finalReply);
