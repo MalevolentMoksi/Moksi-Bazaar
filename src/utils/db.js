@@ -548,41 +548,31 @@ async function cleanupMediaCache() {
 // ── FIXED SENTIMENT ANALYSIS ──────────────────────────────────────────────────
 
 // FIXED: Sentiment analysis with proper JSON parsing and correct model
+// FIXED: Sentiment analysis with strict JSON enforcement
+
 async function analyzeMessageSentiment(userMessage, conversationContext = '') {
   if (!userMessage || userMessage.trim().length === 0) {
     return { sentiment: 0, confidence: 0.5, reasoning: 'Empty message' };
   }
 
-  const prompt = `Analyze the sentiment of this user message in context.
+  // MUCH MORE SPECIFIC PROMPT to force JSON output
+  const prompt = `You are a sentiment analysis system. Respond ONLY with valid JSON.
 
-CONTEXT (previous messages):
-${conversationContext}
+USER MESSAGE: "${userMessage}"
 
-USER MESSAGE TO ANALYZE: "${userMessage}"
+Analyze sentiment toward the AI/bot on scale -1.0 to 1.0:
+- Negative: insults, anger, dismissiveness 
+- Neutral: casual chat, questions, statements
+- Positive: thanks, compliments, enthusiasm
 
-Task: Determine if this message is positive, negative, or neutral toward the AI/bot.
-Consider:
-- Tone and word choice
-- Sarcasm and implied meaning
-- Context from previous messages
-- Rudeness, hostility, or aggression
-- Appreciation, kindness, or friendliness
-- Questions show engagement (slightly positive)
-
-Respond with JSON only:
-{
-  "sentiment": <number from -1.0 to 1.0>,
-  "confidence": <number from 0.0 to 1.0>,
-  "reasoning": "<brief explanation>"
-}
+Reply with EXACTLY this JSON format:
+{"sentiment": 0.5, "confidence": 0.8, "reasoning": "brief explanation"}
 
 Examples:
-- "fuck you bot" = {"sentiment": -0.9, "confidence": 0.95, "reasoning": "Direct insult"}
-- "you're stupid" = {"sentiment": -0.8, "confidence": 0.9, "reasoning": "Direct negative judgment"}
-- "whatever" = {"sentiment": -0.3, "confidence": 0.7, "reasoning": "Dismissive tone"}
-- "hey" = {"sentiment": 0.0, "confidence": 0.8, "reasoning": "Neutral greeting"}
-- "thanks" = {"sentiment": 0.6, "confidence": 0.8, "reasoning": "Expression of gratitude"}
-- "that's awesome!" = {"sentiment": 0.8, "confidence": 0.9, "reasoning": "Enthusiastic positive"}`;
+"fuck you" -> {"sentiment": -0.9, "confidence": 0.95, "reasoning": "Direct insult"}
+"thanks" -> {"sentiment": 0.6, "confidence": 0.8, "reasoning": "Expression of gratitude"}  
+"mwah" -> {"sentiment": 0.4, "confidence": 0.7, "reasoning": "Affectionate expression"}
+"hey" -> {"sentiment": 0.0, "confidence": 0.8, "reasoning": "Neutral greeting"}`;
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -592,10 +582,20 @@ Examples:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-4-scout-17b-16e-instruct', // FIXED: Use correct model
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 150,
-        temperature: 0.2,
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        messages: [
+          {
+            role: 'system', 
+            content: 'You are a JSON sentiment analyzer. Always respond with valid JSON only.'
+          },
+          {
+            role: 'user', 
+            content: prompt
+          }
+        ],
+        max_tokens: 80,  // Reduced to force conciseness
+        temperature: 0.2, // Much lower temperature for consistency
+        stop: ["}"]  // Stop after closing brace
       }),
     });
 
@@ -608,22 +608,37 @@ Examples:
     const rawResponse = data.choices?.[0]?.message?.content?.trim();
 
     try {
-      // FIXED: Handle markdown code blocks
+      // Clean up the response
       let jsonString = rawResponse;
 
-      // Remove markdown code blocks if present
+      // If it doesn't end with }, add it
+      if (!jsonString.endsWith('}')) {
+        jsonString += '}';
+      }
+
+      // Remove any markdown code blocks
       if (jsonString.includes('```')) {
         jsonString = jsonString.replace(/^```(?:json)?\n?/gm, '').replace(/\n?```$/gm, '');
       }
 
-      // Additional cleanup for any stray backticks
-      jsonString = jsonString.replace(/^`+|`+$/g, '').trim();
+      // Remove any text before the first {
+      const firstBrace = jsonString.indexOf('{');
+      if (firstBrace > 0) {
+        jsonString = jsonString.substring(firstBrace);
+      }
+
+      // Remove any text after the last }
+      const lastBrace = jsonString.lastIndexOf('}');
+      if (lastBrace !== -1 && lastBrace < jsonString.length - 1) {
+        jsonString = jsonString.substring(0, lastBrace + 1);
+      }
 
       console.log('[SENTIMENT] Raw response:', rawResponse);
       console.log('[SENTIMENT] Cleaned JSON string:', jsonString);
 
       const sentimentData = JSON.parse(jsonString);
 
+      // Validate the parsed data
       if (typeof sentimentData.sentiment === 'number' && 
           sentimentData.sentiment >= -1 && sentimentData.sentiment <= 1) {
         console.log('[SENTIMENT] Successfully parsed:', sentimentData);
@@ -633,18 +648,105 @@ Examples:
           reasoning: sentimentData.reasoning || 'AI analysis'
         };
       } else {
-        throw new Error('Invalid sentiment range');
+        throw new Error('Invalid sentiment data structure');
       }
     } catch (parseError) {
       console.error('Error parsing sentiment response:', parseError);
       console.error('Raw response:', rawResponse);
       console.error('Cleaned string:', jsonString);
+
+      // Try to extract sentiment from malformed response
+      const fallbackSentiment = extractSentimentFromText(rawResponse, userMessage);
+      if (fallbackSentiment) {
+        return fallbackSentiment;
+      }
+
       return simpleBackupSentiment(userMessage);
     }
   } catch (error) {
     console.error('Sentiment analysis failed:', error);
     return simpleBackupSentiment(userMessage);
   }
+}
+
+// NEW: Try to extract sentiment from malformed AI response
+function extractSentimentFromText(text, originalMessage) {
+  try {
+    // Look for sentiment patterns in the malformed response
+    const lowerText = text.toLowerCase();
+
+    // Try to find numeric sentiment values
+    const sentimentMatch = text.match(/["']?sentiment["']?\s*:\s*([+-]?\d*\.?\d+)/i);
+    if (sentimentMatch) {
+      const sentiment = parseFloat(sentimentMatch[1]);
+      if (sentiment >= -1 && sentiment <= 1) {
+        return {
+          sentiment: sentiment,
+          confidence: 0.5,
+          reasoning: 'Extracted from malformed response'
+        };
+      }
+    }
+
+    // Look for positive/negative indicators
+    if (lowerText.includes('positive') || lowerText.includes('friendly') || lowerText.includes('affectionate')) {
+      return { sentiment: 0.4, confidence: 0.6, reasoning: 'Positive indicators found' };
+    }
+
+    if (lowerText.includes('negative') || lowerText.includes('hostile') || lowerText.includes('rude')) {
+      return { sentiment: -0.4, confidence: 0.6, reasoning: 'Negative indicators found' };
+    }
+
+    if (lowerText.includes('neutral') || lowerText.includes('casual')) {
+      return { sentiment: 0.0, confidence: 0.6, reasoning: 'Neutral indicators found' };
+    }
+
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Simple backup sentiment analysis function
+function simpleBackupSentiment(message) {
+  const text = message.toLowerCase();
+  let sentiment = 0;
+
+  const strongNegative = ['fuck', 'shit', 'stupid', 'hate', 'terrible', 'awful', 'garbage', 'useless', 'pathetic'];
+  const negative = ['bad', 'sucks', 'annoying', 'boring', 'whatever', 'dumb'];
+  const positive = ['thanks', 'thank you', 'great', 'awesome', 'cool', 'nice', 'good', 'love', 'amazing'];
+  const strongPositive = ['incredible', 'fantastic', 'perfect', 'brilliant', 'excellent'];
+  const affectionate = ['mwah', 'xoxo', 'heart', 'love', 'cutie', 'sweetie'];
+
+  strongNegative.forEach(word => {
+    if (text.includes(word)) sentiment -= 0.4;
+  });
+
+  negative.forEach(word => {
+    if (text.includes(word)) sentiment -= 0.2;
+  });
+
+  positive.forEach(word => {
+    if (text.includes(word)) sentiment += 0.3;
+  });
+
+  strongPositive.forEach(word => {
+    if (text.includes(word)) sentiment += 0.5;
+  });
+
+  affectionate.forEach(word => {
+    if (text.includes(word)) sentiment += 0.4;
+  });
+
+  if (text.includes('?')) sentiment += 0.1;
+
+  sentiment = Math.max(-1, Math.min(1, sentiment));
+
+  return {
+    sentiment,
+    confidence: 0.6,
+    reasoning: 'Backup keyword analysis'
+  };
 }
 
 // FIXED: Simple backup sentiment analysis function (was missing!)
