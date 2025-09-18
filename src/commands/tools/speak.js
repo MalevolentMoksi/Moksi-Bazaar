@@ -55,7 +55,7 @@ async function buildConversationContext(messages, currentUserId, limit = 10) {
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
     .slice(-limit);
 
-  console.log(`[MEDIA DEBUG] Processing ${recentMessages.length} messages`);
+  // console.log(`[MEDIA DEBUG] Processing ${recentMessages.length} messages`);
 
   const contextPromises = recentMessages.map(async (msg, index) => {
     const name = msg.member?.displayName || msg.author.username;
@@ -72,10 +72,12 @@ async function buildConversationContext(messages, currentUserId, limit = 10) {
     try {
       // console.log(`[MEDIA DEBUG] Calling processMediaInMessage for message from ${name}`);
       mediaDescriptions = await processMediaInMessage(msg);
-      console.log(`[MEDIA DEBUG] Got ${mediaDescriptions.length} media descriptions:`, mediaDescriptions);
+      // Only log when media is actually found
+      if (mediaDescriptions.length > 0) {
+        console.log(`[MEDIA] Found ${mediaDescriptions.length} descriptions for ${name}:`, mediaDescriptions);
+      }
     } catch (error) {
-      console.error(`[MEDIA DEBUG] Error processing media in message from ${name}:`, error.message);
-      console.error(`[MEDIA DEBUG] Full error:`, error);
+      console.error(`[MEDIA] Error processing media from ${name}:`, error.message);
     }
 
     // Build message content
@@ -84,7 +86,7 @@ async function buildConversationContext(messages, currentUserId, limit = 10) {
     // Add media descriptions
     if (mediaDescriptions.length > 0) {
       const mediaText = mediaDescriptions.join(' ');
-      console.log(`[MEDIA DEBUG] Adding media text: "${mediaText}"`);
+      // console.log(`[MEDIA DEBUG] Adding media text: "${mediaText}"`);
       if (messageContent.trim()) {
         messageContent += ` ${mediaText}`;
       } else {
@@ -106,11 +108,10 @@ async function buildConversationContext(messages, currentUserId, limit = 10) {
   try {
     const contextArray = await Promise.all(contextPromises);
     const finalContext = contextArray.join('\n');
-    console.log(`[MEDIA DEBUG] Final conversation context:\n${finalContext}`);
+    // console.log(`[MEDIA DEBUG] Final conversation context:\n${finalContext}`);
     return finalContext;
   } catch (error) {
-    console.error('[MEDIA DEBUG] Error building conversation context with media:', error.message);
-    console.error('[MEDIA DEBUG] Full error:', error);
+    console.error('[MEDIA] Error building conversation context:', error.message);
 
     // Fallback to simple context without media
     const fallback = recentMessages.map(msg => {
@@ -120,7 +121,7 @@ async function buildConversationContext(messages, currentUserId, limit = 10) {
       return `${name} (${timeStr}): ${msg.content.slice(0, 200) || '[no text content]'}`;
     }).join('\n');
 
-    console.log(`[MEDIA DEBUG] Using fallback context:\n${fallback}`);
+    // console.log(`[MEDIA DEBUG] Using fallback context:\n${fallback}`);
     return fallback;
   }
 }
@@ -234,11 +235,8 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    // ENHANCED: Show "thinking..." status immediately
+    // PERFECT: Use Discord's built-in "Bot is thinking..." indicator - no (edited) marks!
     await interaction.deferReply();
-
-    // ENHANCED: Update to "Cooler Moksi is thinking..." 
-    await interaction.editReply(finalReply);
 
     try {
       const userId = interaction.user.id;
@@ -246,7 +244,7 @@ module.exports = {
       const userRequest = interaction.options.getString('request');
       const askerName = interaction.member?.displayName || interaction.user.username;
 
-      console.log(`[MEDIA DEBUG] Starting speak command for user ${askerName} (${userId})`);
+      // console.log(`[MEDIA DEBUG] Starting speak command for user ${askerName} (${userId})`);
 
       // Check blacklist
       if (await isUserBlacklisted(userId)) {
@@ -266,11 +264,11 @@ module.exports = {
       await updateUserPreferences(userId, interaction);
 
       // Build conversation context for AI sentiment analysis WITH MEDIA ANALYSIS
-      console.log('[MEDIA DEBUG] Fetching recent messages');
+      // console.log('[MEDIA DEBUG] Fetching recent messages');
       const messages = await interaction.channel.messages.fetch({ limit: 15 });
-      console.log(`[MEDIA DEBUG] Fetched ${messages.size} messages from channel`);
+      // console.log(`[MEDIA DEBUG] Fetched ${messages.size} messages from channel`);
 
-      console.log('[MEDIA DEBUG] Building conversation context with media analysis');
+      // console.log('[MEDIA DEBUG] Building conversation context with media analysis');
       const conversationContext = await buildConversationContext(messages, userId);
 
       // Get user context and recent memories BEFORE sentiment analysis
@@ -408,7 +406,7 @@ Output the emoji name on a new line.`;
         sentimentAnalysis.sentiment
       );
 
-      console.log('[MEDIA DEBUG] Speak command completed successfully');
+      // console.log('[MEDIA DEBUG] Speak command completed successfully');
       await interaction.editReply(finalReply);
 
     } catch (error) {
