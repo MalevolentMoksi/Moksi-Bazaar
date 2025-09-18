@@ -597,7 +597,7 @@ Respond with JSON only:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-3.2-3b-preview', // Keep this one for sentiment analysis
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct', // Keep this one for sentiment analysis
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 150,
         temperature: 0.2,
