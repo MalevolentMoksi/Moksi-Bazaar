@@ -48,7 +48,7 @@ const speakDisabledReplies = [
 
 // ── ENHANCED CONTEXT PROCESSING WITH MEDIA ANALYSIS ──────────────────────────
 async function buildConversationContext(messages, currentUserId, limit = 10) {
-  console.log('[MEDIA DEBUG] Starting buildConversationContext');
+  // console.log('[MEDIA DEBUG] Starting buildConversationContext');
 
   const recentMessages = Array.from(messages.values())
     .filter(msg => !msg.author.bot)
@@ -62,15 +62,15 @@ async function buildConversationContext(messages, currentUserId, limit = 10) {
     const timeAgo = Math.floor((Date.now() - msg.createdTimestamp) / 60000);
     const timeStr = timeAgo < 1 ? 'now' : `${timeAgo}m ago`;
 
-    console.log(`[MEDIA DEBUG] Message ${index + 1} from ${name}:`);
-    console.log(`[MEDIA DEBUG] - Has attachments: ${msg.attachments?.size || 0}`);
-    console.log(`[MEDIA DEBUG] - Has embeds: ${msg.embeds?.length || 0}`);
-    console.log(`[MEDIA DEBUG] - Content: "${msg.content.substring(0, 100)}..."`);
+    // console.log(`[MEDIA DEBUG] Message ${index + 1} from ${name}:`);
+    // console.log(`[MEDIA DEBUG] - Has attachments: ${msg.attachments?.size || 0}`);
+    // console.log(`[MEDIA DEBUG] - Has embeds: ${msg.embeds?.length || 0}`);
+    // console.log(`[MEDIA DEBUG] - Content: "${msg.content.substring(0, 100)}..."`);
 
     // Process media in message
     let mediaDescriptions = [];
     try {
-      console.log(`[MEDIA DEBUG] Calling processMediaInMessage for message from ${name}`);
+      // console.log(`[MEDIA DEBUG] Calling processMediaInMessage for message from ${name}`);
       mediaDescriptions = await processMediaInMessage(msg);
       console.log(`[MEDIA DEBUG] Got ${mediaDescriptions.length} media descriptions:`, mediaDescriptions);
     } catch (error) {
@@ -98,7 +98,7 @@ async function buildConversationContext(messages, currentUserId, limit = 10) {
     }
 
     const finalContent = `${name} (${timeStr}): ${messageContent}`;
-    console.log(`[MEDIA DEBUG] Final context line: "${finalContent}"`);
+    // console.log(`[MEDIA DEBUG] Final context line: "${finalContent}"`);
 
     return finalContent;
   });
@@ -238,7 +238,7 @@ module.exports = {
     await interaction.deferReply();
 
     // ENHANCED: Update to "Cooler Moksi is thinking..." 
-    await interaction.editReply('Cooler Moksi is thinking...');
+    await interaction.editReply(finalReply);
 
     try {
       const userId = interaction.user.id;
