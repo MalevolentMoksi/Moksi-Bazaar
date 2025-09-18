@@ -561,6 +561,8 @@ async function cleanupMediaCache() {
 }
 
 // ── AI-POWERED SENTIMENT ANALYSIS (unchanged) ────────────────────────────────
+// REPLACE the analyzeMessageSentiment function in your db.js with this:
+
 async function analyzeMessageSentiment(userMessage, conversationContext = '') {
   if (!userMessage || userMessage.trim().length === 0) {
     return { sentiment: 0, confidence: 0.5, reasoning: 'Empty message' };
@@ -587,7 +589,15 @@ Respond with JSON only:
   "sentiment": <number from -1.0 to 1.0>,
   "confidence": <number from 0.0 to 1.0>,
   "reasoning": "<brief explanation>"
-}`;
+}
+
+Examples:
+- "fuck you bot" = {"sentiment": -0.9, "confidence": 0.95, "reasoning": "Direct insult"}
+- "you're stupid" = {"sentiment": -0.8, "confidence": 0.9, "reasoning": "Direct negative judgment"}
+- "whatever" = {"sentiment": -0.3, "confidence": 0.7, "reasoning": "Dismissive tone"}
+- "hey" = {"sentiment": 0.0, "confidence": 0.8, "reasoning": "Neutral greeting"}
+- "thanks" = {"sentiment": 0.6, "confidence": 0.8, "reasoning": "Expression of gratitude"}
+- "that's awesome!" = {"sentiment": 0.8, "confidence": 0.9, "reasoning": "Enthusiastic positive"}`;
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -597,7 +607,7 @@ Respond with JSON only:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'meta-llama/llama-4-scout-17b-16e-instruct', // Keep this one for sentiment analysis
+        model: 'meta-llama/llama-3.2-3b-preview', // UNCHANGED - keep this model
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 150,
         temperature: 0.2,
@@ -613,10 +623,26 @@ Respond with JSON only:
     const rawResponse = data.choices?.[0]?.message?.content?.trim();
 
     try {
-      const sentimentData = JSON.parse(rawResponse);
+      // FIXED: Handle markdown code blocks
+      let jsonString = rawResponse;
+
+      // Remove markdown code blocks if present
+      if (jsonString.includes('```')) {
+        // Remove opening ```json or ``` and closing ```
+        jsonString = jsonString.replace(/^```(?:json)?\n?/gm, '').replace(/\n?```$/gm, '');
+      }
+
+      // Additional cleanup for any stray backticks
+      jsonString = jsonString.replace(/^`+|`+$/g, '').trim();
+
+      console.log('[SENTIMENT] Raw response:', rawResponse);
+      console.log('[SENTIMENT] Cleaned JSON string:', jsonString);
+
+      const sentimentData = JSON.parse(jsonString);
 
       if (typeof sentimentData.sentiment === 'number' && 
           sentimentData.sentiment >= -1 && sentimentData.sentiment <= 1) {
+        console.log('[SENTIMENT] Successfully parsed:', sentimentData);
         return {
           sentiment: sentimentData.sentiment,
           confidence: sentimentData.confidence || 0.7,
@@ -626,50 +652,15 @@ Respond with JSON only:
         throw new Error('Invalid sentiment range');
       }
     } catch (parseError) {
-      console.error('Error parsing sentiment response:', parseError, 'Raw:', rawResponse);
+      console.error('Error parsing sentiment response:', parseError);
+      console.error('Raw response:', rawResponse);
+      console.error('Cleaned string:', jsonString);
       return simpleBackupSentiment(userMessage);
     }
   } catch (error) {
     console.error('Sentiment analysis failed:', error);
     return simpleBackupSentiment(userMessage);
   }
-}
-
-// Backup simple sentiment analysis if AI fails
-function simpleBackupSentiment(message) {
-  const text = message.toLowerCase();
-  let sentiment = 0;
-
-  const strongNegative = ['fuck', 'shit', 'stupid', 'hate', 'terrible', 'awful', 'garbage', 'useless', 'pathetic'];
-  const negative = ['bad', 'sucks', 'annoying', 'boring', 'whatever', 'dumb'];
-  const positive = ['thanks', 'thank you', 'great', 'awesome', 'cool', 'nice', 'good', 'love', 'amazing'];
-  const strongPositive = ['incredible', 'fantastic', 'perfect', 'brilliant', 'excellent'];
-
-  strongNegative.forEach(word => {
-    if (text.includes(word)) sentiment -= 0.4;
-  });
-
-  negative.forEach(word => {
-    if (text.includes(word)) sentiment -= 0.2;
-  });
-
-  positive.forEach(word => {
-    if (text.includes(word)) sentiment += 0.3;
-  });
-
-  strongPositive.forEach(word => {
-    if (text.includes(word)) sentiment += 0.5;
-  });
-
-  if (text.includes('?')) sentiment += 0.1;
-
-  sentiment = Math.max(-1, Math.min(1, sentiment));
-
-  return {
-    sentiment,
-    confidence: 0.6,
-    reasoning: 'Backup keyword analysis'
-  };
 }
 
 // ── ALL OTHER EXISTING FUNCTIONS (unchanged) ─────────────────────────────────
