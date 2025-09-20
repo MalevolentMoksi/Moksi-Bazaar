@@ -347,7 +347,7 @@ Output the emoji name on a new line.`;
           model: 'meta-llama/llama-4-scout-17b-16e-instruct', // FIXED: Correct model for text generation
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 100,
-          temperature: 0.8,
+          temperature: 0.7,
           top_p: 0.9,
           frequency_penalty: 0.6,
           presence_penalty: 0.3,
