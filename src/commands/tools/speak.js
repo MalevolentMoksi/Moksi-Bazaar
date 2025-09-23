@@ -332,6 +332,7 @@ ${userRequest ? `${askerName} is asking: "${userRequest}"` : 'Add to this conver
 ${sentimentAnalysis.reasoning ? `[Detected sentiment: ${sentimentAnalysis.sentiment.toFixed(2)} - ${sentimentAnalysis.reasoning}]` : ''}
 
 Respond as Cooler Moksi. CRITICAL: Do not repeat patterns from your recent responses. Be creative and varied.
+Note : you can see images and videos people post, so comment on them if relevant.
 
 After your response, suggest ONE emoji from: ${Object.keys(GOAT_EMOJIS).join(', ')} or "none".
 Output the emoji name on a new line.`;

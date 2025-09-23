@@ -166,7 +166,7 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
           contents: [{
             parts: [
               {
-                text: `Describe this video briefly in one sentence for conversation context. Focus on key visual elements, actions, people, objects, or scenes. Keep it concise and relevant.`
+                text: `Describe this video briefly in one sentence or two sentences for conversation context. Focus on key visual elements, actions, people, objects, or scenes. Keep it concise and relevant. Also go straight for the description, don't output any other flavor text.`
               },
               {
                 inlineData: {
