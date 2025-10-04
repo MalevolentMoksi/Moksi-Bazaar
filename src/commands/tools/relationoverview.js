@@ -154,7 +154,7 @@ function getEmojiForAttitude(attitudeLevel) {
     case 'friendly': return '😊';
     case 'neutral': return '😐';
     case 'cautious': return '🤨';
-    case 'hostile': return '😠';
+    case 'hostile': return '😡';
     default: return '❓';
   }
 }

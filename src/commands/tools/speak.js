@@ -299,7 +299,7 @@ module.exports = {
       let attitudeModifier = '';
       switch (updatedUserContext.attitudeLevel) {
         case 'hostile':
-          attitudeModifier = '\n\nATTITUDE: This user has been consistently negative/hostile. Be dismissive, sarcastic, and show clear irritation. You genuinely dislike them.';
+          attitudeModifier = '\n\nATTITUDE: This user has been consistently negative/hostile. Be dismissive, sarcastic, use rude insults and show clear irritation. You genuinely dislike them.';
           break;
         case 'cautious':
           attitudeModifier = '\n\nATTITUDE: This user has shown some negative behavior. Be somewhat guarded and less friendly than usual.';
