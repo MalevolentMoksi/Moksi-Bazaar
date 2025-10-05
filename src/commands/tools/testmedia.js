@@ -1,6 +1,8 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const { processMediaInMessage, getMediaAnalysisProvider } = require('../../utils/db.js');
 
+const TRUNC = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('testmedia')
@@ -8,97 +10,138 @@ module.exports = {
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
     .addIntegerOption(o =>
       o.setName('limit')
-       .setDescription('Messages to scan (1-25, default 10)')
+       .setDescription('Messages to scan (1–25, default 10)')
        .setMinValue(1)
        .setMaxValue(25)
     ),
 
   async execute(interaction) {
     await interaction.deferReply();
-    const limit      = interaction.options.getInteger('limit') || 10;
-    const provider   = await getMediaAnalysisProvider();
-    const colourMap  = { gemini: 0x4285F4, groq: 0xF55036, disabled: 0x99AAB5 };
-    const scan       = await interaction.channel.messages.fetch({ limit });
 
-    let total = 0, withMedia = 0, items = 0, ok = 0, fail = 0, details = [];
+    const limit = interaction.options.getInteger('limit') || 10;
+    const provider = await getMediaAnalysisProvider();
+    const color = provider === 'gemini' ? 0x4285F4 : provider === 'groq' ? 0xF55036 : 0x99AAB5;
 
-    for (const [, msg] of scan) {
+    const messages = await interaction.channel.messages.fetch({ limit });
+    let total = 0, withMedia = 0, items = 0, ok = 0, fail = 0;
+
+    const results = [];
+    for (const [, msg] of messages) {
       if (msg.author.bot) continue;
       total++;
-      const media = [];
 
+      const mediaList = [];
+      // attachments
       if (msg.attachments.size) {
-        msg.attachments.forEach(a => media.push({ icon: '📎', name: a.name }));
+        msg.attachments.forEach(a => mediaList.push({ icon: '📎', name: a.name }));
       }
+      // embeds
       msg.embeds.forEach(e => {
-        if (e.image?.url)      media.push({ icon: '🖼️', name: 'image' });
-        if (e.thumbnail?.url)  media.push({ icon: '🖼️', name: 'thumbnail' });
+        if (e.image?.url)     mediaList.push({ icon: '🖼️', name: 'image' });
+        if (e.thumbnail?.url) mediaList.push({ icon: '🖼️', name: 'thumbnail' });
       });
-      msg.stickers.forEach(s => media.push({ icon: '🎨', name: s.name }));
-      [...msg.content.matchAll(/<a?:(\\w+):(\\d+)>/g)]
-        .forEach(m => media.push({ icon: '😀', name: m[1] }));
+      // stickers
+      msg.stickers.forEach(s => mediaList.push({ icon: '🎨', name: s.name }));
+      // custom emojis
+      const emojiRe = /<a?:(\w+):(\d+)>/g;
+      [...(msg.content?.matchAll(emojiRe) || [])].forEach(m => mediaList.push({ icon: '😀', name: m[1] }));
 
-      if (!media.length) continue;
+      if (!mediaList.length) continue;
 
-      withMedia++; items += media.length;
-      let desc   = [];
+      withMedia++;
+      items += mediaList.length;
+
+      let descriptions = [];
       try {
-        desc = await processMediaInMessage(msg);
-        ok  += desc.length;
-        fail += media.length - desc.length;
+        descriptions = await processMediaInMessage(msg);
+        ok += descriptions.length;
+        fail += mediaList.length - descriptions.length;
       } catch (e) {
-        fail += media.length;
+        fail += mediaList.length;
       }
 
-      details.push({
-        name: `${desc.length ? '✅' : '❌'} ${msg.member?.displayName || msg.author.username}`,
-        value:
-          `**Media:** ${media.map(m => m.icon + ' ' + m.name).join(', ')}\\n` +
-          `**Time:** <t:${Math.floor(msg.createdTimestamp/1000)}:R>\\n` +
-          (desc.length ? `**AI:**\\n${desc.map(d => '> ' + (d.length > 150 ? d.slice(0,147)+'…' : d)).join('\\n')}`
-                        : 'No analysis')
+      const typeSummary = mediaList.map(m => `${m.icon} ${m.name}`).join(', ');
+      const lines = [
+        `Media: ${typeSummary}`,
+        `Time: <t:${Math.floor(msg.createdTimestamp / 1000)}:R>`
+      ];
+      if (descriptions.length) {
+        lines.push('AI:');
+        lines.push(...descriptions.map(d => `> ${TRUNC(d, 300)}`));
+      } else {
+        lines.push('AI: none');
+      }
+
+      results.push({
+        name: `${descriptions.length ? '✅' : '❌'} ${msg.member?.displayName || msg.author.username}`,
+        value: TRUNC(lines.join('\n'), 1000) // keep under Discord field limit
       });
     }
 
-    /* ---------- embeds ---------- */
-    const embeds = [
-      new EmbedBuilder()
-        .setTitle('📊 Media Analysis Test')
-        .setColor(colourMap[provider] ?? 0x5865F2)
-        .addFields(
-          { name: 'Config',
-            value: `Provider: **${provider}**\\nMessages scanned: **${total}**\\nLimit: **${limit}**`,
-            inline: true },
-          { name: 'Stats',
-            value: `Media messages: **${withMedia}**\\nItems: **${items}**\\nSuccess rate: **${items ? Math.round(ok/items*100) : 0}%**`,
-            inline: true },
-          { name: 'Results',
-            value: `Successful: **${ok}**\\nFailed: **${fail}**`,
-            inline: true }
-        )
-        .setTimestamp()
-        .setFooter({ text: `Channel: #${interaction.channel.name}` })
-    ];
+    // Summary embed
+    const summary = new EmbedBuilder()
+      .setTitle('📊 Media Analysis Test')
+      .setColor(color)
+      .addFields(
+        {
+          name: 'Config',
+          value: [
+            `Provider: ${provider}`,
+            `Messages scanned: ${total}`,
+            `Limit: ${limit}`,
+            `Channel: #${interaction.channel.name}`
+          ].join('\n'),
+          inline: true
+        },
+        {
+          name: 'Stats',
+          value: [
+            `Media messages: ${withMedia}`,
+            `Items: ${items}`,
+            `Success rate: ${items ? Math.round((ok / items) * 100) : 0}%`
+          ].join('\n'),
+          inline: true
+        },
+        {
+          name: 'Results',
+          value: [
+            `Successful: ${ok}`,
+            `Failed: ${fail}`,
+            `Provider status: ${provider === 'disabled' ? 'disabled' : 'active'}`
+          ].join('\n'),
+          inline: true
+        }
+      )
+      .setTimestamp();
 
-    if (!details.length) {
+    const embeds = [summary];
+
+    if (!results.length) {
       embeds.push(
         new EmbedBuilder()
           .setTitle('ℹ️ No Media Found')
           .setDescription(
-            `No media detected in the last **${limit}** messages.\\n\\n` +
-            '💡 Try uploading an image, GIF, video, sticker, or custom emoji then run the command again.')
+            [
+              `No media detected in the last ${limit} messages.`,
+              '',
+              'Tips:',
+              '• Upload an image, GIF, or video',
+              '• Use custom emojis or stickers',
+              '• Share a link that generates an image embed'
+            ].join('\n')
+          )
           .setColor(0xFEE75C)
       );
     } else {
-      const chunk = (arr, n) => arr.reduce((a,_,i) => (i%n ? a[a.length-1].push(arr[i])
-                                                         : a.push([arr[i]]), a), []);
-      chunk(details, 5).forEach((group,i) => {
-        const emb = new EmbedBuilder()
-          .setTitle(i ? '🔍 Details (cont.)' : '🔍 Detailed Media Analysis')
-          .setColor(0x5865F2)
-          .addFields(group);
-        embeds.push(emb);
-      });
+      // chunk into groups of 5 fields to stay safe on limits
+      for (let i = 0; i < results.length; i += 5) {
+        embeds.push(
+          new EmbedBuilder()
+            .setTitle(i ? '🔍 Details (cont.)' : '🔍 Detailed Media Analysis')
+            .setColor(0x5865F2)
+            .addFields(results.slice(i, i + 5))
+        );
+      }
     }
 
     await interaction.editReply({ embeds });
