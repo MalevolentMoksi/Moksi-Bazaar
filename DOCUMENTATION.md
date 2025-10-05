@@ -444,7 +444,7 @@ cmd = "npm start"
 
 #### `/checkrelationship [@user]`
 **File**: `checkrelationship.js` (11,175 bytes)  
-**Description**: Check compatibility with another user  
+**Description**: Check how the bot feels about a user  
 **Parameters**:
 - `user` (mention): Target user
 
@@ -469,9 +469,9 @@ cmd = "npm start"
 
 #### `/speak [text]`
 **File**: `speak.js` (16,684 bytes)  
-**Description**: Text-to-speech in voice channels  
+**Description**: AI ability to speak and be spoken to in discord text channels, taking in visual and textual context and responding accordingly, along with corresponding relationships building  
 **Parameters**:
-- `text` (string): Text to synthesize
+- `text` (string): Text to adress to user
 
 ### Entertainment Commands
 
@@ -577,7 +577,7 @@ Use GitHub issues with:
 
 For support and questions:
 - **GitHub Issues**: Bug reports and feature requests
-- **Discord**: Join our community server
+- **Discord**: @malevolentmoksi
 - **Documentation**: This comprehensive guide
 
 ---
@@ -598,12 +598,7 @@ For support and questions:
 
 - [ ] Web dashboard for bot management
 - [ ] Advanced analytics and reporting
-- [ ] Mobile companion app
-- [ ] Multi-language support
-- [ ] Advanced AI integration
-- [ ] Custom game development framework
-- [ ] Enhanced voice features
-- [ ] Real-time tournaments
+- [ ] Better AI context comprehension
 
 ---
 
