@@ -1,5 +1,4 @@
-// src/commands/tools/testmedia.js - Quick test for media processing
-
+// src/commands/tools/testmedia.js  (fixed)
 const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const { processMediaInMessage, getMediaAnalysisProvider } = require('../../utils/db.js');
 
@@ -11,118 +10,85 @@ module.exports = {
 
   async execute(interaction) {
     await interaction.deferReply();
-
     try {
-      // Check current media provider setting
       const provider = await getMediaAnalysisProvider();
-      console.log(`[TEST MEDIA] Current provider: ${provider}`);
+      const messages = await interaction.channel.messages.fetch({ limit: 10 });
 
-      // Get recent messages
-      const messages = await interaction.channel.messages.fetch({ limit: 5 });
-      console.log(`[TEST MEDIA] Fetched ${messages.size} messages`);
+      let out = [
+        '**Media Analysis Test**',
+        `Provider: ${provider}`,
+        `Messages checked: ${messages.size}`,
+        ''
+      ];
 
-      let results = [];
-      results.push(`**Media Analysis Test**`);
-      results.push(`Provider: ${provider}`);
-      results.push(`Messages checked: ${messages.size}`);
-      results.push('');
+      let mediaCount = 0;
+      for (const [, msg] of messages) {
+        if (msg.author.bot) continue;
+        const author = msg.member?.displayName || msg.author.username;
 
-      // Process each message
-      for (const [messageId, message] of messages) {
-        if (message.author.bot) continue;
-
-        const author = message.member?.displayName || message.author.username;
-        console.log(`[TEST MEDIA] Processing message from ${author}`);
-        console.log(`[TEST MEDIA] - Attachments: ${message.attachments?.size || 0}`);
-        console.log(`[TEST MEDIA] - Embeds: ${message.embeds?.length || 0}`);
-        console.log(`[TEST MEDIA] - Content length: ${message.content?.length || 0}`);
-
-        // Check for attachments
-        if (message.attachments && message.attachments.size > 0) {
-          results.push(`📎 **${author}** has ${message.attachments.size} attachment(s):`);
-
-          for (const [attachmentId, attachment] of message.attachments) {
-            results.push(`  - ${attachment.name} (${attachment.contentType || 'unknown type'})`);
-            results.push(`  - Size: ${(attachment.size / 1024).toFixed(1)}KB`);
-            results.push(`  - URL: ${attachment.url.substring(0, 100)}...`);
+        // attachments
+        if (msg.attachments.size) {
+          mediaCount++;
+          out.push(`📎 **${author}** attachments (${msg.attachments.size}):`);
+          for (const [, att] of msg.attachments) {
+            out.push(`  • ${att.name} – ${(att.size / 1024).toFixed(1)} KB`);
           }
         }
 
-        // Check for embeds
-        if (message.embeds && message.embeds.length > 0) {
-          results.push(`🖼️ **${author}** has ${message.embeds.length} embed(s):`);
-
-          message.embeds.forEach((embed, i) => {
-            if (embed.image?.url) {
-              results.push(`  - Embed ${i+1} image: ${embed.image.url.substring(0, 80)}...`);
-            }
-            if (embed.thumbnail?.url) {
-              results.push(`  - Embed ${i+1} thumbnail: ${embed.thumbnail.url.substring(0, 80)}...`);
+        // embeds
+        if (msg.embeds.length) {
+          msg.embeds.forEach((e, i) => {
+            if (e.image?.url || e.thumbnail?.url) {
+              mediaCount++;
+              out.push(`🖼️ **${author}** embed ${i + 1}:`);
+              if (e.image?.url) out.push(`  • image: ${e.image.url}`);
+              if (e.thumbnail?.url) out.push(`  • thumb: ${e.thumbnail.url}`);
             }
           });
         }
 
-        // Check for custom emojis
-        if (message.content) {
-          const customEmojiRegex = /<a?:([^:]+):(\d+)>/g;
-          let emojiMatches = [];
-          let match;
-
-          while ((match = customEmojiRegex.exec(message.content)) !== null) {
-            emojiMatches.push(`${match[1]} (ID: ${match[2]})`);
-          }
-
-          if (emojiMatches.length > 0) {
-            results.push(`😀 **${author}** has ${emojiMatches.length} custom emoji(s):`);
-            emojiMatches.forEach(emoji => {
-              results.push(`  - ${emoji}`);
-            });
-          }
+        // stickers
+        if (msg.stickers.size) {
+          mediaCount++;
+          out.push(`🎨 **${author}** sticker(s): ${[...msg.stickers.values()].map(s => s.name).join(', ')}`);
         }
 
-        // Try processing media
-        console.log(`[TEST MEDIA] Attempting to process media for message from ${author}`);
-        try {
-          const mediaDescriptions = await processMediaInMessage(message);
-          console.log(`[TEST MEDIA] Got ${mediaDescriptions.length} media descriptions:`, mediaDescriptions);
+        // custom emojis
+        const emojiRe = /<a?:(\\w+):(\\d+)>/g;
+        const found = [...msg.content.matchAll(emojiRe)];
+        if (found.length) {
+          mediaCount++;
+          out.push(`😀 **${author}** emojis: ${found.map(m => m[1]).join(', ')}`);
+        }
 
-          if (mediaDescriptions.length > 0) {
-            results.push(`✅ **Media Analysis Results:**`);
-            mediaDescriptions.forEach(desc => {
-              results.push(`  ${desc}`);
-            });
+        // run analysis when any media found
+        if (mediaCount) {
+          const desc = await processMediaInMessage(msg);
+          if (desc.length) {
+            out.push('✅ **AI descriptions:**');
+            desc.forEach(d => out.push(`  ${d}`));
           } else {
-            results.push(`❌ **No media processed** (may be disabled or no analyzable media)`);
+            out.push('❌ **No analyzable media**');
           }
-        } catch (error) {
-          console.error(`[TEST MEDIA] Error processing media:`, error);
-          results.push(`❌ **Error processing media:** ${error.message}`);
+          out.push('');
         }
-
-        results.push(''); // Empty line between messages
       }
 
-      if (results.length === 4) { // Just headers
-        results.push('No recent messages with media found.');
-      }
+      if (!mediaCount) out.push('No recent messages with media found.');
 
-      // Split response if too long
-      const response = results.join('\n');
-      if (response.length > 2000) {
-        const chunks = response.match(/[\s\S]{1,1900}/g) || [];
+      const txt = out.join('\\n');
+      if (txt.length > 2000) {
+        const chunks = txt.match(/([\\s\\S]{1,1900})/g);
         await interaction.editReply(chunks[0]);
-
-        // Send additional chunks as follow-ups
-        for (let i = 1; i < chunks.length && i < 3; i++) {
+        for (let i = 1; i < chunks.length; i++) {
           await interaction.followUp({ content: chunks[i], ephemeral: true });
         }
       } else {
-        await interaction.editReply(response);
+        await interaction.editReply(txt);
       }
-
-    } catch (error) {
-      console.error('[TEST MEDIA] Command error:', error);
-      await interaction.editReply(`Error: ${error.message}`);
+    } catch (err) {
+      console.error('[TESTMEDIA]', err);
+      await interaction.editReply(`Error: ${err.message}`);
     }
   }
 };
