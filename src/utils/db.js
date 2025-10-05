@@ -1084,7 +1084,7 @@ async function updateUserAttitudeWithAI(userId, userMessage, conversationContext
 
     const recentInteractions = userContext.recentInteractions;
     recentInteractions.push({
-        timestamp: CURRENT_TIMESTAMP,
+        timestamp: Date.NOW(),
         sentiment: sentimentAnalysis.sentiment,
         confidence: sentimentAnalysis.confidence,
         message: userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : '')
