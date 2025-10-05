@@ -1,4 +1,4 @@
-// ENHANCED DB.JS - AI-Powered Sentiment Analysis + Media Analysis (FULLY FIXED)
+// ENHANCED DB.JS - AI-Powered Sentiment Analysis + Media Analysis (FULLY FIXED v2)
 
 const { Pool, types } = require('pg');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
@@ -186,7 +186,7 @@ async function analyzeMediaWithAI(mediaUrl, mediaType, fileName = '') {
     return null;
 }
 
-// FIXED: Analyze with Google Gemini - proper Discord media handling
+// FIXED: Analyze with Google Gemini - proper Discord media handling with correct model names
 async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
     if (!GEMINI_API_KEY) {
         throw new Error('GEMINI_API_KEY not configured');
@@ -199,11 +199,15 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
         const mediaBuffer = await downloadDiscordMedia(mediaUrl);
         const base64Data = mediaBuffer.toString('base64');
 
+        // FIXED: Use current stable model name and correct API version
+        const model = 'gemini-2.5-flash';  // Updated to current stable model
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
         if (isVideo) {
-            console.log('[MEDIA] Gemini: Attempting video analysis');
+            console.log('[MEDIA] Gemini: Attempting video analysis with 2.5 Flash');
             
             // Try direct video upload to Gemini
-            const videoResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            const videoResponse = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -236,16 +240,19 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
             } else {
                 const errorText = await videoResponse.text();
                 console.log(`[MEDIA] Gemini video analysis failed (${videoResponse.status}): ${errorText}`);
+                
+                // Try with fallback model if 2.5 fails
+                return await tryGeminiFallback(mediaBuffer, mediaType, fileName, true);
             }
 
-            // Fallback for videos
+            // Final fallback for videos
             return `Video file (${fileName}) - visual content analysis not available`;
 
         } else {
             // Handle images
-            console.log('[MEDIA] Gemini: Analyzing image');
+            console.log('[MEDIA] Gemini: Analyzing image with 2.5 Flash');
             
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -258,7 +265,8 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
                             },
                             {
                                 inlineData: {
-                                    mimeType: mediaType.includes('gif') ? 'image/gif' : 'image/jpeg',
+                                    mimeType: mediaType.includes('gif') ? 'image/gif' : 
+                                              mediaType.includes('png') ? 'image/png' : 'image/jpeg',
                                     data: base64Data
                                 }
                             }
@@ -270,7 +278,9 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
             if (!response.ok) {
                 const errorText = await response.text();
                 console.error('[MEDIA] Gemini API error:', errorText);
-                throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+                
+                // Try fallback model
+                return await tryGeminiFallback(mediaBuffer, mediaType, fileName, false);
             }
 
             const data = await response.json();
@@ -286,6 +296,63 @@ async function analyzeWithGemini(mediaUrl, mediaType, fileName = '') {
     } catch (error) {
         console.error('[MEDIA] Gemini analysis error:', error.message);
         throw error;
+    }
+}
+
+// FIXED: Fallback function for Gemini with older model
+async function tryGeminiFallback(mediaBuffer, mediaType, fileName, isVideo) {
+    try {
+        console.log('[MEDIA] Trying Gemini fallback with 2.0-flash');
+        
+        const base64Data = mediaBuffer.toString('base64');
+        const fallbackModel = 'gemini-2.0-flash';  // Fallback to older stable model
+        const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${fallbackModel}:generateContent?key=${GEMINI_API_KEY}`;
+        
+        if (isVideo) {
+            return `Video file (${fileName}) - content analysis not available`;
+        }
+        
+        const response = await fetch(fallbackUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [
+                        {
+                            text: `Describe this ${mediaType} briefly in one sentence for conversation context. Focus on key visual elements, people, objects, text, or actions. Keep it concise and relevant.`
+                        },
+                        {
+                            inlineData: {
+                                mimeType: mediaType.includes('gif') ? 'image/gif' : 
+                                          mediaType.includes('png') ? 'image/png' : 'image/jpeg',
+                                data: base64Data
+                            }
+                        }
+                    ]
+                }],
+            }),
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const description = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+            
+            if (description) {
+                console.log('[MEDIA] Gemini fallback successful');
+                return description;
+            }
+        } else {
+            const errorText = await response.text();
+            console.error('[MEDIA] Gemini fallback also failed:', errorText);
+        }
+        
+        throw new Error(`All Gemini models failed for ${fileName}`);
+        
+    } catch (error) {
+        console.error('[MEDIA] Gemini fallback error:', error.message);
+        throw new Error(`Gemini analysis completely failed: ${error.message}`);
     }
 }
 
@@ -448,7 +515,7 @@ async function processMediaInMessage(message) {
             }
         }
 
-        // Process custom emojis in message content
+        // Process custom emojis in message content - FIXED REGEX
         if (message.content) {
             try {
                 const customEmojiRegex = /<a?:(\w+):(\d+)>/g;
