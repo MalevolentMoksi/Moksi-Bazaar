@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:22-slim
 
 # Enable pnpm
 ENV NODE_ENV=production
@@ -11,8 +11,6 @@ COPY package.json package-lock.json ./
 # Install dependencies (reproducible, fast, no audit/fund noise)
 RUN npm ci --omit=dev --no-audit --no-fund
 
-# Update npm to the latest version
-RUN npm i -g npm@latest
 
 # Copy source code
 COPY . .
