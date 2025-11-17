@@ -348,7 +348,7 @@ Output the emoji name on a new line.`;
           return await interaction.editReply('The bot is missing its API key. Moksi needs to fix it.');
       }
 
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
       
       const response = await fetch(apiUrl, {
         method: 'POST',
