@@ -1,9 +1,12 @@
 // ENHANCED SPEAK.JS - AI Sentiment Analysis & Anti-Repetition System (CORRECTED)
+// MODIFIED FOR GEMINI 2.5 FLASH
 
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
+// REMOVED: const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
+// ADDED: GEMINI_API_KEY for text generation
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const {
   isUserBlacklisted,
@@ -14,7 +17,7 @@ const {
   storeConversationMemory,
   getRecentMemories,
   processMediaInMessage
-} = require('../../utils/db.js');
+} = require('../../utils/db.js'); // Make sure this path points to your new db_gemini.js
 
 // FIXED: Goat emojis with actual IDs
 const GOAT_EMOJIS = {
@@ -338,30 +341,43 @@ After your response, suggest ONE emoji from: ${Object.keys(GOAT_EMOJIS).join(', 
 Output the emoji name on a new line.`;
 
       // Call AI with correct model
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      // MODIFIED: Swapped Groq API call with Gemini 2.5 Flash API call
+      
+      if (!GEMINI_API_KEY) {
+          console.error('GEMINI_API_KEY is not set.');
+          return await interaction.editReply('The bot is missing its API key. Moksi needs to fix it.');
+      }
+
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${LANGUAGE_API_KEY}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'meta-llama/llama-4-scout-17b-16e-instruct', // FIXED: Correct model for text generation
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 100,
-          temperature: 0.7,
-          top_p: 0.9,
-          frequency_penalty: 0.6,
-          presence_penalty: 0.3,
+          contents: [{
+            parts: [{ "text": prompt }]
+          }],
+          generationConfig: {
+            // "model": "gemini-2.5-flash", // Model is in the URL
+            "maxOutputTokens": 100,
+            "temperature": 0.7,
+            "topP": 0.9
+            // Note: Gemini API (v1beta) doesn't use frequency_penalty or presence_penalty directly in generationConfig
+          }
         }),
       });
 
       if (!response.ok) {
-        console.error('Groq API error:', await response.text());
+        console.error('Gemini API error:', await response.text());
         return await interaction.editReply('Moksi has no more money. You guys sucked it all up.');
       }
 
       const data = await response.json();
-      let rawReply = data.choices?.[0]?.message?.content?.trim() || 'Nothing returned.';
+      
+      // MODIFIED: Updated response parsing for Gemini format
+      let rawReply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || 'Nothing returned.';
 
       // Process emoji suggestion with ENHANCED contextual logic
       const lines = rawReply.split('\n').filter(line => line.trim());

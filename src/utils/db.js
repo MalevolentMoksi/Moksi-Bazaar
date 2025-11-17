@@ -1,5 +1,6 @@
 // ENHANCED DB.JS - AI-Powered Sentiment Analysis + Media Analysis (FULLY FIXED v3)
 // Fixed thumbnail caching issue + improved GIF handling + GIF-to-MP4 conversion
+// MODIFIED: Sentiment analysis (analyzeMessageSentiment) now uses Gemini 2.5 Flash
 
 const { Pool, types } = require('pg');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
@@ -13,11 +14,13 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// This key is for Groq vision, which is still an option in speak_settings.js
+const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY; 
+// This key is for Gemini vision AND now for Gemini sentiment analysis
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; 
 
 // ── ENHANCED TABLE INITIALIZATION WITH MEDIA CACHE ───────────────────────────
-
+// ... (table init code is unchanged) ...
 const init = async () => {
     await pool.query(`
         CREATE TABLE IF NOT EXISTS balances (
@@ -71,6 +74,16 @@ const init = async () => {
         ON CONFLICT DO NOTHING
     `);
 };
+
+// ── MEDIA ANALYSIS SYSTEM (FIXED FOR DISCORD CDN URLS) ────────────────────────
+// ... (all media analysis functions are unchanged) ...
+// ... (generateMediaId, getCachedMediaDescription, cacheMediaDescription, downloadDiscordMedia, ...)
+// ... (convertGifToMp4, analyzeMediaWithAI, analyzeWithGemini, tryGeminiFallback, ...)
+// ... (analyzeWithGroq, getMediaAnalysisProvider, setMediaAnalysisProvider, ...)
+// ... (processMediaInMessage, processMediaItem, isMediaContentType, cleanupMediaCache, ...)
+// ...
+// (Skipping unchanged media functions for brevity, copying them from original)
+// ...
 
 // ── MEDIA ANALYSIS SYSTEM (FIXED FOR DISCORD CDN URLS) ────────────────────────
 
@@ -816,16 +829,18 @@ async function cleanupMediaCache(olderThanDays = 30) {
     return rowCount;
 }
 
-// Rest of the functions remain unchanged from the original file...
-// [AI SENTIMENT ANALYSIS, USER MANAGEMENT, etc. - keeping original implementations]
 
 // ── AI SENTIMENT ANALYSIS WITH CONTEXT ───────────────────────────────────────
+// MODIFIED: This function now uses Gemini 2.5 Flash
 async function analyzeMessageSentiment(userMessage, conversationContext) {
-    if (!LANGUAGE_API_KEY) {
+    // MODIFIED: Use GEMINI_API_KEY instead of LANGUAGE_API_KEY
+    if (!GEMINI_API_KEY) {
+        console.warn('GEMINI_API_KEY not set, falling back to simple sentiment.');
         return simpleBackupSentiment(userMessage);
     }
 
-    const prompt = `Context-aware sentiment analysis. Consider the user's message within the conversation context and behavioral patterns.
+    const prompt = `You are a contextual sentiment analyzer. Always respond with valid JSON only.
+Consider the user's message within the conversation context and behavioral patterns.
 
 CONVERSATION CONTEXT:
 ${conversationContext.slice(-1000)}
@@ -848,56 +863,57 @@ Examples:
 "you always suck" → {"sentiment": -0.8, "confidence": 0.9, "reasoning": "Pattern of consistent negativity"}`;
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        // MODIFIED: API URL and payload for Gemini 2.5 Flash
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        
+        const response = await fetch(apiUrl, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${LANGUAGE_API_KEY}`,
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'You are a contextual sentiment analyzer that detects behavioral patterns. Always respond with valid JSON only.'
-                    },
-                    {
-                        role: 'user',
-                        content: prompt
-                    }
-                ],
-                max_tokens: 120,
-                temperature: 0.1,
-                stop: null,
+              contents: [{
+                parts: [{ "text": prompt }]
+              }],
+              generationConfig: {
+                // "model": "gemini-2.5-flash", // Model is in URL
+                "responseMimeType": "application/json", // CRITICAL: Ask for JSON output
+                "maxOutputTokens": 120,
+                "temperature": 0.1
+              }
             }),
         });
 
         if (!response.ok) {
-            console.error('Sentiment analysis API error:', await response.text());
+            console.error('Sentiment analysis API error (Gemini):', await response.text());
             return simpleBackupSentiment(userMessage);
         }
 
         const data = await response.json();
-        const rawResponse = data.choices?.[0]?.message?.content?.trim();
+        
+        // MODIFIED: Response parsing for Gemini
+        const rawResponse = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+        if (!rawResponse) {
+             console.error('Sentiment analysis (Gemini) returned no text.');
+             return simpleBackupSentiment(userMessage);
+        }
 
         try {
-            // Clean up the response
+            // The JSON parsing logic from here down should work as Gemini
+            // (with responseMimeType) will return a clean JSON string.
             let jsonString = rawResponse;
-            if (!jsonString.endsWith('}')) {
-                jsonString += '}';
-            }
-            if (jsonString.includes('```json')) {
-                jsonString = jsonString.replace(/```json|```/gm, '');
-            }
-
-            const firstBrace = jsonString.indexOf('{');
-            if (firstBrace > 0) {
-                jsonString = jsonString.substring(firstBrace);
-            }
-
-            const lastBrace = jsonString.lastIndexOf('}');
-            if (lastBrace !== -1 && lastBrace < jsonString.length - 1) {
-                jsonString = jsonString.substring(0, lastBrace + 1);
+            
+            // Clean up just in case, though responseMimeType should make this unnecessary
+            if (!jsonString.startsWith('{') || !jsonString.endsWith('}')) {
+                 if (jsonString.includes('```json')) {
+                    jsonString = jsonString.replace(/```json|```/gm, '');
+                 }
+                 const firstBrace = jsonString.indexOf('{');
+                 const lastBrace = jsonString.lastIndexOf('}');
+                 if (firstBrace !== -1 && lastBrace !== -1) {
+                    jsonString = jsonString.substring(firstBrace, lastBrace + 1);
+                 }
             }
 
             const sentimentData = JSON.parse(jsonString);
@@ -907,19 +923,19 @@ Examples:
                 return {
                     sentiment: sentimentData.sentiment,
                     confidence: sentimentData.confidence || 0.7,
-                    reasoning: sentimentData.reasoning || 'AI analysis'
+                    reasoning: sentimentData.reasoning || 'AI analysis (Gemini)'
                 };
             } else {
-                throw new Error('Invalid sentiment data structure');
+                throw new Error('Invalid sentiment data structure from Gemini');
             }
         } catch (parseError) {
-            console.error('Error parsing sentiment response:', parseError);
+            console.error('Error parsing sentiment response (Gemini):', parseError, 'Raw response:', rawResponse);
             const fallbackSentiment = extractSentimentFromText(rawResponse, userMessage);
             if (fallbackSentiment) return fallbackSentiment;
             return simpleBackupSentiment(userMessage);
         }
     } catch (error) {
-        console.error('Sentiment analysis failed:', error);
+        console.error('Sentiment analysis failed (Gemini):', error);
         return simpleBackupSentiment(userMessage);
     }
 }
