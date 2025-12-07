@@ -129,7 +129,7 @@ async function getCachedMediaDescription(mediaId) {
 }
 
 // PRIMARY: Gemini 2.0 Flash (Fast, Smart, ~$0.10/1M tokens)
-async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image.") {
+async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image in a consise way, focusing on the main subject.") {
     if (!OPENROUTER_API_KEY) return null;
 
     const controller = new AbortController();
@@ -210,7 +210,6 @@ async function analyzeImageFallback(imageUrl, prompt) {
     }
 }
 
-// SAFETY: Ensures bot detects "Image" even if analysis fails
 async function processMediaInMessage(message, shouldAnalyze = true) {
     const activeMedia = await getSettingState('active_media_analysis');
     if (activeMedia === false) return [];
@@ -226,7 +225,10 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         if (cached) {
             descriptions.push(`[${type}: ${cached.description}]`);
         } else if (shouldAnalyze) {
-            const desc = await analyzeImageWithOpenRouter(url, "Describe this image briefly.");
+            // Your preferred concise prompt
+            const prompt = "Describe this image in a concise way, focusing on the main subject.";
+            
+            const desc = await analyzeImageWithOpenRouter(url, prompt);
             if (desc) {
                 descriptions.push(`[${type}: ${desc}]`);
                 await pool.query(
@@ -235,7 +237,6 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
                     [mediaId, desc, 'image', url]
                 );
             } else {
-                // IMPORTANT: If analysis fails, we still push this tag so the bot knows there IS an image.
                 descriptions.push(`[${type} (Analysis Failed)]`);
             }
         } else {
@@ -243,11 +244,21 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         }
     };
 
-    // 1. Attachments
+    // 1. Attachments (Images & VIDEOS)
     if (message.attachments?.size > 0) {
         for (const [_, att] of message.attachments) {
+            // Handle Images
             if (att.contentType?.startsWith('image/')) {
                 await processUrl(att.url, "Image Attachment", att.name);
+            }
+            // Handle Videos (Try to find a thumbnail)
+            else if (att.contentType?.startsWith('video/')) {
+                const videoThumbnail = message.embeds.find(e => e.video)?.thumbnail?.url;
+                if (videoThumbnail) {
+                    await processUrl(videoThumbnail, "Video Thumbnail", att.name);
+                } else {
+                    descriptions.push(`[Video File: ${att.name}]`);
+                }
             }
         }
     }
@@ -255,23 +266,35 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
     // 2. Embeds
     if (message.embeds?.length > 0) {
         for (const embed of message.embeds) {
+            if (embed.video && message.attachments.size > 0) continue;
             const url = embed.image?.url || embed.thumbnail?.url;
             if (url) await processUrl(url, "Embedded Image", "embed");
         }
     }
     
-    // 3. Stickers
+    // 3. Stickers (RESTORED AI ANALYSIS)
     if (message.stickers?.size > 0) {
-    for (const [_, s] of message.stickers) {
-        // Only try to analyze if it's an image format the AI can read
-        if (s.format === 1 || s.format === 2) { // 1=PNG, 2=APNG
-             await processUrl(s.url, "Sticker", s.name);
-        } else {
-             // Fallback for Lottie/GIF stickers which AI can't read
-             descriptions.push(`[Sticker: ${s.name}]`);
+        for (const [_, s] of message.stickers) {
+            // Format 1=PNG, 2=APNG, 4=GIF. (Format 3 is Lottie/JSON which AI cannot see).
+            if (s.format === 1 || s.format === 2 || s.format === 4) {
+                 await processUrl(s.url, "Sticker", s.name);
+            } else {
+                 // Fallback for Lottie stickers
+                 descriptions.push(`[Sticker: ${s.name}]`);
+            }
         }
     }
-}
+
+    // 4. Custom Emojis
+    const emojiRegex = /<a?:(\w+):(\d+)>/g;
+    const emojis = [...(message.content?.matchAll(emojiRegex) || [])];
+    
+    if (emojis.length > 0) {
+        const uniqueNames = [...new Set(emojis.map(m => m[1]))].slice(0, 5);
+        if (uniqueNames.length > 0) {
+            descriptions.push(`[Custom Emojis used: ${uniqueNames.join(', ')}]`);
+        }
+    }
 
     return descriptions;
 }
