@@ -128,12 +128,12 @@ async function getCachedMediaDescription(mediaId) {
     return null;
 }
 
-// THE NEW FAST VISION FUNCTION
+// PRIMARY: Gemini 2.0 Flash (Fast, Smart, ~$0.10/1M tokens)
 async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image.") {
     if (!OPENROUTER_API_KEY) return null;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 Seconds Max
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 Seconds Max
 
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -146,8 +146,8 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             },
             signal: controller.signal,
             body: JSON.stringify({
-                // PRIMARY: Llama 3.2 11B Vision (Often free/cheap & fast)
-                model: 'meta-llama/llama-3.2-11b-vision-instruct:free', 
+                // CHANGED: From free Llama to paid (but cheap) Gemini 2.0 Flash
+                model: 'google/gemini-2.0-flash-001', 
                 messages: [
                     {
                         role: 'user',
@@ -157,14 +157,14 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
                         ]
                     }
                 ],
-                max_tokens: 100
+                max_tokens: 300 // Increased slightly for better detail
             })
         });
 
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-            // FALLBACK: Try Gemini 2.0 Flash if Llama fails
+             // If Gemini fails, try Qwen
              return await analyzeImageFallback(imageUrl, prompt);
         }
 
@@ -172,12 +172,12 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         return data.choices?.[0]?.message?.content?.trim() || null;
     } catch (e) {
         clearTimeout(timeoutId);
-        console.error("[MEDIA] Primary Analysis Failed:", e.message);
-        return null; 
+        console.error("[MEDIA] Primary Analysis Failed, trying fallback...", e.message);
+        return await analyzeImageFallback(imageUrl, prompt);
     }
 }
 
-// Fallback is strictly Gemini Flash (Free) - NO MINIMAX
+// FALLBACK: Qwen 2.5 VL 7B (Very good at reading text/memes, ~$0.20/1M tokens)
 async function analyzeImageFallback(imageUrl, prompt) {
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -189,7 +189,7 @@ async function analyzeImageFallback(imageUrl, prompt) {
                 'X-Title': 'Cooler Moksi Media Fallback',
             },
             body: JSON.stringify({
-                model: 'google/gemini-2.0-flash-exp:free', 
+                model: 'qwen/qwen-2.5-vl-7b-instruct', 
                 messages: [
                     {
                         role: 'user',
@@ -199,12 +199,13 @@ async function analyzeImageFallback(imageUrl, prompt) {
                         ]
                     }
                 ],
-                max_tokens: 100
+                max_tokens: 200
             })
         });
         const data = await response.json();
         return data.choices?.[0]?.message?.content?.trim() || null;
     } catch (e) {
+        console.error("[MEDIA] Fallback Analysis Failed:", e.message);
         return null;
     }
 }
