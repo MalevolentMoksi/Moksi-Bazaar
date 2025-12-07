@@ -1,4 +1,4 @@
-// ENHANCED DB.JS - V6: Complete Restoration
+// ENHANCED DB.JS - V7: Llama Vision (Fast & Cheap)
 const { Pool, types } = require('pg');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const crypto = require('crypto');
@@ -68,11 +68,10 @@ const init = async () => {
     `);
 };
 
-// ── ECONOMY FUNCTIONS (RESTORED) ────────────────────────────────────────────
+// ── ECONOMY FUNCTIONS ───────────────────────────────────────────────────────
 async function getBalance(userId) {
     const { rows } = await pool.query('SELECT balance FROM balances WHERE user_id = $1', [userId]);
     if (rows.length) return rows[0].balance;
-
     const seed = 10000;
     await pool.query('INSERT INTO balances (user_id, balance) VALUES ($1, $2)', [userId, seed]);
     return seed;
@@ -109,7 +108,7 @@ async function removeUserFromBlacklist(userId) {
     await pool.query('DELETE FROM speak_blacklist WHERE user_id = $1', [userId]);
 }
 
-// ── MEDIA ANALYSIS (UNIFIED OPENROUTER) ─────────────────────────────────────
+// ── MEDIA ANALYSIS (LLAMA VISION) ───────────────────────────────────────────
 
 function generateMediaId(url, contentHash = null, fileName = '', messageId = '') {
     const uniqueString = `${url}_${messageId}_${fileName}`;
@@ -123,19 +122,18 @@ async function getCachedMediaDescription(mediaId) {
     );
 
     if (rows.length > 0) {
-        // Update access async
         pool.query(`UPDATE media_cache SET accessed_count = accessed_count + 1, last_accessed = CURRENT_TIMESTAMP WHERE media_id = $1`, [mediaId]).catch(console.error);
         return rows[0];
     }
     return null;
 }
 
-// FIXED: Added Timeout and removed expensive fallback
+// THE NEW FAST VISION FUNCTION
 async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image.") {
-    if (!OPENROUTER_API_KEY) return "Analysis unavailable (No API Key)";
+    if (!OPENROUTER_API_KEY) return null;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 SECOND TIMEOUT
+    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 Seconds Max
 
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -148,8 +146,8 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             },
             signal: controller.signal,
             body: JSON.stringify({
-                // Sticking to Gemini Flash as it's usually fastest/free
-                model: 'google/gemini-2.0-flash-exp:free', 
+                // PRIMARY: Llama 3.2 11B Vision (Often free/cheap & fast)
+                model: 'meta-llama/llama-3.2-11b-vision-instruct:free', 
                 messages: [
                     {
                         role: 'user',
@@ -166,20 +164,20 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-            // FAILED? Just return null. Do not use expensive fallback.
-            return null;
+            // FALLBACK: Try Gemini 2.0 Flash if Llama fails
+             return await analyzeImageFallback(imageUrl, prompt);
         }
 
         const data = await response.json();
-        return data.choices?.[0]?.message?.content?.trim() || "Unclear image.";
+        return data.choices?.[0]?.message?.content?.trim() || null;
     } catch (e) {
         clearTimeout(timeoutId);
-        if (e.name === 'AbortError') return "[Analysis Timed Out]";
-        console.error("[MEDIA] Error:", e.message);
-        return null;
+        console.error("[MEDIA] Primary Analysis Failed:", e.message);
+        return null; 
     }
 }
 
+// Fallback is strictly Gemini Flash (Free) - NO MINIMAX
 async function analyzeImageFallback(imageUrl, prompt) {
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -191,7 +189,7 @@ async function analyzeImageFallback(imageUrl, prompt) {
                 'X-Title': 'Cooler Moksi Media Fallback',
             },
             body: JSON.stringify({
-                model: 'minimax/minimax-01', // Excellent fallback vision model
+                model: 'google/gemini-2.0-flash-exp:free', 
                 messages: [
                     {
                         role: 'user',
@@ -201,19 +199,17 @@ async function analyzeImageFallback(imageUrl, prompt) {
                         ]
                     }
                 ],
-                max_tokens: 150
+                max_tokens: 100
             })
         });
-
         const data = await response.json();
-        return data.choices?.[0]?.message?.content?.trim() || "Image analysis failed.";
+        return data.choices?.[0]?.message?.content?.trim() || null;
     } catch (e) {
-        return "Image analysis unavailable.";
+        return null;
     }
 }
 
-// RESTORED: The robust loop that handles Embeds, Stickers, and Emojis
-// FIXED: Added 'shouldAnalyze' param to prevent analyzing old history
+// SAFETY: Ensures bot detects "Image" even if analysis fails
 async function processMediaInMessage(message, shouldAnalyze = true) {
     const activeMedia = await getSettingState('active_media_analysis');
     if (activeMedia === false) return [];
@@ -229,8 +225,7 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         if (cached) {
             descriptions.push(`[${type}: ${cached.description}]`);
         } else if (shouldAnalyze) {
-            // ONLY analyze if this is a fresh/recent message
-            const desc = await analyzeImageWithOpenRouter(url, "Describe this image briefly for chat context.");
+            const desc = await analyzeImageWithOpenRouter(url, "Describe this image briefly.");
             if (desc) {
                 descriptions.push(`[${type}: ${desc}]`);
                 await pool.query(
@@ -239,10 +234,10 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
                     [mediaId, desc, 'image', url]
                 );
             } else {
-                descriptions.push(`[${type}: Analysis Failed]`);
+                // IMPORTANT: If analysis fails, we still push this tag so the bot knows there IS an image.
+                descriptions.push(`[${type} (Analysis Failed)]`);
             }
         } else {
-            // If it's old history and not cached, just note it exists
             descriptions.push(`[Unanalyzed ${type}]`);
         }
     };
@@ -264,7 +259,7 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         }
     }
     
-    // 3. Stickers (Always process, no AI needed)
+    // 3. Stickers
     if (message.stickers?.size > 0) {
         message.stickers.forEach(s => descriptions.push(`[Sticker: ${s.name}]`));
     }
