@@ -123,14 +123,19 @@ async function getCachedMediaDescription(mediaId) {
     );
 
     if (rows.length > 0) {
+        // Update access async
         pool.query(`UPDATE media_cache SET accessed_count = accessed_count + 1, last_accessed = CURRENT_TIMESTAMP WHERE media_id = $1`, [mediaId]).catch(console.error);
         return rows[0];
     }
     return null;
 }
 
+// FIXED: Added Timeout and removed expensive fallback
 async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image.") {
     if (!OPENROUTER_API_KEY) return "Analysis unavailable (No API Key)";
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 SECOND TIMEOUT
 
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -141,7 +146,9 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
                 'HTTP-Referer': 'https://discord.com',
                 'X-Title': 'Cooler Moksi Media',
             },
+            signal: controller.signal,
             body: JSON.stringify({
+                // Sticking to Gemini Flash as it's usually fastest/free
                 model: 'google/gemini-2.0-flash-exp:free', 
                 messages: [
                     {
@@ -152,16 +159,23 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
                         ]
                     }
                 ],
-                max_tokens: 150
+                max_tokens: 100
             })
         });
 
-        if (!response.ok) return await analyzeImageFallback(imageUrl, prompt);
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            // FAILED? Just return null. Do not use expensive fallback.
+            return null;
+        }
 
         const data = await response.json();
-        return data.choices?.[0]?.message?.content?.trim() || "Unclear image content.";
+        return data.choices?.[0]?.message?.content?.trim() || "Unclear image.";
     } catch (e) {
-        console.error("[MEDIA] Analysis Error:", e);
+        clearTimeout(timeoutId);
+        if (e.name === 'AbortError') return "[Analysis Timed Out]";
+        console.error("[MEDIA] Error:", e.message);
         return null;
     }
 }
@@ -199,62 +213,59 @@ async function analyzeImageFallback(imageUrl, prompt) {
 }
 
 // RESTORED: The robust loop that handles Embeds, Stickers, and Emojis
-async function processMediaInMessage(message) {
+// FIXED: Added 'shouldAnalyze' param to prevent analyzing old history
+async function processMediaInMessage(message, shouldAnalyze = true) {
     const activeMedia = await getSettingState('active_media_analysis');
     if (activeMedia === false) return [];
 
     const descriptions = [];
     const messageId = message.id || Date.now().toString();
 
-    // 1. Attachments
-    if (message.attachments && message.attachments.size > 0) {
-        for (const [_, att] of message.attachments) {
-            if (!att.contentType?.startsWith('image/')) continue;
-            const mediaId = generateMediaId(att.url, null, att.name, messageId);
-            const cached = await getCachedMediaDescription(mediaId);
+    // Helper to process a URL
+    const processUrl = async (url, type, name) => {
+        const mediaId = generateMediaId(url, null, name, messageId);
+        const cached = await getCachedMediaDescription(mediaId);
 
-            if (cached) {
-                descriptions.push(`[Image Attachment: ${cached.description}]`);
+        if (cached) {
+            descriptions.push(`[${type}: ${cached.description}]`);
+        } else if (shouldAnalyze) {
+            // ONLY analyze if this is a fresh/recent message
+            const desc = await analyzeImageWithOpenRouter(url, "Describe this image briefly for chat context.");
+            if (desc) {
+                descriptions.push(`[${type}: ${desc}]`);
+                await pool.query(
+                    `INSERT INTO media_cache (media_id, description, media_type, original_url) 
+                     VALUES ($1, $2, $3, $4) ON CONFLICT (media_id) DO NOTHING`,
+                    [mediaId, desc, 'image', url]
+                );
             } else {
-                const desc = await analyzeImageWithOpenRouter(att.url, "Briefly describe this image for a chat context.");
-                if (desc) {
-                    descriptions.push(`[Image Attachment: ${desc}]`);
-                    await pool.query(
-                        `INSERT INTO media_cache (media_id, description, media_type, original_url) 
-                         VALUES ($1, $2, $3, $4) ON CONFLICT (media_id) DO NOTHING`,
-                        [mediaId, desc, att.contentType, att.url]
-                    );
-                }
+                descriptions.push(`[${type}: Analysis Failed]`);
+            }
+        } else {
+            // If it's old history and not cached, just note it exists
+            descriptions.push(`[Unanalyzed ${type}]`);
+        }
+    };
+
+    // 1. Attachments
+    if (message.attachments?.size > 0) {
+        for (const [_, att] of message.attachments) {
+            if (att.contentType?.startsWith('image/')) {
+                await processUrl(att.url, "Image Attachment", att.name);
             }
         }
     }
 
-    // 2. Embeds (Thumbnails/Images)
-    if (message.embeds && message.embeds.length > 0) {
+    // 2. Embeds
+    if (message.embeds?.length > 0) {
         for (const embed of message.embeds) {
             const url = embed.image?.url || embed.thumbnail?.url;
-            if (url) {
-                const mediaId = generateMediaId(url, null, 'embed', messageId);
-                const cached = await getCachedMediaDescription(mediaId);
-                if (cached) {
-                    descriptions.push(`[Embedded Image: ${cached.description}]`);
-                } else {
-                    const desc = await analyzeImageWithOpenRouter(url, "Briefly describe this embedded image.");
-                    if (desc) {
-                        descriptions.push(`[Embedded Image: ${desc}]`);
-                        await pool.query(
-                            `INSERT INTO media_cache (media_id, description, media_type, original_url) 
-                             VALUES ($1, $2, $3, $4) ON CONFLICT (media_id) DO NOTHING`,
-                            [mediaId, desc, 'image/embed', url]
-                        );
-                    }
-                }
-            }
+            if (url) await processUrl(url, "Embedded Image", "embed");
         }
     }
     
-    // 3. Stickers
-    if (message.stickers && message.stickers.size > 0) {
+    // 3. Stickers (Always process, no AI needed)
+    if (message.stickers?.size > 0) {
         message.stickers.forEach(s => descriptions.push(`[Sticker: ${s.name}]`));
     }
 

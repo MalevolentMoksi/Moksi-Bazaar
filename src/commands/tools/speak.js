@@ -1,8 +1,7 @@
-// ENHANCED SPEAK.JS - DeepSeek V3 + AI Autonomy
+// ENHANCED SPEAK.JS - Personality & Speed Fixes
 const { SlashCommandBuilder } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-// Your OpenRouter Key
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY; 
 
 const {
@@ -16,8 +15,6 @@ const {
   processMediaInMessage
 } = require('../../utils/db.js');
 
-// 1. THE FACE BANK
-// The AI will see these keys (e.g., "goat_puke") and choose one.
 const GOAT_EMOJIS = {
     goat_cry: '<a:goat_cry:1395455098716688424>',
     goat_puke: '<a:goat_puke:1398407422187540530>',
@@ -32,26 +29,29 @@ const GOAT_EMOJIS = {
     goat_sleep: '<a:goat_sleep:1395450280161710262>'
 };
 
-const speakDisabledReplies = [
-    "Sorry, no more talking for now.",
-    "The goat rests.",
-    "Shush.",
-    "No."
-];
+const speakDisabledReplies = ["Sorry, no more talking for now.", "The goat rests.", "Shush.", "No."];
 
-// ── CONTEXT BUILDER ─────────────────────────────────────────────────────────
+// ── CONTEXT BUILDER (OPTIMIZED) ─────────────────────────────────────────────
 async function buildConversationContext(messages, currentUserId, limit = 12) {
+  // Convert map to array and sort chronologically
   const recentMessages = Array.from(messages.values())
     .filter(msg => !msg.author.bot)
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
     .slice(-limit);
 
+  // Identify the most recent message timestamp to know which one to analyze
+  const newestMsgId = recentMessages[recentMessages.length - 1]?.id;
+
   const contextPromises = recentMessages.map(async (msg) => {
     const name = msg.member?.displayName || msg.author.username;
     
+    // OPTIMIZATION: Only analyze image if it's the very last message in the list
+    const isNewest = msg.id === newestMsgId;
+    
     let mediaContent = '';
     try {
-      const descriptions = await processMediaInMessage(msg);
+      // Pass 'isNewest' to db.js. If false, it skips the expensive API call.
+      const descriptions = await processMediaInMessage(msg, isNewest);
       if (descriptions.length > 0) mediaContent = ` ${descriptions.join(' ')}`;
     } catch (e) { console.error(e); }
 
@@ -85,7 +85,6 @@ module.exports = {
       const userRequest = interaction.options.getString('request');
       const askerName = interaction.member?.displayName || interaction.user.username;
 
-      // Checks
       if (await isUserBlacklisted(userId)) return await interaction.editReply(`Fuck off, <@${userId}>`);
       
       const activeSpeak = await getSettingState('active_speak');
@@ -102,7 +101,6 @@ module.exports = {
       const userContext = await getUserContext(userId);
       const recentMemories = await getRecentMemories(userId, 4);
 
-      // Sentiment (Still useful for tracking long term attitude in DB, even if not used for emoji)
       let sentimentAnalysis = { sentiment: 0, reasoning: 'No message' };
       if (userRequest && userRequest.trim()) {
         sentimentAnalysis = await updateUserAttitudeWithAI(userId, userRequest, conversationContext);
@@ -114,30 +112,26 @@ module.exports = {
       
       const memoryText = recentMemories.map(m => `User: ${m.user_message} -> You: ${m.bot_response}`).join('\n');
 
-      // ── THE BRAIN (SYSTEM PROMPT) ─────────────────────────────────────────
-      // We give the AI the list of keys and tell it to pick one.
       const emojiKeys = Object.keys(GOAT_EMOJIS).join(', ');
 
+      // ── FIXED SYSTEM PROMPT ───────────────────────────────────────────────
       const systemPrompt = `You are Cooler Moksi.
 
 IDENTITY:
-- A cynical, tech-savvy, slightly unhinged goat AI.
-- Speak in relaxed, internet-native English (lowercase, minimal punctuation).
-- Be witty and concise (1-2 sentences).
+- A cynical, tech-savvy, tired goat AI.
+- Tone: Dry, deadpan, slightly rude or sarcastic.
+- Speak normally (lowercase). 
+- STRICTLY FORBIDDEN: Do NOT use "Zoomer slang" like "fr fr", "no cap", "fam", "based". You are not a teenager.
+- Be concise (1-2 sentences).
 
 CONTEXT:
 - User: ${askerName}
 - Attitude: ${attitudeInstruction}
 
 REACTION SYSTEM:
-You have a specific set of facial expressions (emojis). 
-Available Emotions: [${emojiKeys}] or "none".
-
-INSTRUCTIONS:
 1. Write your text reply.
-2. On a NEW LINE at the end, output ONLY the single ID string of the emoji that matches your reply's tone.
-   (e.g., if you are being mean, put "goat_puke". If happy, "goat_smile").
-3. DO NOT repeat your text in the emoji line.
+2. STRICT RULE: Do NOT use standard emojis (like 😂, 💀) in your text.
+3. On a NEW LINE at the end, output ONLY one ID from this list: [${emojiKeys}] or "none".
 
 CHAT LOG:
 ${conversationContext}
@@ -149,7 +143,6 @@ ${memoryText}`;
         ? `${askerName} says: "${userRequest}"` 
         : `(No text sent, just lurking)`;
 
-      // ── OPENROUTER / DEEPSEEK CALL ────────────────────────────────────────
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -165,7 +158,7 @@ ${memoryText}`;
             { role: 'user', content: userPrompt }
           ],
           max_tokens: 200,
-          temperature: 1.1, // DeepSeek Creative Setting
+          temperature: 1.0, // Slightly lowered from 1.1 to control "fr fr" hallucinations
         }),
       });
 
@@ -176,39 +169,29 @@ ${memoryText}`;
 
       const data = await response.json();
       const rawContent = data.choices?.[0]?.message?.content?.trim() || '...';
-      
-      // Clean thinking blocks if DeepSeek sends them
       const cleanContent = rawContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-      // ── PARSING THE AI CHOICE ─────────────────────────────────────────────
       const lines = cleanContent.split('\n').filter(l => l.trim());
       
-      // 1. Get the potential Emoji ID from the last line
+      // Parse Emoji
       let suggestedEmojiKey = lines[lines.length - 1]?.trim().toLowerCase() || "";
-      suggestedEmojiKey = suggestedEmojiKey.replace(/:/g, ''); // remove colons if AI added them
+      suggestedEmojiKey = suggestedEmojiKey.replace(/:/g, ''); 
       
       let replyText = "";
       let finalEmoji = "";
 
-      // 2. Validate: Is the last line actually a valid emoji key?
       if (GOAT_EMOJIS[suggestedEmojiKey]) {
-        // Yes -> The last line IS the emoji. The text is everything before it.
         finalEmoji = GOAT_EMOJIS[suggestedEmojiKey];
-        replyText = lines.slice(0, -1).join('\n').trim(); // Take all lines except the last
+        replyText = lines.slice(0, -1).join('\n').trim();
       } else if (suggestedEmojiKey === 'none') {
-        // AI explicitly said "none"
         replyText = lines.slice(0, -1).join('\n').trim();
       } else {
-        // No -> The AI failed to follow format or just spoke text. 
-        // We assume the whole thing is text and default to a small bleat (neutral).
         replyText = cleanContent;
         finalEmoji = GOAT_EMOJIS['goat_small_bleat']; 
       }
 
-      // Fallback: If text is empty (rare), just bleat.
       if (!replyText) replyText = "bleat.";
 
-      // 3. Assemble
       let finalOutput = replyText;
       if (finalEmoji) finalOutput += ` ${finalEmoji}`;
 
