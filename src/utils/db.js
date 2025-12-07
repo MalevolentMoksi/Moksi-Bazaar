@@ -261,8 +261,16 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
     
     // 3. Stickers
     if (message.stickers?.size > 0) {
-        message.stickers.forEach(s => descriptions.push(`[Sticker: ${s.name}]`));
+    for (const [_, s] of message.stickers) {
+        // Only try to analyze if it's an image format the AI can read
+        if (s.format === 1 || s.format === 2) { // 1=PNG, 2=APNG
+             await processUrl(s.url, "Sticker", s.name);
+        } else {
+             // Fallback for Lottie/GIF stickers which AI can't read
+             descriptions.push(`[Sticker: ${s.name}]`);
+        }
     }
+}
 
     return descriptions;
 }
