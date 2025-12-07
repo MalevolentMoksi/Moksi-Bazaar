@@ -382,6 +382,17 @@ async function updateUserPreferences(userId, interaction) {
     `, [userId]);
 }
 
+async function getMediaAnalysisProvider() {
+    // Check if the setting is active
+    const active = await getSettingState('active_media_analysis');
+    if (!active) return 'disabled';
+    
+    // Since you are using OpenRouter for Llama/Gemini
+    if (process.env.OPENROUTER_API_KEY) return 'openrouter';
+    
+    return 'unknown';
+}
+
 // ── EXPORTS ─────────────────────────────────────────────────────────────────
 module.exports = {
     pool,
@@ -398,5 +409,6 @@ module.exports = {
     updateUserAttitudeWithAI,
     storeConversationMemory,
     getRecentMemories,
-    processMediaInMessage
+    processMediaInMessage,
+    getMediaAnalysisProvider
 };
