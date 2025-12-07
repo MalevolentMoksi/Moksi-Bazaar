@@ -825,27 +825,15 @@ async function analyzeMessageSentiment(userMessage, conversationContext) {
         return simpleBackupSentiment(userMessage);
     }
 
-    const prompt = `Context-aware sentiment analysis. Consider the user's message within the conversation context and behavioral patterns.
-
-CONVERSATION CONTEXT:
-${conversationContext.slice(-1000)}
-
-ANALYZE THIS MESSAGE: "${userMessage}"
-
-Rate sentiment from -1.0 (very negative) to 1.0 (very positive). Consider:
-- Sarcasm detection (negative despite positive words)
-- Pattern recognition (repeated behavior vs one-off)
-- Context awareness (response to previous messages)
-- Genuine vs performative emotions
-
-Respond in this exact JSON format:
-{"sentiment": [number], "confidence": [0-1], "reasoning": "[brief explanation]"}
-
-Examples:
-"fuck you" → {"sentiment": -0.9, "confidence": 0.95, "reasoning": "Direct insult"}
-"omg you're the best!" after being hostile → {"sentiment": -0.2, "confidence": 0.6, "reasoning": "Overly positive after hostility, likely insincere"}
-"thanks, that actually helped" → {"sentiment": 0.6, "confidence": 0.8, "reasoning": "Genuine appreciation with substance"}
-"you always suck" → {"sentiment": -0.8, "confidence": 0.9, "reasoning": "Pattern of consistent negativity"}`;
+    // A simpler, clearer prompt for the 70B model
+    const prompt = `Analyze the sentiment of this message in context.
+    
+    CONTEXT:
+    ${conversationContext.slice(-1000)}
+    
+    MESSAGE: "${userMessage}"
+    
+    Return JSON only: {"sentiment": number (-1.0 to 1.0), "confidence": number (0-1), "reasoning": "string (max 10 words)"}`;
 
     try {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -855,20 +843,14 @@ Examples:
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+                // SWITCHED TO 70B for better sarcasm detection
+                model: 'llama-3.3-70b-versatile', 
                 messages: [
-                    {
-                        role: 'system',
-                        content: 'You are a contextual sentiment analyzer that detects behavioral patterns. Always respond with valid JSON only.'
-                    },
-                    {
-                        role: 'user',
-                        content: prompt
-                    }
+                    { role: 'system', content: 'Output JSON only.' },
+                    { role: 'user', content: prompt }
                 ],
                 max_tokens: 120,
                 temperature: 0.1,
-                stop: null,
             }),
         });
 
