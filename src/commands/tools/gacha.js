@@ -11,7 +11,7 @@ const {
   setUserCooldown,
 } = require('../../utils/db');
 const logger = require('../../utils/logger');
-const config = require('../../config');
+const { GAME_CONFIG } = require('../../utils/constants');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -32,7 +32,7 @@ module.exports = {
     }
 
     // Define rarities with weights, embed colors, reward ranges
-    const tiers = config.GAMES.GACHA.TIERS;
+    const tiers = GAME_CONFIG.GACHA.TIERS;
 
     // Weighted random selection of tier
     const totalWeight = tiers.reduce((sum, t) => sum + t.weight, 0);
@@ -66,7 +66,7 @@ module.exports = {
     };
 
     const baseMin = baseCooldownMinutes[chosen.name] ?? 5;
-    const randomMs = Math.floor(Math.random() * config.GAMES.GACHA.JITTER_MAX);
+    const randomMs = Math.floor(Math.random() * GAME_CONFIG.GACHA.JITTER_MAX);
     const cooldownMs = baseMin * 60 * 1000 + randomMs;
 
     // Save cooldown to database (persistent across bot restarts)

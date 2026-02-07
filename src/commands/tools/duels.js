@@ -12,7 +12,6 @@ const {
   updateDuelStatus,
 } = require('../../utils/db');
 const logger = require('../../utils/logger');
-const config = require('../../config');
 
 module.exports = {
   data: new SlashCommandBuilder()

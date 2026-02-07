@@ -6,7 +6,7 @@
 const winston = require('winston');
 const path = require('path');
 const fs = require('fs');
-const config = require('../config');
+const { LOGGING_CONFIG } = require('./constants');
 
 // Ensure logs directory exists
 const logsDir = path.join(__dirname, '../..', 'logs');
@@ -24,7 +24,7 @@ const customFormat = winston.format.combine(
 
 // Create logger
 const logger = winston.createLogger({
-  level: config.LOGGING.LEVEL,
+  level: LOGGING_CONFIG.LEVEL,
   format: customFormat,
   defaultMeta: { service: 'moksis-bazaar' },
   transports: [

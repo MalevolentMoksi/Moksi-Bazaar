@@ -5,7 +5,7 @@
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?style=for-the-badge&logo=javascript)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-336791?style=for-the-badge&logo=postgresql)
 
-Moksi's Bazaar is a feature-rich Discord bot built with Discord.js v14, offering various games, utilities, and interactive features centered around a virtual currency system. The bot provides entertainment through gambling games, relationship simulations, voice functionality, and productivity tools.
+Moksi's Bazaar is a feature-rich Discord bot built with Discord.js v14, offering various games, utilities, and interactive features centered around a virtual currency system. The bot provides entertainment through gambling games, AI conversation with personality adaptation, and productivity tools.
 
 ## 📋 Table of Contents
 
@@ -58,7 +58,6 @@ Moksi-Bazaar/
 ├── 🐳 Dockerfile             # Container configuration
 ├── ⚙️ .nixpacks.toml         # Railway deployment config
 ├── 📦 package.json           # Dependencies and scripts
-├── 💰 balances.json          # User balance storage
 ├── 🌳 tree.txt               # Project structure (102KB)
 └── 📚 README.md              # Basic project description
 ```
@@ -123,13 +122,13 @@ The bot includes a comprehensive relationship simulation system:
 | **Currency** | `currency.js` (2.8KB) | Balance management | Check balances, transfer funds, transaction history |
 | **Say** | `say.js` (811B) | Text output | Simple text repetition, formatting |
 
-#### Voice Features
+#### AI & Utilities
 | Command | File | Purpose | Capabilities |
-|---------|------|---------|--------------|
-| **Speak** | `speak.js` (16.7KB) | Voice synthesis | TTS, audio playback, voice effects |
-| **Speak Settings** | `speak_settings.js` (12.4KB) | Voice configuration | Voice selection, speed control, pitch adjustment |
-| **Sleepy** | `sleepy.js` (4.2KB) | Sleep commands | Bedtime routines, sleep tracking |
-| **Shh** | `shh.js` (8.6KB) | Audio control | Silence commands, volume control |
+|---------|------|---------|--------------||
+| **Speak** | `speak.js` (16.7KB) | AI conversation | Personality-aware chat, context memory, sentiment tracking |
+| **Speak Settings** | `speak_settings.js` (12.4KB) | AI configuration | Toggle AI responses, owner-only controls |
+| **Sleepy** | `sleepy.js` (4.2KB) | Server-specific utility | Sleep tracking leaderboard |
+| **Shh** | `shh.js` (8.6KB) | Admin control | Owner-only bot silence command |
 
 #### Entertainment
 | Command | File | Purpose | Features |
@@ -162,8 +161,6 @@ The bot includes a comprehensive relationship simulation system:
 #### Media Processing
 ```json
 {
-  "fluent-ffmpeg": "^2.1.3",       // Audio/video processing
-  "opusscript": "^0.1.1",          // Voice encoding
   "node-fetch": "^3.3.2"           // HTTP requests
 }
 ```
@@ -231,8 +228,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,           // Server information
     GatewayIntentBits.GuildMessages,    // Message reading
-    GatewayIntentBits.MessageContent,   // Message content access
-    GatewayIntentBits.GuildVoiceStates  // Voice functionality
+    GatewayIntentBits.MessageContent    // Message content access
   ]
 });
 ```
@@ -492,7 +488,6 @@ cmd = "npm start"
 The bot integrates with several external APIs and services:
 
 #### Discord API
-- **Voice Connections**: Full voice channel support
 - **Slash Commands**: Modern command interface
 - **Embeds**: Rich message formatting
 - **Reactions**: Interactive button responses
@@ -503,9 +498,7 @@ The bot integrates with several external APIs and services:
 - **Migrations**: Schema version management
 
 #### Media Processing
-- **FFmpeg**: Audio/video processing
-- **Opus Encoding**: Voice data compression
-- **WebSocket**: Real-time communication
+- **WebSocket**: Real-time communication for randomyt command
 
 ### Custom API Endpoints
 

@@ -2,6 +2,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db.js');
+const { SLEEPY_GUILDS } = require('../../utils/constants');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -37,7 +38,7 @@ module.exports = {
 
   async execute(interaction) {
     const guildId = interaction.guildId;
-    if (guildId !== '1217066705537204325' && guildId !== '1347922267853553806') {
+    if (!SLEEPY_GUILDS.includes(guildId)) {
       return interaction.reply({
       content: '🚫 This command only works in the sleepytime server.', flags: MessageFlags.Ephemeral
       });

@@ -2,7 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const { getBalance, updateBalance } = require('../../utils/db');
 const { deductBet, createPlayAgainCollector } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
-const config = require('../../config');
+const { GAME_CONFIG } = require('../../utils/constants');
 
 // Helper: build and shuffle a deck of cards
 const SUITS = ['♠', '♥', '♦', '♣'];
@@ -71,15 +71,15 @@ function buildEmbed(playerCards, dealerCards, balance, bet, result, payout) {
 
   if (result) {
     if (result.startsWith('🃏')) {
-      embed.setColor(config.GAMES.BLACKJACK.COLOR_BLACKJACK);
+      embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_BLACKJACK);
     } else if (result.includes('2.5×')) {
-      embed.setColor(config.GAMES.BLACKJACK.COLOR_BLACKJACK);
+      embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_BLACKJACK);
     } else if (result.toLowerCase().includes('win')) {
-      embed.setColor(config.GAMES.BLACKJACK.COLOR_WIN);
+      embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_WIN);
     } else if (result.includes('Bust')) {
-      embed.setColor(config.GAMES.BLACKJACK.COLOR_LOSS);
+      embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_LOSS);
     } else if (result.toLowerCase().includes('lose')) {
-      embed.setColor(config.GAMES.BLACKJACK.COLOR_LOSS);
+      embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_LOSS);
     }
     embed.setDescription(`**${result}**`);
   }
@@ -277,7 +277,7 @@ module.exports = {
     function handlePlayAgain(msg) {
       const playCollector = msg.createMessageComponentCollector({
         componentType: ComponentType.Button,
-        time: config.GAMES.BLACKJACK.COLLECTOR_TIMEOUT,
+        time: GAME_CONFIG.BLACKJACK.COLLECTOR_TIMEOUT,
       });
 
       playCollector.on('collect', async (btnInt) => {

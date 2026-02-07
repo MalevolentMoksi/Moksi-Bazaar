@@ -2,16 +2,9 @@
 
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const { GOAT_EMOJIS, isOwner } = require('../../utils/constants');
 
 const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
-
-const GOAT_EMOJIS = {
-    goat_cry: '', goat_puke: '', goat_meditate: '', goat_hurt: '',
-    goat_exhausted: '', goat_boogie: '', goat_small_bleat: '',
-    goat_scream: '', goat_smile: '', goat_pet: '', goat_sleep: ''
-};
-
-const OWNER_ID = '619637817294848012';
 const speakDisabledReplies = [
     "Shhhhhh.",
     "Shhhhhhhhhhh.",
@@ -27,7 +20,7 @@ module.exports = {
 
     async execute(interaction) {
         // Only your account can use this command:
-        if (interaction.user.id !== OWNER_ID) {
+        if (!isOwner(interaction.user.id)) {
             const msg = speakDisabledReplies[Math.floor(Math.random() * speakDisabledReplies.length)];
             return interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
         }

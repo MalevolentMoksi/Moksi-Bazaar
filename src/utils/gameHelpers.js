@@ -6,7 +6,7 @@
 const { ComponentType, MessageFlags } = require('discord.js');
 const logger = require('./logger');
 const { getBalance, updateBalance } = require('./db');
-const config = require('../config');
+const { GAME_CONFIG } = require('./constants');
 
 /**
  * Validates and deducts a bet from a user's balance
@@ -109,7 +109,7 @@ function validateBetAmount(amount, balance, minBet = 1, maxBet = Infinity) {
  * @returns {Promise<void>}
  */
 async function createPlayAgainCollector(message, userId, callback, options = {}) {
-  const { timeout = config.GAMES.BLACKJACK.COLLECTOR_TIMEOUT } = options;
+  const { timeout = GAME_CONFIG.BLACKJACK.COLLECTOR_TIMEOUT } = options;
 
   const collector = message.createMessageComponentCollector({
     componentType: ComponentType.Button,

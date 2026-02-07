@@ -14,7 +14,7 @@ const {
 const { getBalance, updateBalance } = require('../../utils/db');
 const { deductBet } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
-const config = require('../../config');
+const { GAME_CONFIG } = require('../../utils/constants');
 
 function rollDie() {
   return Math.floor(Math.random() * 6) + 1;
@@ -124,7 +124,7 @@ module.exports = {
       const message = await interaction.fetchReply();
       const collector = message.createMessageComponentCollector({
         componentType: ComponentType.Button,
-        time: config.GAMES.CRAPS.COLLECTOR_TIMEOUT,
+        time: GAME_CONFIG.CRAPS.COLLECTOR_TIMEOUT,
       });
 
       collector.on('collect', async (btnInt) => {

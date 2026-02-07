@@ -1,5 +1,6 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
 const { MessageFlags } = require('discord.js');
+const { isOwner } = require('../../utils/constants');
 
 
 module.exports = {
@@ -13,7 +14,7 @@ module.exports = {
     ),
   async execute(interaction) {
     const text = interaction.options.getString('message');
-    if (interaction.user.id === "619637817294848012") {
+    if (isOwner(interaction.user.id)) {
       await interaction.channel.send(text);
       await interaction.reply({ content: "✅ Message sent.", flags: MessageFlags.Ephemeral });
     } else {
