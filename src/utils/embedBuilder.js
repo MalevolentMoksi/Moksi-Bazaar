@@ -104,7 +104,7 @@ function createOverviewEmbed(relationships, options = {}) {
     } = options;
 
     const embed = new EmbedBuilder()
-        .setTitle('🌐 Social Battery Status')
+        .setTitle('🌐 Relationships Overview')
         .setColor(EMBED_COLORS.INFO);
 
     // Add summary if provided
