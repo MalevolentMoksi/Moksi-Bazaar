@@ -52,11 +52,23 @@ function createRelationshipEmbed(userContext, targetUser, options = {}) {
         ]);
 
         if (recentMemories.length > 0) {
-            const lastMemory = recentMemories[0];
-            embed.addFields([{
-                name: 'Last Interaction',
-                value: `"${lastMemory.user_message.substring(0, 80)}${lastMemory.user_message.length > 80 ? '...' : ''}"`
-            }]);
+            const lastMeaningful = [...recentMemories]
+                .reverse()
+                .find(m => m.user_message && m.user_message !== '[context]');
+
+            if (lastMeaningful) {
+                const clipped = lastMeaningful.user_message.substring(0, 80);
+                const suffix = lastMeaningful.user_message.length > 80 ? '...' : '';
+                embed.addFields([{
+                    name: 'Last Interaction',
+                    value: `"${clipped}${suffix}"`
+                }]);
+            } else {
+                embed.addFields([{
+                    name: 'Last Interaction',
+                    value: 'No recent user message.'
+                }]);
+            }
         }
 
         if (userContext.lastSeen) {
@@ -254,7 +266,8 @@ function formatSentimentScore(score) {
 }
 
 function formatRelationshipLine(rel, index) {
-    const name = rel.displayName || `User-${rel.userId?.slice(-4)}`;
+    const hasDisplayName = rel.displayName && rel.displayName.toLowerCase() !== 'user';
+    const name = hasDisplayName ? rel.displayName : `<@${rel.userId}>`;
     const emoji = getEmojiForAttitude(rel.attitudeLevel);
     const sentimentStr = rel.sentimentScore ? ` (${rel.sentimentScore > 0 ? '+' : ''}${rel.sentimentScore.toFixed(2)})` : '';
     const activeIcon = rel.isActive ? '🟢' : '';

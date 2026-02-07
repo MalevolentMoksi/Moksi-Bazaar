@@ -1,8 +1,9 @@
 // src/commands/tools/mystats.js - View your own relationship stats
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder,  MessageFlags } = require('discord.js');
 const { getUserContext, getRecentMemories, pool } = require('../../utils/db.js');
 const { createStatsEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
+
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -10,7 +11,7 @@ module.exports = {
         .setDescription('View your own relationship stats with Cooler Moksi'),
 
     async execute(interaction) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
 
         try {
             const userId = interaction.user.id;

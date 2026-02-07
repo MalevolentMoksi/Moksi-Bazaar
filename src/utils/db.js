@@ -497,10 +497,16 @@ async function getRecentMemories(userId, limit = 5) {
 }
 
 async function updateUserPreferences(userId, interaction) {
+    const displayName = interaction.member?.displayName || interaction.user?.username || null;
+
     await pool.query(`
-        INSERT INTO user_preferences (user_id, last_seen) VALUES ($1, NOW())
-        ON CONFLICT (user_id) DO UPDATE SET last_seen = NOW()
-    `, [userId]);
+        INSERT INTO user_preferences (user_id, display_name, last_seen)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+            display_name = COALESCE(EXCLUDED.display_name, user_preferences.display_name),
+            last_seen = NOW(),
+            updated_at = NOW()
+    `, [userId, displayName]);
 }
 
 async function getMediaAnalysisProvider() {
