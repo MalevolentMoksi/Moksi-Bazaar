@@ -216,15 +216,15 @@ Required in `.env`:
 - Use `MessageFlags.Ephemeral` for error messages in gambling commands
 
 ### AI Personality (Speak Command)
-- Uses DeepSeek V3 via OpenRouter for chat - see [speak.js](../src/commands/tools/speak.js#L95-L110)
+- Uses DeepSeek via OpenRouter for chat (`deepseek/deepseek-chat` model) - see [speak.js](../src/commands/tools/speak.js#L185-L195)
 - **Cost optimization**: `buildConversationContext()` only analyzes images in the newest message (line 67-68)
 - Caches media descriptions in `media_cache` table to avoid redundant API calls
 - User sentiment tracked in `user_preferences` table - see `updateUserAttitudeWithAI()`
 - Personality uses custom animated emojis (`GOAT_EMOJIS` object)
 
 ### Media Analysis
-- Primary: Gemini 2.0 Flash via OpenRouter - see [db.js](../src/utils/db.js#L144)
-- Fallback: Llama Vision (free tier)
+- Primary: Gemini 2.0 Flash via OpenRouter (fast, accurate vision) - see [db.js](../src/utils/db.js#L212)
+- Fallback: Qwen 2.5 VL 7B (excellent for text/memes in images)
 - Media IDs generated from `sha256(url + messageId + fileName)` - ensures same file reuses cache
 - `analyzeImageWithOpenRouter()` has 10s timeout to prevent hangs
 

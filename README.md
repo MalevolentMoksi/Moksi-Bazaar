@@ -158,10 +158,10 @@ The bot includes a comprehensive relationship simulation system:
 }
 ```
 
-#### Media Processing
+#### Logging & Monitoring
 ```json
 {
-  "node-fetch": "^3.3.2"           // HTTP requests
+  "winston": "^3.11.0"             // Structured logging with file rotation
 }
 ```
 
@@ -169,7 +169,8 @@ The bot includes a comprehensive relationship simulation system:
 ```json
 {
   "chalk": "^4.1.2",               // Terminal styling
-  "socket.io-client": "^2.4.0"     // WebSocket communication
+  "node-fetch": "^3.3.2",          // HTTP requests
+  "socket.io-client": "^2.4.0"     // WebSocket communication (YouTube integration)
 }
 ```
 
@@ -181,44 +182,98 @@ The bot includes a comprehensive relationship simulation system:
 }
 ```
 
+
 ### Database Schema
 
-The bot uses PostgreSQL with the following key tables:
+The bot uses PostgreSQL with 8 core tables:
 
-#### User Balances
+#### balances
 ```sql
-CREATE TABLE balances (
-    user_id VARCHAR(20) PRIMARY KEY,
-    balance DECIMAL(15,2) DEFAULT 100.00,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+user_id  TEXT PRIMARY KEY,
+balance  BIGINT
 ```
+- Stores virtual currency for each user
+- New users auto-seed with $10,000 on first access
 
-#### Relationships
+#### conversation_memories
 ```sql
-CREATE TABLE relationships (
-    id SERIAL PRIMARY KEY,
-    user1_id VARCHAR(20),
-    user2_id VARCHAR(20),
-    compatibility_score INTEGER,
-    relationship_type VARCHAR(50),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+id               INTEGER PRIMARY KEY,
+user_id          TEXT NOT NULL,
+channel_id       TEXT NOT NULL,
+user_message     TEXT,
+bot_response     TEXT,
+timestamp        BIGINT NOT NULL,
+sentiment_score  DECIMAL(4,2),
+created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ```
+- Tracks conversation history for AI context and sentiment analysis
+- Auto-cleanup when exceeds 1000 rows (deletes oldest 200)
 
-#### Reminders
+#### media_cache
 ```sql
-CREATE TABLE reminders (
-    id SERIAL PRIMARY KEY,
-    user_id VARCHAR(20),
-    channel_id VARCHAR(20),
-    message TEXT,
-    remind_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    completed BOOLEAN DEFAULT FALSE
-);
+media_id        TEXT PRIMARY KEY,
+description     TEXT NOT NULL,
+media_type      TEXT NOT NULL,
+original_url    TEXT,
+created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+accessed_count  INTEGER DEFAULT 1,
+last_accessed   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ```
+- Caches AI image analysis results to reduce API costs
+
+#### user_preferences
+```sql
+user_id                TEXT PRIMARY KEY,
+display_name           TEXT,
+interaction_count      INTEGER DEFAULT 0,
+last_seen              TIMESTAMP,
+attitude_level         TEXT DEFAULT 'neutral',
+sentiment_score        DECIMAL(4,3) DEFAULT 0.000,
+created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+```
+- Stores user context for AI personality adaptation
+- Attitude levels: hostile, cautious, neutral, familiar, friendly
+
+#### reminders
+```sql
+id                TEXT PRIMARY KEY,
+user_id           TEXT NOT NULL,
+channel_id        TEXT NOT NULL,
+due_at_utc_ms     BIGINT NOT NULL,
+reason            TEXT,
+created_at_utc_ms BIGINT NOT NULL
+```
+- Stores scheduled reminders with persistent scheduling across restarts
+
+#### sleepy_counts
+```sql
+guild_id  TEXT NOT NULL,
+user_id   TEXT NOT NULL,
+count     INTEGER DEFAULT 0,
+PRIMARY KEY (guild_id, user_id)
+```
+- Tracks "sleepy" command usage per user per server
+
+#### pending_duels
+```sql
+id              SERIAL PRIMARY KEY,
+challenger_id   TEXT NOT NULL,
+challenged_id   TEXT NOT NULL,
+amount          BIGINT NOT NULL,
+status          TEXT DEFAULT 'pending',
+created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+expires_at      TIMESTAMP NOT NULL
+```
+- Persistent duel challenge storage to survive bot restarts
+
+#### user_cooldowns
+```sql
+user_id    TEXT NOT NULL,
+command    TEXT NOT NULL,
+expires_at TIMESTAMP NOT NULL,
+UNIQUE(user_id, command)
+```
+- Prevents command spam and implements cooldown persistence
 
 ### Bot Configuration
 
@@ -252,7 +307,7 @@ for (const folder of functionFolders) {
 ## 📥 Installation & Setup
 
 ### Prerequisites
-- Node.js 18+ 
+- Node.js 22+
 - PostgreSQL database
 - Discord Bot Token
 - Git
@@ -311,7 +366,7 @@ npm run pretest
 The project includes a production-ready Dockerfile:
 
 ```dockerfile
-FROM node:18-slim
+FROM node:22-slim
 
 ENV NODE_ENV=production
 WORKDIR /app

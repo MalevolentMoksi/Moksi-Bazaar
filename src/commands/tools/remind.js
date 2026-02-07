@@ -14,17 +14,8 @@ const MAX_TIMEOUT_MS = 24 * 24 * 60 * 60 * 1000; // 24 days in milliseconds
 
 // ---------- DB bootstrap ----------
 async function ensureTable() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS reminders (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            channel_id TEXT NOT NULL,
-            due_at_utc_ms BIGINT NOT NULL,
-            reason TEXT,
-            created_at_utc_ms BIGINT NOT NULL
-        );
-    `);
-    await pool.query(`CREATE INDEX IF NOT EXISTS reminders_due_idx ON reminders (due_at_utc_ms)`);
+    // reminders table is now created in db.js init() function
+    // No need to create here anymore
 }
 
 // ---------- DB helpers ----------

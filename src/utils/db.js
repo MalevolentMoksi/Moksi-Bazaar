@@ -101,6 +101,21 @@ const init = async () => {
             UNIQUE(user_id, command)
         );
         CREATE INDEX IF NOT EXISTS idx_user_cooldowns_expires ON user_cooldowns(expires_at);
+        CREATE TABLE IF NOT EXISTS reminders (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            due_at_utc_ms BIGINT NOT NULL,
+            reason TEXT,
+            created_at_utc_ms BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at_utc_ms);
+        CREATE TABLE IF NOT EXISTS sleepy_counts (
+            guild_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
     `);
 
     // Default Settings
