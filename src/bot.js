@@ -8,22 +8,32 @@ require('dotenv').config();
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
 const logger = require('./utils/logger');
-const { runAllValidations } = require('./utils/validateEnvironment');
+const { validateEnvironmentVars } = require('./utils/validateEnvironment');
+
+// Use console as fallback for critical startup errors
+console.log('[STARTUP] Starting Moksi\'s Bazaar bot...');
 
 // Perform startup validations
 (async () => {
-  logger.info('Starting Moksi\'s Bazaar bot...');
-  
-  const validation = await runAllValidations();
-  if (!validation.valid) {
-    logger.error('Startup validation failed. Please fix the following errors:', {
-      errors: validation.errors,
-    });
+  try {
+    // Critical validation: environment variables only
+    const envValidation = validateEnvironmentVars();
+    if (!envValidation.valid) {
+      console.error('[STARTUP_ERROR] Missing required environment variables:', envValidation.errors);
+      logger.error('Missing required environment variables', { errors: envValidation.errors });
+      process.exit(1);
+    }
+
+    console.log('[STARTUP] Environment variables valid, initializing bot...');
+    logger.info('Starting Moksi\'s Bazaar bot - env vars validated');
+
+    // Initialize bot
+    initializeBot();
+  } catch (error) {
+    console.error('[STARTUP_ERROR] Unexpected startup error:', error.message);
+    logger.error('Unexpected startup error', { error: error.message, stack: error.stack });
     process.exit(1);
   }
-
-  // Initialize bot after validation passes
-  initializeBot();
 })();
 
 function initializeBot() {
@@ -57,6 +67,18 @@ function initializeBot() {
 
   // Login with token from environment
   client.login(process.env.TOKEN || process.env.DISCORD_TOKEN);
+
+  // Handle unhandled rejections and exceptions
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[UNHANDLED_REJECTION]', reason);
+    logger.error('Unhandled Promise Rejection', { reason: String(reason), stack: reason?.stack });
+  });
+
+  process.on('uncaughtException', (error) => {
+    console.error('[UNCAUGHT_EXCEPTION]', error.message);
+    logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
+    process.exit(1);
+  });
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
