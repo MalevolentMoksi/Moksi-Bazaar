@@ -488,11 +488,17 @@ async function storeConversationMemory(userId, channelId, userMessage, botRespon
     }
 }
 
-async function getRecentMemories(userId, limit = 5) {
-    const { rows } = await pool.query(`
-        SELECT user_message, bot_response FROM conversation_memories
-        WHERE user_id = $1 ORDER BY timestamp DESC LIMIT $2
-    `, [userId, limit]);
+async function getRecentMemories(userId, limit = 5, options = {}) {
+    const { excludeContext = false } = options;
+
+    const query = excludeContext
+        ? `SELECT user_message, bot_response FROM conversation_memories
+           WHERE user_id = $1 AND user_message <> '[context]'
+           ORDER BY timestamp DESC LIMIT $2`
+        : `SELECT user_message, bot_response FROM conversation_memories
+           WHERE user_id = $1 ORDER BY timestamp DESC LIMIT $2`;
+
+    const { rows } = await pool.query(query, [userId, limit]);
     return rows.reverse();
 }
 

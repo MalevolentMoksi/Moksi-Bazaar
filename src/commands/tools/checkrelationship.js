@@ -64,7 +64,7 @@ module.exports = {
       // Parallel data fetching
       const [userContext, recentMemories] = await Promise.all([
         getUserContext(targetUser.id),
-        getRecentMemories(targetUser.id, 3)
+        getRecentMemories(targetUser.id, 3, { excludeContext: true })
       ]);
 
       const description = await generateRelationshipResponse(userContext, targetUser, recentMemories);
