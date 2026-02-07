@@ -52,7 +52,7 @@ module.exports = {
     .setName('checkrelation')
     .setDescription('Ask Cooler Moksi how they feel about a user')
     .addUserOption(o => o.setName('user').setDescription('The user').setRequired(true))
-    .addBooleanOption(o => o.setName('detailed').setDescription('Show detailed stats')),
+    .addBooleanOption(o => o.setName('detailed').setDescription('Show detailed stats').setDefault(true)),
 
   async execute(interaction) {
     await interaction.deferReply();
