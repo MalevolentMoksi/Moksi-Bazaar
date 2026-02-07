@@ -12,8 +12,8 @@ const { pool } = require('./db');
  */
 function validateEnvironmentVars() {
   const errors = [];
-  const required = ['TOKEN', 'DATABASE_URL', 'CLIENT_ID'];
-  const optional = ['OPENROUTER_API_KEY', 'OWNER_ID', 'NODE_ENV', 'LOG_LEVEL'];
+  const required = ['TOKEN', 'DATABASE_URL'];
+  const optional = ['CLIENT_ID', 'OPENROUTER_API_KEY', 'OWNER_ID', 'NODE_ENV', 'LOG_LEVEL'];
 
   logger.info('Validating environment variables...');
 
