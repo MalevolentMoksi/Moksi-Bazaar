@@ -80,6 +80,9 @@ const init = async () => {
             last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_media_cache_accessed ON media_cache(last_accessed);
+        CREATE INDEX IF NOT EXISTS idx_conversation_memories_user ON conversation_memories(user_id);
+        CREATE INDEX IF NOT EXISTS idx_conversation_memories_timestamp ON conversation_memories(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_user_preferences_composite ON user_preferences(attitude_level, interaction_count DESC);
         CREATE TABLE IF NOT EXISTS pending_duels (
             id SERIAL PRIMARY KEY,
             challenger_id TEXT NOT NULL,
@@ -90,6 +93,7 @@ const init = async () => {
             status TEXT DEFAULT 'pending'
         );
         CREATE INDEX IF NOT EXISTS idx_pending_duels_challenged ON pending_duels(challenged_id);
+        CREATE INDEX IF NOT EXISTS idx_pending_duels_status ON pending_duels(status, expires_at);
         CREATE TABLE IF NOT EXISTS user_cooldowns (
             user_id TEXT PRIMARY KEY,
             command TEXT NOT NULL,
@@ -413,8 +417,11 @@ async function analyzeMessageSentiment(userMessage, conversationContext) {
 }
 
 async function getUserContext(userId) {
-    const { rows } = await pool.query('SELECT * FROM user_preferences WHERE user_id = $1', [userId]);
-    if (rows.length === 0) return { isNewUser: true, attitudeLevel: 'neutral', sentimentScore: 0 };
+    const { rows } = await pool.query(
+        'SELECT user_id, display_name, interaction_count, attitude_level, sentiment_score, last_sentiment_update, last_seen FROM user_preferences WHERE user_id = $1',
+        [userId]
+    );
+    if (rows.length === 0) return { isNewUser: true, attitudeLevel: 'neutral', sentimentScore: 0, interactionCount: 0 };
     
     const data = rows[0];
     const lastUpdate = new Date(data.last_sentiment_update).getTime();
@@ -427,7 +434,9 @@ async function getUserContext(userId) {
         isNewUser: false,
         attitudeLevel: data.attitude_level,
         sentimentScore: currentScore,
-        displayName: data.display_name
+        displayName: data.display_name,
+        interactionCount: data.interaction_count || 0,
+        lastSeen: data.last_seen
     };
 }
 
@@ -447,15 +456,15 @@ async function updateUserAttitudeWithAI(userId, userMessage, conversationContext
     else if (newScore >= 0.25) newLevel = 'familiar';
     
     await pool.query(`
-        INSERT INTO user_preferences (user_id, display_name, interaction_count, attitude_level, sentiment_score, last_sentiment_update)
-        VALUES ($1, $2, 1, $3, $4, NOW())
+        INSERT INTO user_preferences (user_id, interaction_count, attitude_level, sentiment_score, last_sentiment_update)
+        VALUES ($1, 1, $2, $3, NOW())
         ON CONFLICT (user_id) DO UPDATE SET
-            display_name = EXCLUDED.display_name,
             interaction_count = user_preferences.interaction_count + 1,
-            attitude_level = $3,
-            sentiment_score = $4,
-            last_sentiment_update = NOW()
-    `, [userId, userMessage.author?.username || 'user', newLevel, newScore]);
+            attitude_level = $2,
+            sentiment_score = $3,
+            last_sentiment_update = NOW(),
+            updated_at = NOW()
+    `, [userId, newLevel, newScore]);
 
     return { sentiment: newScore, reasoning: analysis.reasoning };
 }
@@ -467,11 +476,15 @@ async function storeConversationMemory(userId, channelId, userMessage, botRespon
         VALUES ($1, $2, $3, $4, $5, $6)
     `, [userId, channelId, userMessage, botResponse, sentimentScore, Date.now()]);
 
-    if (Math.random() < 0.1) {
+    // Deterministic cleanup: trigger when table exceeds 1000 rows
+    const { rows } = await pool.query('SELECT COUNT(*) as count FROM conversation_memories');
+    if (rows[0].count > 1000) {
         await pool.query(`
-            DELETE FROM conversation_memories WHERE user_id = $1 
-            AND id NOT IN (SELECT id FROM conversation_memories WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 20)
-        `, [userId]);
+            DELETE FROM conversation_memories WHERE id IN (
+                SELECT id FROM conversation_memories ORDER BY timestamp ASC LIMIT 200
+            )
+        `);
+        logger.info('Cleaned up old conversation memories', { deleted: 200, remaining: rows[0].count - 200 });
     }
 }
 

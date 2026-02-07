@@ -1,13 +1,12 @@
-// src/commands/admin/relationoverview.js - FIXED SCHEMA
-const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
-const { pool } = require('../../utils/db.js'); // Ensure path matches your structure
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
-
-const LANGUAGE_API_KEY = process.env.LANGUAGE_API_KEY;
+// src/commands/tools/relationoverview.js - Refactored with New Utilities
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { pool } = require('../../utils/db.js');
+const { callGroqAPI } = require('../../utils/apiHelpers');
+const { createOverviewEmbed } = require('../../utils/embedBuilder');
+const { handleCommandError } = require('../../utils/errorHandler');
 
 // ── DATA GATHERING ────────────────────────────────────────────────────────────
 async function getAllUserRelationships(limit = 20) {
-  // FIXED: Removed 'recent_interactions' from query as it does not exist in DB
   const { rows } = await pool.query(`
     SELECT 
       user_id, 
@@ -15,8 +14,7 @@ async function getAllUserRelationships(limit = 20) {
       interaction_count, 
       attitude_level,
       sentiment_score,
-      last_seen,
-      updated_at
+      last_seen
     FROM user_preferences
     WHERE interaction_count > 0
     ORDER BY 
@@ -37,7 +35,6 @@ async function getAllUserRelationships(limit = 20) {
     attitudeLevel: row.attitude_level || 'neutral',
     interactionCount: row.interaction_count || 0,
     sentimentScore: parseFloat(row.sentiment_score) || 0,
-    // recentSentiment removed as we don't store JSON interactions anymore
     lastSeen: row.last_seen,
     isActive: row.last_seen && (Date.now() - new Date(row.last_seen).getTime()) < (7 * 24 * 60 * 60 * 1000)
   }));
@@ -66,47 +63,12 @@ Enemies: ${enemies.map(u => u.displayName).join(', ') || 'None'}.
 
 Write 2 sentences. Be cynical and casual.`;
 
-  try {
-    // Fallback to rules if API fails, but try API first
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${LANGUAGE_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'meta-llama/llama-3.3-70b-versatile', // Use the smart model
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 100,
-        temperature: 0.7,
-      }),
-    });
+  const response = await callGroqAPI(prompt, {
+    maxTokens: 100,
+    temperature: 0.7
+  });
 
-    if (response.ok) {
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content?.trim();
-    }
-  } catch (e) { console.error(e); }
-
-  return `i know ${stats.total} people. ${stats.familiar} are cool, the rest are testing my patience.`;
-}
-
-// ── FORMATTING ────────────────────────────────────────────────────────────────
-function getEmojiForAttitude(attitudeLevel) {
-  switch (attitudeLevel) {
-    case 'familiar': return '💚';
-    case 'friendly': return '😊';
-    case 'neutral': return '😐';
-    case 'cautious': return '🤨';
-    case 'hostile': return '🖕';
-    default: return '❓';
-  }
-}
-
-function formatRelationshipEntry(rel, index) {
-  const emoji = getEmojiForAttitude(rel.attitudeLevel);
-  const name = rel.displayName || `User-${rel.userId.slice(-4)}`;
-  const sentimentStr = rel.sentimentScore !== 0 ? ` (${rel.sentimentScore > 0 ? '+' : ''}${rel.sentimentScore.toFixed(2)})` : '';
-  const activeIcon = rel.isActive ? '🟢' : '';
-
-  return `${index + 1}. ${emoji} **${name}** - ${rel.attitudeLevel} | ${rel.interactionCount} msgs ${sentimentStr} ${activeIcon}`;
+  return response || `i know ${stats.total} people. ${stats.familiar} are cool, the rest are testing my patience.`;
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
@@ -114,35 +76,93 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('relationoverview')
     .setDescription('Get an overview of all user relationships')
-    .addIntegerOption(o => o.setName('limit').setDescription('Max users (5-30)').setMinValue(5).setMaxValue(30))
-    .addBooleanOption(o => o.setName('summary').setDescription('Include AI summary')),
+    .addIntegerOption(o => o.setName('limit').setDescription('Max users (5-50)').setMinValue(5).setMaxValue(50))
+    .addBooleanOption(o => o.setName('summary').setDescription('Include AI summary (default: true)')),
     
   async execute(interaction) {
     await interaction.deferReply();
+    
     try {
-      const limit = interaction.options.getInteger('limit') || 15;
+      const limit = interaction.options.getInteger('limit') || 20;
       const includeSummary = interaction.options.getBoolean('summary') !== false;
       
       const relationships = await getAllUserRelationships(limit);
 
-      if (relationships.length === 0) return await interaction.editReply('I know absolutely nobody.');
+      if (relationships.length === 0) {
+        return await interaction.editReply('I know absolutely nobody.');
+      }
 
-      let summaryText = '';
-      if (includeSummary) summaryText = await generateRelationshipSummary(relationships);
+      let summaryText = null;
+      if (includeSummary) {
+        summaryText = await generateRelationshipSummary(relationships);
+      }
 
-      const list = relationships.map((r, i) => formatRelationshipEntry(r, i)).join('\n');
+      // Pagination logic: 20 users per page
+      const USERS_PER_PAGE = 20;
+      const totalPages = Math.ceil(relationships.length / USERS_PER_PAGE);
+      let currentPage = 1;
       
-      const embed = {
-        title: 'Social Battery Status',
-        description: summaryText ? `*"${summaryText}"*\n\n${list}` : list,
-        color: 0x00AAFF,
-        footer: { text: `Tracking ${relationships.length} users` }
+      const getPageData = (page) => {
+        const start = (page - 1) * USERS_PER_PAGE;
+        const end = start + USERS_PER_PAGE;
+        return relationships.slice(start, end);
       };
 
-      await interaction.editReply({ embeds: [embed] });
+      const embed = createOverviewEmbed(getPageData(currentPage), {
+        summary: summaryText,
+        page: currentPage,
+        totalPages
+      });
+
+      if (totalPages > 1) {
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('prev_page')
+            .setLabel('Previous')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true),
+          new ButtonBuilder()
+            .setCustomId('next_page')
+            .setLabel('Next')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(totalPages === 1)
+        );
+
+        const message = await interaction.editReply({ embeds: [embed], components: [row] });
+
+        const collector = message.createMessageComponentCollector({
+          time: 120000 // 2 minutes
+        });
+
+        collector.on('collect', async i => {
+          if (i.user.id !== interaction.user.id) {
+            return i.reply({ content: 'This is not your menu!', ephemeral: true });
+          }
+
+          if (i.customId === 'next_page') currentPage++;
+          if (i.customId === 'prev_page') currentPage--;
+
+          const newEmbed = createOverviewEmbed(getPageData(currentPage), {
+            summary: summaryText,
+            page: currentPage,
+            totalPages
+          });
+
+          row.components[0].setDisabled(currentPage === 1);
+          row.components[1].setDisabled(currentPage === totalPages);
+
+          await i.update({ embeds: [newEmbed], components: [row] });
+        });
+
+        collector.on('end', async () => {
+          row.components.forEach(btn => btn.setDisabled(true));
+          await message.edit({ components: [row] }).catch(() => {});
+        });
+      } else {
+        await interaction.editReply({ embeds: [embed] });
+      }
     } catch (error) {
-      console.error(error);
-      await interaction.editReply('Database blew up. Tell the dev.');
+      await handleCommandError(interaction, error);
     }
   }
 };

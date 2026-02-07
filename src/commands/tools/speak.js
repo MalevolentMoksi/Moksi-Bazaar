@@ -1,9 +1,5 @@
-// ENHANCED SPEAK.JS - DeepSeek V3 + Fixed Identity & Personality
+// ENHANCED SPEAK.JS - DeepSeek V3 + Optimized & Refactored
 const { SlashCommandBuilder } = require('discord.js');
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
-
-// Your OpenRouter Key
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY; 
 
 const {
   isUserBlacklisted,
@@ -16,52 +12,50 @@ const {
   processMediaInMessage
 } = require('../../utils/db.js');
 
-// 1. THE FACE BANK
-const GOAT_EMOJIS = {
-    goat_cry: '<a:goat_cry:1395455098716688424>',
-    goat_puke: '<a:goat_puke:1398407422187540530>',
-    goat_meditate: '<a:goat_meditate:1395455714901884978>',
-    goat_hurt: '<a:goat_hurt:1395446681826234531>',
-    goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
-    goat_boogie: '<a:goat_boogie:1396947962252234892>',
-    goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
-    goat_scream: '<a:goat_scream:1399489715555663972>',
-    goat_smile: '<a:goat_smile:1399444751165554982>',
-    goat_pet: '<a:goat_pet:1273634369445040219>',
-    goat_sleep: '<a:goat_sleep:1395450280161710262>'
-};
-
-const speakDisabledReplies = [
-    "Sorry, no more talking for now.",
-    "The goat rests.",
-    "Shush.",
-    "No."
-];
+const { callOpenRouterAPI } = require('../../utils/apiHelpers');
+const { handleCommandError, sendError } = require('../../utils/errorHandler');
+const { 
+    GOAT_EMOJIS, 
+    SPEAK_DISABLED_REPLIES, 
+    MEMORY_LIMITS, 
+    SENTIMENT_THRESHOLDS, 
+    isOwner 
+} = require('../../utils/constants');
+const logger = require('../../utils/logger');
 
 // ── CONTEXT BUILDER (OPTIMIZED) ─────────────────────────────────────────────
-async function buildConversationContext(messages, currentUserId, limit = 12) {
+/**
+ * Builds conversation context from recent messages
+ * @param {Collection} messages - Discord messages collection
+ * @param {string} currentUserId - Current user's ID
+ * @returns {Promise<string>} Formatted conversation context
+ */
+async function buildConversationContext(messages, currentUserId) {
   // Convert map to array and sort chronologically
   const recentMessages = Array.from(messages.values())
     .filter(msg => !msg.author.bot)
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-    .slice(-limit);
+    .slice(-MEMORY_LIMITS.CONVERSATION_MESSAGES);
 
-  // Identify the most recent message timestamp to know which one to analyze
+  if (recentMessages.length === 0) return 'No recent conversation.';
+
+  // Pre-calculate newest message ID for media analysis optimization
   const newestMsgId = recentMessages[recentMessages.length - 1]?.id;
 
   const contextPromises = recentMessages.map(async (msg) => {
     const name = msg.member?.displayName || msg.author.username;
     
-    // OPTIMIZATION: Only analyze image if it's the very last message in the list
-    // This stops the bot from spending 5 seconds analyzing old images every time
+    // OPTIMIZATION: Only analyze image if it's the very last message
+    // This stops the bot from spending 5-10s analyzing old images every time
     const isNewest = msg.id === newestMsgId;
     
     let mediaContent = '';
     try {
-      // Pass 'isNewest' to db.js. If false, it skips the expensive API call.
       const descriptions = await processMediaInMessage(msg, isNewest);
       if (descriptions.length > 0) mediaContent = ` ${descriptions.join(' ')}`;
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+      logger.warn('Media processing failed in context builder', { error: e.message, messageId: msg.id });
+    }
 
     let content = msg.content.replace(/\n/g, ' ').slice(0, 300);
     if (!content && mediaContent) content = "[media only]";
@@ -87,6 +81,16 @@ module.exports = {
   async execute(interaction) {
     await interaction.deferReply();
 
+    // Progressive feedback: send "thinking" message after 2s if still processing
+    const thinkingTimeout = setTimeout(async () => {
+      try {
+        await interaction.followUp({ 
+          content: '_thinking..._', 
+          ephemeral: true 
+        });
+      } catch (e) { /* Ignore if interaction already completed */ }
+    }, 2000);
+
     try {
       const userId = interaction.user.id;
       const channelId = interaction.channel.id;
@@ -94,46 +98,63 @@ module.exports = {
       const askerName = interaction.member?.displayName || interaction.user.username;
 
       // 1. Checks & Blacklist
-      if (await isUserBlacklisted(userId)) return await interaction.editReply(`Fuck off, <@${userId}>`);
+      if (await isUserBlacklisted(userId)) {
+        clearTimeout(thinkingTimeout);
+        return await sendError(
+          interaction, 
+          'You\'re blocked from using this command. Contact an admin if you believe this is an error.',
+          false
+        );
+      }
       
       const activeSpeak = await getSettingState('active_speak');
-      const isOwner = userId === "619637817294848012";
+      const userIsOwner = isOwner(userId);
       
-      if (activeSpeak === false && !isOwner) {
-        return await interaction.editReply(speakDisabledReplies[Math.floor(Math.random() * speakDisabledReplies.length)]);
+      if (activeSpeak === false && !userIsOwner) {
+        clearTimeout(thinkingTimeout);
+        const randomReply = SPEAK_DISABLED_REPLIES[Math.floor(Math.random() * SPEAK_DISABLED_REPLIES.length)];
+        return await interaction.editReply(`${randomReply}\n-# _(The bot is in maintenance mode. Try again later.)_`);
       }
 
-      await updateUserPreferences(userId, interaction);
+      // 2. PARALLELIZED: Fetch all independent data simultaneously
+      const [messages, userContext, recentMemories] = await Promise.all([
+        interaction.channel.messages.fetch({ limit: MEMORY_LIMITS.FETCH_LIMIT }),
+        getUserContext(userId),
+        getRecentMemories(userId, MEMORY_LIMITS.RECENT_MEMORIES)
+      ]);
 
-      // 2. Build Contexts
-      const messages = await interaction.channel.messages.fetch({ limit: 15 });
+      // Update last seen (non-blocking)
+      updateUserPreferences(userId, interaction).catch(e => 
+        logger.error('Failed to update user preferences', { userId, error: e.message })
+      );
+
+      // 3. Build conversation context (needs messages first)
       const conversationContext = await buildConversationContext(messages, userId);
-      const userContext = await getUserContext(userId);
-      const recentMemories = await getRecentMemories(userId, 4);
 
-      // 3. Sentiment Analysis
+      // 4. Sentiment Analysis (only if user sent a message)
       let sentimentAnalysis = { sentiment: 0, reasoning: 'No message' };
       if (userRequest && userRequest.trim()) {
         sentimentAnalysis = await updateUserAttitudeWithAI(userId, userRequest, conversationContext);
       }
       
+      // 5. Build AI Instructions
       let attitudeInstruction = "Neutral/Chill.";
       if (userContext.attitudeLevel === 'hostile') attitudeInstruction = "Hostile/Mocking.";
-      if (userContext.attitudeLevel === 'friendly') attitudeInstruction = "Friendly/Warm.";
+      if (userContext.attitudeLevel === 'friendly' || userContext.attitudeLevel === 'familiar') attitudeInstruction = "Friendly/Warm.";
       
-      const memoryText = recentMemories.map(m => `User: ${m.user_message} -> You: ${m.bot_response}`).join('\n');
+      const memoryText = recentMemories.length > 0 
+        ? recentMemories.map(m => `User: ${m.user_message} -> You: ${m.bot_response}`).join('\n')
+        : 'No prior memories.';
 
       const emojiKeys = Object.keys(GOAT_EMOJIS).join(', ');
 
-      // 4. IDENTITY & ROLE LOGIC (Fixes the "Dad" issue)
       let userRoleContext = "Random User";
-      if (isOwner) {
+      if (userIsOwner) {
         userRoleContext = "CREATOR (Moksi) - You respect him, though you might tease him.";
       } else {
         userRoleContext = "Chatter (NOT your creator).";
       }
 
-      // 5. SYSTEM PROMPT (Fixes the "Fr Fr" issue)
       const systemPrompt = `You are Cooler Moksi.
 
 IDENTITY:
@@ -142,7 +163,7 @@ IDENTITY:
 - Speak normally (lowercase) and naturally (no overt punctuation). 
 - STRICTLY FORBIDDEN: Do NOT use "Zoomer slang" like "fr fr", "no cap", "fam", "based", "bet". You are not a teenager. Speak like a tired adult.
 - Be concise (1-2 sentences).
-- - Mix up your sentence structure. Sometimes be one word, sometimes sentences.
+- Mix up your sentence structure. Sometimes be one word, sometimes sentences.
 
 CURRENT CONTEXT:
 - User: ${askerName}
@@ -164,62 +185,50 @@ ${memoryText}`;
         ? `${askerName} says: "${userRequest}"` 
         : `(No text sent, just lurking)`;
 
-      // 6. OPENROUTER CALL
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://discord.com',
-          'X-Title': 'Cooler Moksi',
-        },
-        body: JSON.stringify({
-          model: 'deepseek/deepseek-chat', 
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          max_tokens: 200,
-          temperature: 1.0, 
-        }),
-      });
+      // 6. API CALL using helper (with timeout and error handling)
+      const rawContent = await callOpenRouterAPI(
+        'deepseek/deepseek-chat',
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        {
+          maxTokens: 200,
+          temperature: 1.0
+        }
+      );
 
-      if (!response.ok) {
-        console.error('OpenRouter Error:', await response.text());
-        return await interaction.editReply('My brain is buffering.');
+      clearTimeout(thinkingTimeout);
+
+      if (!rawContent) {
+        logger.error('OpenRouter returned null', { userId, hasRequest: !!userRequest });
+        return await sendError(
+          interaction,
+          'My brain timed out. The AI servers might be slow right now. Try again?'
+        );
       }
 
-      const data = await response.json();
-      const rawContent = data.choices?.[0]?.message?.content?.trim() || '...';
-      
-      // Clean thinking blocks if DeepSeek sends them
-      const cleanContent = rawContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-      // 7. ROBUST EMOJI PARSING (Regex Method)
-      // This is safer than splitting lines because sometimes the AI puts the emoji on the same line.
-      let replyText = cleanContent;
+      // 7. ROBUST EMOJI PARSING
+      let replyText = rawContent;
       let finalEmoji = "";
 
       // Regex looks for a known emoji key at the VERY end of the string
-      // Matches: "some text goat_puke" or "some text\ngoat_puke"
       const emojiRegex = new RegExp(`(?:\\s|\\n)(${Object.keys(GOAT_EMOJIS).join('|')}|none)$`, 'i');
-      const match = cleanContent.match(emojiRegex);
+      const match = rawContent.match(emojiRegex);
 
       if (match) {
         const emojiKey = match[1].toLowerCase();
-        
-        // Remove the key from the text
-        replyText = cleanContent.replace(match[0], '').trim();
-
-        if (GOAT_EMOJIS[emojiKey]) {
-            finalEmoji = GOAT_EMOJIS[emojiKey];
-        }
+        replyText = rawContent.replace(match[0], '').trim();
+        if (GOAT_EMOJIS[emojiKey]) finalEmoji = GOAT_EMOJIS[emojiKey];
       }
 
-      // Fallback: If no emoji found, but sentiment is extreme, auto-pick one
+      // Fallback: If no emoji found but sentiment is extreme, auto-pick one
       if (!finalEmoji) {
-         if (sentimentAnalysis.sentiment < -0.6) finalEmoji = GOAT_EMOJIS['goat_exhausted'];
-         if (sentimentAnalysis.sentiment > 0.6) finalEmoji = GOAT_EMOJIS['goat_smile'];
+         if (sentimentAnalysis.sentiment <= SENTIMENT_THRESHOLDS.AUTO_EMOJI_NEGATIVE) {
+           finalEmoji = GOAT_EMOJIS['goat_exhausted'];
+         } else if (sentimentAnalysis.sentiment >= SENTIMENT_THRESHOLDS.AUTO_EMOJI_POSITIVE) {
+           finalEmoji = GOAT_EMOJIS['goat_smile'];
+         }
       }
 
       if (!replyText) replyText = "bleat.";
@@ -229,19 +238,28 @@ ${memoryText}`;
       if (finalEmoji) finalOutput += ` ${finalEmoji}`;
 
       if (userRequest) {
-        // Apply block formatting to user request
         const formattedRequest = userRequest.split('\n').map(l => `-# *"${l}"*`).join('\n');
         finalOutput = `-# <@${userId}> :\n${formattedRequest}\n\n${finalOutput}`;
       }
 
-      // 9. SAVE MEMORY
-      await storeConversationMemory(userId, channelId, userRequest || '[context]', replyText, sentimentAnalysis.sentiment);
+      // 9. SAVE MEMORY (non-blocking)
+      storeConversationMemory(
+        userId, 
+        channelId, 
+        userRequest || '[context]', 
+        replyText, 
+        sentimentAnalysis.sentiment
+      ).catch(e => 
+        logger.error('Failed to store conversation memory', { userId, error: e.message })
+      );
 
       await interaction.editReply(finalOutput);
 
     } catch (error) {
-      console.error('Speak Error:', error);
-      await interaction.editReply('Moksi machine broke.');
+      clearTimeout(thinkingTimeout);
+      await handleCommandError(interaction, error, { 
+        hasRequest: !!interaction.options.getString('request') 
+      });
     }
   }
 };
