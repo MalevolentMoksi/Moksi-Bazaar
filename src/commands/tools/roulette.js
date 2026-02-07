@@ -1,6 +1,11 @@
-// src/commands/tools/roulette.js
+/**
+ * Roulette Game Command
+ */
+
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
+const { deductBet } = require('../../utils/gameHelpers');
+const logger = require('../../utils/logger');
 
 // Numbers colored red in European roulette
 const redNumbers = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
@@ -44,16 +49,16 @@ module.exports = {
     const sub = interaction.options.getSubcommand();
     const betAmount = interaction.options.getInteger('amount');
 
-    // Fetch and verify balance
-    const balance = await getBalance(userId);
-    if (betAmount > balance) {
+    // Deduct bet
+    const deductResult = await deductBet(userId, betAmount);
+    if (!deductResult.success) {
       return interaction.reply({
-        content: `❌ You only have $${balance} available to bet.`, flags: MessageFlags.Ephemeral
+        content: `❌ ${deductResult.error}`,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
-    // Deduct initial bet
-    let finalBalance = balance - betAmount;
+    let finalBalance = deductResult.newBalance;
 
     // Simulate spin (0 to 36)
     const outcome = Math.floor(Math.random() * 37);
@@ -102,6 +107,16 @@ module.exports = {
     // Update balance
     finalBalance += payout;
     await updateBalance(userId, finalBalance);
+    
+    logger.info('Roulette game played', {
+      userId,
+      sub,
+      outcome,
+      betAmount,
+      payout,
+      win: payout > 0,
+      newBalance: finalBalance,
+    });
 
     // Emoji for outcome
     const colorEmoji = outcomeColor === 'red'

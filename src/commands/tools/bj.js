@@ -1,5 +1,8 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, MessageFlags } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
+const { deductBet, createPlayAgainCollector } = require('../../utils/gameHelpers');
+const logger = require('../../utils/logger');
+const config = require('../../config');
 
 // Helper: build and shuffle a deck of cards
 const SUITS = ['♠', '♥', '♦', '♣'];
@@ -68,15 +71,15 @@ function buildEmbed(playerCards, dealerCards, balance, bet, result, payout) {
 
   if (result) {
     if (result.startsWith('🃏')) {
-      embed.setColor('#800080');        // Purple for Blackjack
+      embed.setColor(config.GAMES.BLACKJACK.COLOR_BLACKJACK);
     } else if (result.includes('2.5×')) {
-      embed.setColor('#800080');        // Purple for 2.5× payout (blackjack)
+      embed.setColor(config.GAMES.BLACKJACK.COLOR_BLACKJACK);
     } else if (result.toLowerCase().includes('win')) {
-      embed.setColor('#00FF00');        // Green for a standard win
+      embed.setColor(config.GAMES.BLACKJACK.COLOR_WIN);
     } else if (result.includes('Bust')) {
-      embed.setColor('#FFCC00');        // Softer yellow for a Bust
+      embed.setColor(config.GAMES.BLACKJACK.COLOR_LOSS);
     } else if (result.toLowerCase().includes('lose')) {
-      embed.setColor('#FF0000');        // Red for a loss
+      embed.setColor(config.GAMES.BLACKJACK.COLOR_LOSS);
     }
     embed.setDescription(`**${result}**`);
   }
@@ -104,13 +107,16 @@ module.exports = {
     let bet = interaction.options.getInteger('bet');
     const originalBet = bet;
 
-    // Fetch and deduct initial bet
-    const origBalance = await getBalance(userId);
-    if (origBalance < bet) {
-      return interaction.reply({ content: `💰 You only have ${origBalance}, you cannot bet ${bet}.`, flags: MessageFlags.Ephemeral});
+    // Deduct initial bet
+    const deductResult = await deductBet(userId, bet);
+    if (!deductResult.success) {
+      return interaction.reply({
+        content: `💰 ${deductResult.error}`,
+        flags: MessageFlags.Ephemeral,
+      });
     }
-    let balance = origBalance - bet;
-    await updateBalance(userId, balance);
+
+    let balance = deductResult.newBalance;
 
     // Function to run a full round, recursively called on "Play Again"
     const runRound = async () => {
@@ -254,7 +260,8 @@ module.exports = {
             payout
           );
           const playRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('play_again').setLabel('Play Again').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('bj_play_again').setLabel('Play Again').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('bj_exit').setLabel('Exit Game').setStyle(ButtonStyle.Danger)
           );
           await message.edit({ embeds: [finalEmbed], components: [playRow] });
           return handlePlayAgain(message);
@@ -266,22 +273,51 @@ module.exports = {
     await interaction.deferReply();
     await runRound();
 
-    // Handle "Play Again" button with 3min lifespan
+    // Handle "Play Again" button
     function handlePlayAgain(msg) {
-      const playCollector = msg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 3 * 60 * 1000 });
-      playCollector.on('collect', async btnInt => {
-        if (btnInt.user.id !== userId) return btnInt.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
-        const balNow = await getBalance(userId);
-        if (balNow < originalBet) {
-          return btnInt.reply({ content: 'Insufficient balance to play again.', flags: MessageFlags.Ephemeral});
+      const playCollector = msg.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: config.GAMES.BLACKJACK.COLLECTOR_TIMEOUT,
+      });
+
+      playCollector.on('collect', async (btnInt) => {
+        if (btnInt.user.id !== userId) {
+          return btnInt.reply({
+            content: 'This is not your game!',
+            flags: MessageFlags.Ephemeral,
+          });
         }
-        // Deduct original bet and reset
-        await updateBalance(userId, balNow - originalBet);
-        balance = balNow - originalBet;
-        bet = originalBet;
+
         await btnInt.deferUpdate();
-        await runRound();
-        playCollector.stop();
+
+        if (btnInt.customId === 'bj_play_again') {
+          const balNow = await getBalance(userId);
+          if (balNow < originalBet) {
+            return await btnInt.followUp({
+              content: 'Insufficient balance to play again.',
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          // Deduct original bet and reset
+          const deductAgain = await deductBet(userId, originalBet);
+          if (!deductAgain.success) {
+            return await btnInt.followUp({
+              content: `Could not deduct bet: ${deductAgain.error}`,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          balance = deductAgain.newBalance;
+          bet = originalBet;
+          logger.info('Blackjack: Player starting new round', { userId, bet });
+          await runRound();
+        } else if (btnInt.customId === 'bj_exit') {
+          logger.info('Blackjack: Player exited game', { userId, finalBalance: balance });
+          playCollector.stop();
+        }
+      });
+
+      playCollector.on('end', () => {
+        logger.debug('Blackjack collector ended', { userId });
       });
     }
   }

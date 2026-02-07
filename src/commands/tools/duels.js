@@ -1,10 +1,18 @@
-// src/commands/tools/duel.js
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+/**
+ * Duel Command
+ * Challenge other users to wagered duels with persistent state
+ */
 
-// In-memory store for pending duels: key = challengedUserId
-// value = { challengerId, amount, timeout }
-const pendingDuels = new Map();
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const {
+  getBalance,
+  updateBalance,
+  createPendingDuel,
+  getPendingDuelsFor,
+  updateDuelStatus,
+} = require('../../utils/db');
+const logger = require('../../utils/logger');
+const config = require('../../config');
 
 module.exports = {
   data: new SlashCommandBuilder()

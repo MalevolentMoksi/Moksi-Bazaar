@@ -1,4 +1,7 @@
-// src/commands/tools/craps.js
+/**
+ * Craps Game Command
+ */
+
 const {
   SlashCommandBuilder,
   EmbedBuilder,
@@ -9,6 +12,9 @@ const {
   MessageFlags
 } = require('discord.js');
 const { getBalance, updateBalance } = require('../../utils/db');
+const { deductBet } = require('../../utils/gameHelpers');
+const logger = require('../../utils/logger');
+const config = require('../../config');
 
 function rollDie() {
   return Math.floor(Math.random() * 6) + 1;
@@ -64,15 +70,16 @@ module.exports = {
     let bet = interaction.options.getInteger('bet');
     const originalBet = bet;
 
-    let balance = await getBalance(userId);
-    if (bet > balance) {
+    // Deduct bet
+    const deductResult = await deductBet(userId, bet);
+    if (!deductResult.success) {
       return interaction.reply({
-        content: `❌ You only have $${balance}.`, flags: MessageFlags.Ephemeral
+        content: `❌ ${deductResult.error}`,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
-    balance -= bet;
-    await updateBalance(userId, balance);
+    let balance = deductResult.newBalance;
 
     await interaction.deferReply();
     await runRound();
@@ -99,9 +106,13 @@ module.exports = {
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('play_again')
+          .setCustomId('craps_play_again')
           .setLabel('Play Again')
-          .setStyle(ButtonStyle.Primary)
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId('craps_exit')
+          .setLabel('Exit Game')
+          .setStyle(ButtonStyle.Danger)
       );
 
       if (interaction.replied || interaction.deferred) {
@@ -111,22 +122,40 @@ module.exports = {
       }
 
       const message = await interaction.fetchReply();
-      const collector = message.createMessageComponentCollector({ componentType: ComponentType.Button });
+      const collector = message.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: config.GAMES.CRAPS.COLLECTOR_TIMEOUT,
+      });
 
-      collector.on('collect', async btnInt => {
+      collector.on('collect', async (btnInt) => {
         if (btnInt.user.id !== userId) {
-          return btnInt.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
+          return btnInt.reply({
+            content: 'This is not your game!',
+            flags: MessageFlags.Ephemeral,
+          });
         }
         await btnInt.deferUpdate();
-        const balNow = await getBalance(userId);
-        if (balNow < originalBet) {
-          return btnInt.followUp({ content: `❌ You need $${originalBet} to play again.`, flags: MessageFlags.Ephemeral});
+
+        if (btnInt.customId === 'craps_play_again') {
+          const deductAgain = await deductBet(userId, originalBet);
+          if (!deductAgain.success) {
+            return await btnInt.followUp({
+              content: `Could not deduct bet: ${deductAgain.error}`,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          balance = deductAgain.newBalance;
+          bet = originalBet;
+          logger.info('Craps: Player starting new round', { userId, bet });
+          await runRound();
+        } else if (btnInt.customId === 'craps_exit') {
+          logger.info('Craps: Player exited game', { userId, finalBalance: balance });
+          collector.stop();
         }
-        balance = balNow - originalBet;
-        bet = originalBet;
-        await updateBalance(userId, balance);
-        await runRound();
-        collector.stop();
+      });
+
+      collector.on('end', () => {
+        logger.debug('Craps collector ended', { userId });
       });
     }
   }

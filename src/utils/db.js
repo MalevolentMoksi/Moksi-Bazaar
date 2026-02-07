@@ -1,14 +1,36 @@
-// ENHANCED DB.JS - V7: Llama Vision (Fast & Cheap)
+/**
+ * Database Module
+ * Handles all database operations for balances, user preferences, media caching, and game state
+ */
+
 const { Pool, types } = require('pg');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const crypto = require('crypto');
+const logger = require('./logger');
 
 // Parse BigInts as integers
 types.setTypeParser(types.builtins.INT8, v => parseInt(v, 10));
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 20, // Maximum connections
+  min: 5, // Minimum idle connections
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+// ── POOL ERROR HANDLERS ──────────────────────────────────────────────────────
+pool.on('error', (err, client) => {
+  logger.error('Unexpected error on idle client', { error: err.message, stack: err.stack });
+});
+
+pool.on('connect', () => {
+  logger.debug('New database connection established');
+});
+
+pool.on('remove', () => {
+  logger.debug('Database connection removed from pool');
 });
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -58,6 +80,23 @@ const init = async () => {
             last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_media_cache_accessed ON media_cache(last_accessed);
+        CREATE TABLE IF NOT EXISTS pending_duels (
+            id SERIAL PRIMARY KEY,
+            challenger_id TEXT NOT NULL,
+            challenged_id TEXT NOT NULL,
+            amount BIGINT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            status TEXT DEFAULT 'pending'
+        );
+        CREATE INDEX IF NOT EXISTS idx_pending_duels_challenged ON pending_duels(challenged_id);
+        CREATE TABLE IF NOT EXISTS user_cooldowns (
+            user_id TEXT PRIMARY KEY,
+            command TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            UNIQUE(user_id, command)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_cooldowns_expires ON user_cooldowns(expires_at);
     `);
 
     // Default Settings
@@ -69,43 +108,80 @@ const init = async () => {
 };
 
 // ── ECONOMY FUNCTIONS ───────────────────────────────────────────────────────
+/**
+ * Gets the balance for a user, creating account with seed amount if not exists
+ * @param {string} userId - Discord user ID
+ * @returns {Promise<number>} User's balance
+ */
 async function getBalance(userId) {
     const { rows } = await pool.query('SELECT balance FROM balances WHERE user_id = $1', [userId]);
     if (rows.length) return rows[0].balance;
     const seed = 10000;
     await pool.query('INSERT INTO balances (user_id, balance) VALUES ($1, $2)', [userId, seed]);
+    logger.debug('New user balance created', { userId, seed });
     return seed;
 }
 
+/**
+ * Updates a user's balance
+ * @param {string} userId - Discord user ID
+ * @param {number} newBalance - New balance amount
+ */
 async function updateBalance(userId, newBalance) {
     await pool.query(`
         INSERT INTO balances (user_id, balance) VALUES ($1, $2)
         ON CONFLICT (user_id) DO UPDATE SET balance = EXCLUDED.balance
     `, [userId, newBalance]);
+    logger.debug('Balance updated', { userId, newBalance });
 }
 
+/**
+ * Gets top N users by balance
+ * @param {number} limit - Number of top users to retrieve (default: 10)
+ * @returns {Promise<Array>} Array of {user_id, balance} objects
+ */
 async function getTopBalances(limit = 10) {
     const { rows } = await pool.query('SELECT user_id, balance FROM balances ORDER BY balance DESC LIMIT $1', [limit]);
     return rows;
 }
 
 // ── SETTINGS & BLACKLIST ────────────────────────────────────────────────────
+/**
+ * Gets a setting state by key
+ * @param {string} key - Setting key name
+ * @returns {Promise<boolean|null>} Setting state or null if not found
+ */
 async function getSettingState(key) {
     const { rows } = await pool.query('SELECT state FROM settings WHERE setting = $1', [key]);
     return rows.length > 0 ? rows[0].state : null;
 }
 
+/**
+ * Checks if a user is blacklisted from using speak command
+ * @param {string} userId - Discord user ID
+ * @returns {Promise<boolean>} True if blacklisted
+ */
 async function isUserBlacklisted(userId) {
     const { rows } = await pool.query('SELECT 1 FROM speak_blacklist WHERE user_id = $1', [userId]);
     return rows.length > 0;
 }
 
+/**
+ * Adds a user to the speak command blacklist
+ * @param {string} userId - Discord user ID
+ */
 async function addUserToBlacklist(userId) {
     await pool.query('INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [userId]);
+    logger.info('User added to blacklist', { userId });
 }
 
+/**
+ * Removes a user from the speak command blacklist
+ * @param {string} userId - Discord user ID
+ */
 async function removeUserFromBlacklist(userId) {
     await pool.query('DELETE FROM speak_blacklist WHERE user_id = $1', [userId]);
+    logger.info('User removed from blacklist', { userId });
 }
 
 // ── MEDIA ANALYSIS (LLAMA VISION) ───────────────────────────────────────────
@@ -425,13 +501,156 @@ async function getMediaAnalysisProvider() {
     return 'unknown';
 }
 
+// ── DUEL STATE PERSISTENCE ──────────────────────────────────────────────────────
+/**
+ * Creates a pending duel between two users
+ * @param {string} challengerId - Discord ID of duel initiator
+ * @param {string} challengedId - Discord ID of challenged user
+ * @param {number} amount - Wagered amount
+ * @param {number} expiryMs - Milliseconds until duel expires (default: 30s)
+ * @returns {Promise<number>} Duel ID
+ */
+async function createPendingDuel(challengerId, challengedId, amount, expiryMs = 30000) {
+    const expiresAt = new Date(Date.now() + expiryMs);
+    const { rows } = await pool.query(
+        `INSERT INTO pending_duels (challenger_id, challenged_id, amount, expires_at)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [challengerId, challengedId, amount, expiresAt]
+    );
+    logger.info('Duel created', { duelId: rows[0].id, challengerId, challengedId, amount });
+    return rows[0].id;
+}
+
+/**
+ * Retrieves pending duels for a user
+ * @param {string} userId - Discord user ID to check
+ * @returns {Promise<Array>} Array of pending duel objects
+ */
+async function getPendingDuelsFor(userId) {
+    const { rows } = await pool.query(
+        `SELECT * FROM pending_duels WHERE challenged_id = $1 AND status = 'pending' AND expires_at > NOW()`,
+        [userId]
+    );
+    return rows;
+}
+
+/**
+ * Updates duel status
+ * @param {number} duelId - Duel ID
+ * @param {string} status - New status (pending, accepted, completed, expired)
+ */
+async function updateDuelStatus(duelId, status) {
+    await pool.query(
+        `UPDATE pending_duels SET status = $1 WHERE id = $2`,
+        [status, duelId]
+    );
+    logger.debug('Duel status updated', { duelId, status });
+}
+
+/**
+ * Deletes a duel
+ * @param {number} duelId - Duel ID to delete
+ */
+async function deleteDuel(duelId) {
+    await pool.query(`DELETE FROM pending_duels WHERE id = $1`, [duelId]);
+    logger.debug('Duel deleted', { duelId });
+}
+
+// ── COOLDOWN MANAGEMENT ─────────────────────────────────────────────────────────
+/**
+ * Sets a cooldown for a user on a specific command
+ * @param {string} userId - Discord user ID
+ * @param {string} command - Command name (e.g., 'gacha', 'duel')
+ * @param {number} durationMs - Cooldown duration in milliseconds
+ */
+async function setUserCooldown(userId, command, durationMs) {
+    const expiresAt = new Date(Date.now() + durationMs);
+    await pool.query(
+        `INSERT INTO user_cooldowns (user_id, command, expires_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, command) DO UPDATE SET expires_at = $3`,
+        [userId, command, expiresAt]
+    );
+    logger.debug('Cooldown set', { userId, command, durationMs });
+}
+
+/**
+ * Gets remaining cooldown time for a user on a command
+ * @param {string} userId - Discord user ID
+ * @param {string} command - Command name
+ * @returns {Promise<number>} Milliseconds remaining (0 if expired)
+ */
+async function getUserCooldownRemaining(userId, command) {
+    const { rows } = await pool.query(
+        `SELECT expires_at FROM user_cooldowns WHERE user_id = $1 AND command = $2`,
+        [userId, command]
+    );
+    
+    if (rows.length === 0) return 0;
+    
+    const remaining = new Date(rows[0].expires_at).getTime() - Date.now();
+    return Math.max(0, remaining);
+}
+
+/**
+ * Checks if a user is on cooldown for a command
+ * @param {string} userId - Discord user ID
+ * @param {string} command - Command name
+ * @returns {Promise<boolean>} True if on cooldown
+ */
+async function isUserOnCooldown(userId, command) {
+    const remaining = await getUserCooldownRemaining(userId, command);
+    return remaining > 0;
+}
+
+/**
+ * Clears expired cooldowns (maintenance task)
+ */
+async function clearExpiredCooldowns() {
+    const result = await pool.query(
+        `DELETE FROM user_cooldowns WHERE expires_at <= NOW()`
+    );
+    logger.debug('Expired cooldowns cleared', { rowsDeleted: result.rowCount });
+}
+
+// ── MEDIA CACHE CLEANUP ──────────────────────────────────────────────────────
+/**
+ * Cleans up old media cache entries (deterministic, not probabilistic)
+ * Runs automatically if table has >1000 rows
+ */
+async function cleanupMediaCache(maxRows = 1000) {
+    try {
+        // Check cache size
+        const { rows: size } = await pool.query('SELECT COUNT(*) as count FROM media_cache');
+        const count = parseInt(size[0].count, 10);
+        
+        if (count > maxRows) {
+            logger.info('Media cache cleanup triggered', { currentSize: count, maxRows });
+            
+            // Delete oldest cache entries, keeping newest maxRows
+            const result = await pool.query(
+                `DELETE FROM media_cache WHERE media_id NOT IN (
+                    SELECT media_id FROM media_cache ORDER BY last_accessed DESC LIMIT $1
+                )`,
+                [maxRows]
+            );
+            
+            logger.info('Media cache cleanup completed', { rowsDeleted: result.rowCount });
+        }
+    } catch (error) {
+        logger.error('Media cache cleanup failed', { error: error.message });
+    }
+}
+
 // ── EXPORTS ─────────────────────────────────────────────────────────────────
 module.exports = {
     pool,
     init,
+    // Economy
     getBalance,
     updateBalance,
     getTopBalances,
+    // User Management
     isUserBlacklisted,
     addUserToBlacklist,
     removeUserFromBlacklist,
@@ -439,8 +658,21 @@ module.exports = {
     getUserContext,
     updateUserPreferences,
     updateUserAttitudeWithAI,
+    // Media & Cache
+    processMediaInMessage,
+    getMediaAnalysisProvider,
+    cleanupMediaCache,
+    // Memory & Sentiment
     storeConversationMemory,
     getRecentMemories,
-    processMediaInMessage,
-    getMediaAnalysisProvider
+    // Duels (Persistent State)
+    createPendingDuel,
+    getPendingDuelsFor,
+    updateDuelStatus,
+    deleteDuel,
+    // Cooldowns (Persistent State)
+    setUserCooldown,
+    getUserCooldownRemaining,
+    isUserOnCooldown,
+    clearExpiredCooldowns,
 };

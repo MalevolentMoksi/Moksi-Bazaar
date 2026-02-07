@@ -1,9 +1,17 @@
-// src/commands/tools/gacha.js
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+/**
+ * Gacha/Loot Box Command
+ * Open randomized loot boxes with tier-based cooldowns (persistent)
+ */
 
-// In-memory cooldown map: userId → { last: timestamp, cooldown: ms }
-const cooldowns = new Map();
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const {
+  getBalance,
+  updateBalance,
+  getUserCooldownRemaining,
+  setUserCooldown,
+} = require('../../utils/db');
+const logger = require('../../utils/logger');
+const config = require('../../config');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -12,28 +20,19 @@ module.exports = {
 
   async execute(interaction) {
     const userId = interaction.user.id;
-    const now = Date.now();
 
-    // Get last pull and cooldown for this user
-    const { last = 0, cooldown = 0 } = cooldowns.get(userId) || {};
-
-    if (now - last < cooldown) {
-      const remaining = cooldown - (now - last);
+    // Check if user is on cooldown (from database)
+    const remaining = await getUserCooldownRemaining(userId, 'gacha');
+    if (remaining > 0) {
       const mins = Math.floor(remaining / 1000 / 60);
       const secs = Math.floor((remaining / 1000) % 60);
       return interaction.reply({
-        content: `⏳ Please wait **${mins}m ${secs}s** before opening another loot box.`
+        content: `⏳ Please wait **${mins}m ${secs}s** before opening another loot box.`,
       });
     }
 
-    // Define rarities with weights, embed colors, reward ranges, etc.
-    const tiers = [
-      { name: 'Common',    weight: 40, color: 0x95a5a6, range: [1000,  3000] },
-      { name: 'Uncommon',  weight: 30, color: 0x2ecc71, range: [5000, 20000] },
-      { name: 'Rare',      weight: 15, color: 0x3498db, range: [25000,45000] },
-      { name: 'Epic',      weight: 10, color: 0x9b59b6, range: [50000,90000] },
-      { name: 'Legendary', weight: 5,  color: 0xf1c40f, range: [100000,200000] }
-    ];
+    // Define rarities with weights, embed colors, reward ranges
+    const tiers = config.GAMES.GACHA.TIERS;
 
     // Weighted random selection of tier
     const totalWeight = tiers.reduce((sum, t) => sum + t.weight, 0);
@@ -54,28 +53,35 @@ module.exports = {
     await updateBalance(userId, updated);
 
     // ────────────────────────────────────────────────
-    // Tier-based cooldown logic starts here
+    // Tier-based cooldown logic (now persistent in DB)
     // ────────────────────────────────────────────────
 
-    // Base cooldown in minutes for each tier
+    // Base cooldown in minutes for each tier  
     const baseCooldownMinutes = {
-      Common:    2,
-      Uncommon:  5,
-      Rare:      8,
-      Epic:     12,
-      Legendary: 15
+      Common: 1,
+      Rare: 3,
+      Epic: 10,
+      Legendary: 24 * 60,
+      Mythic: 24 * 60,
     };
 
     const baseMin = baseCooldownMinutes[chosen.name] ?? 5;
-    const randomSeconds = Math.floor(Math.random() * 60); // 0–59s jitter
-    const cooldownMs = (baseMin * 60 + randomSeconds) * 1000;
+    const randomMs = Math.floor(Math.random() * config.GAMES.GACHA.JITTER_MAX);
+    const cooldownMs = baseMin * 60 * 1000 + randomMs;
 
-    // Save new cooldown
-    cooldowns.set(userId, { last: now, cooldown: cooldownMs });
+    // Save cooldown to database (persistent across bot restarts)
+    await setUserCooldown(userId, 'gacha', cooldownMs);
 
-    // Compute next availability for embed
     const nextMins = Math.floor(cooldownMs / 1000 / 60);
     const nextSecs = Math.floor((cooldownMs / 1000) % 60);
+
+    logger.info('Gacha loot box opened', {
+      userId,
+      tier: chosen.name,
+      reward,
+      newBalance: updated,
+      cooldownMs,
+    });
 
     // ────────────────────────────────────────────────
     // Build and send embed
@@ -83,10 +89,10 @@ module.exports = {
 
     const emojis = {
       Common:    '📦',
-      Uncommon:  '🛍️',
       Rare:      '💰',
       Epic:      '💎',
-      Legendary: '🐉'
+      Legendary: '🐉',
+      Mythic:    '👑'
     };
     const emoji = emojis[chosen.name] || '🎁';
 
