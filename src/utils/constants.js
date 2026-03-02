@@ -56,35 +56,35 @@ const GAME_CONFIG = {
                 name: 'Common',
                 weight: 50,
                 color: '#808080',
-                rewards: { min: 10, max: 50 },
+                rewards: { min: 10, max: 75 },
                 cooldown: 60000 // 1 minute
             },
             {
                 name: 'Rare',
                 weight: 30,
                 color: '#4169e1',
-                rewards: { min: 50, max: 150 },
+                rewards: { min: 100, max: 300 },
                 cooldown: 180000 // 3 minutes
             },
             {
                 name: 'Epic',
                 weight: 15,
                 color: '#9932cc',
-                rewards: { min: 150, max: 500 },
+                rewards: { min: 400, max: 1000 },
                 cooldown: 600000 // 10 minutes
             },
             {
                 name: 'Legendary',
                 weight: 4,
                 color: '#ffd700',
-                rewards: { min: 500, max: 2000 },
+                rewards: { min: 1500, max: 5000 },
                 cooldown: 3600000 // 1 hour
             },
             {
                 name: 'Mythic',
                 weight: 1,
                 color: '#ff00ff',
-                rewards: { min: 2000, max: 5000 },
+                rewards: { min: 5000, max: 15000 },
                 cooldown: 86400000 // 24 hours
             }
         ]
