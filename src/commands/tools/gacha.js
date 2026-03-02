@@ -13,6 +13,18 @@ const {
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
 
+function getTierRewardBounds(tier) {
+  if (Array.isArray(tier?.range) && tier.range.length >= 2) {
+    return [tier.range[0], tier.range[1]];
+  }
+
+  if (tier?.rewards && Number.isFinite(tier.rewards.min) && Number.isFinite(tier.rewards.max)) {
+    return [tier.rewards.min, tier.rewards.max];
+  }
+
+  return null;
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('gacha')
@@ -43,8 +55,23 @@ module.exports = {
       return false;
     });
 
-    // Pick a random reward within the chosen tier’s range
-    const [min, max] = chosen.range;
+    if (!chosen) {
+      logger.error('Gacha tier selection failed', { userId, totalWeight, tiersCount: tiers.length });
+      return interaction.reply({
+        content: 'Loot box generation failed. Please try again in a moment.',
+      });
+    }
+
+    // Pick a random reward within the chosen tier’s reward range
+    const bounds = getTierRewardBounds(chosen);
+    if (!bounds) {
+      logger.error('Invalid gacha tier reward configuration', { userId, tier: chosen.name, chosen });
+      return interaction.reply({
+        content: 'Loot table is misconfigured. Please contact an admin.',
+      });
+    }
+
+    const [min, max] = bounds;
     const reward = Math.floor(Math.random() * (max - min + 1)) + min;
 
     // Update the user’s balance
