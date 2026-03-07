@@ -54,38 +54,38 @@ const GAME_CONFIG = {
         TIERS: [
             {
                 name: 'Common',
-                weight: 50,
+                weight: 45,
                 color: '#808080',
-                rewards: { min: 10, max: 75 },
-                cooldown: 60000 // 1 minute
+                rewards: { min: 150, max: 600 },
+                cooldown: 120000 // 2 minutes
             },
             {
                 name: 'Rare',
-                weight: 30,
+                weight: 28,
                 color: '#4169e1',
-                rewards: { min: 100, max: 300 },
-                cooldown: 180000 // 3 minutes
+                rewards: { min: 700, max: 2000 },
+                cooldown: 480000 // 8 minutes
             },
             {
                 name: 'Epic',
-                weight: 15,
+                weight: 17,
                 color: '#9932cc',
-                rewards: { min: 400, max: 1000 },
-                cooldown: 600000 // 10 minutes
+                rewards: { min: 2500, max: 7500 },
+                cooldown: 1800000 // 30 minutes
             },
             {
                 name: 'Legendary',
-                weight: 4,
+                weight: 8,
                 color: '#ffd700',
-                rewards: { min: 1500, max: 5000 },
-                cooldown: 3600000 // 1 hour
+                rewards: { min: 8000, max: 25000 },
+                cooldown: 7200000 // 2 hours
             },
             {
                 name: 'Mythic',
-                weight: 1,
+                weight: 2,
                 color: '#ff00ff',
-                rewards: { min: 5000, max: 15000 },
-                cooldown: 86400000 // 24 hours
+                rewards: { min: 25000, max: 100000 },
+                cooldown: 28800000 // 8 hours
             }
         ]
     },

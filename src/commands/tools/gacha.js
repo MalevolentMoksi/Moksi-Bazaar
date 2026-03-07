@@ -83,18 +83,8 @@ module.exports = {
     // Tier-based cooldown logic (now persistent in DB)
     // ────────────────────────────────────────────────
 
-    // Base cooldown in minutes for each tier  
-    const baseCooldownMinutes = {
-      Common: 1,
-      Rare: 3,
-      Epic: 10,
-      Legendary: 24 * 60,
-      Mythic: 24 * 60,
-    };
-
-    const baseMin = baseCooldownMinutes[chosen.name] ?? 5;
     const randomMs = Math.floor(Math.random() * GAME_CONFIG.GACHA.JITTER_MAX);
-    const cooldownMs = baseMin * 60 * 1000 + randomMs;
+    const cooldownMs = chosen.cooldown + randomMs;
 
     // Save cooldown to database (persistent across bot restarts)
     await setUserCooldown(userId, 'gacha', cooldownMs);
