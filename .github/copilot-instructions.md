@@ -17,7 +17,7 @@ module.exports = {
 };
 ```
 - Commands auto-register **per guild** (not global) on `clientReady` event
-- See [handleCommands.js](../src/functions/handlers/handleCommands.js#L31-L54) - deletes global commands, registers per guild for instant updates
+- See [handleCommands.js](../src/functions/handlers/handleCommands.js#L33-L72) - deletes global commands, registers per guild in parallel for instant updates
 - Use `interaction.deferReply()` for operations >3s to avoid timeout
 
 ### Event Pattern
@@ -40,8 +40,11 @@ Key functions:
 - `getUserContext(userId)` - fetch user preferences, sentiment, interaction count, display name, last seen
 - `processMediaInMessage(message, analyzeNew)` - cached image analysis via OpenRouter
 - `isUserBlacklisted(userId)` - check speak command blacklist
+- `createPendingDuel()` / `getPendingDuelsFor()` / `updateDuelStatus()` / `deleteDuel()` - DB-backed duel state
+- `setUserCooldown()` / `getUserCooldownRemaining()` / `isUserOnCooldown()` - persistent cooldowns
 
 Pattern: Database uses BigInt for balances, parsed as `parseInt()`.
+Pattern: Uses Node 22 native `fetch` (no `node-fetch` dependency).
 
 **Important**: `getUserContext()` now returns `interactionCount` and `lastSeen` fields (bug fixed in redesign).
 
@@ -103,7 +106,7 @@ sentiment_score  NUMERIC(4,2)
 ```
 Indexes: `user_id`, `timestamp DESC`
 
-**Cleanup**: Deterministic cleanup triggers when table exceeds 1000 rows, deletes oldest 200 entries.
+**Cleanup**: Deterministic cleanup triggers when estimated row count exceeds 1000 (uses `pg_class.reltuples` for fast approximation), deletes oldest 200 entries.
 
 #### media_cache
 Caches media descriptions from AI analysis to reduce API costs.
@@ -154,6 +157,15 @@ Users banned from using the `/speak` command.
 user_id  TEXT PRIMARY KEY
 ```
 
+#### user_cooldowns
+Persistent command cooldowns per user per command.
+```sql
+user_id   TEXT NOT NULL
+command   TEXT NOT NULL
+expires_at TIMESTAMP NOT NULL
+PRIMARY KEY (user_id, command)
+```
+
 #### user_preferences
 Stores user context for AI personality adaptation.
 ```sql
@@ -198,11 +210,14 @@ npm test               # Jest + ESLint
 ```
 
 ### Environment Variables
-Required in `.env`:
+Required in `.env` (see `.env.example`):
 - `TOKEN` or `DISCORD_TOKEN` - Discord bot token
-- `CLIENT_ID` - Application ID (auto-fetched from `client.user.id` if missing)
 - `DATABASE_URL` - PostgreSQL connection string
+
+Optional:
+- `CLIENT_ID` - Application ID (auto-fetched from `client.user.id` if missing)
 - `OPENROUTER_API_KEY` - For AI features (speak, media analysis)
+- `LANGUAGE_API_KEY` - For Groq-powered features (shh command)
 
 ### Deployment
 - **Docker**: Uses Node 22-slim, runs `node src/bot.js` - see [Dockerfile](../Dockerfile)
@@ -233,11 +248,12 @@ Required in `.env`:
 - Embed colors: Purple for blackjack (#800080), Green for wins, Red for losses
 - Uses `formatCards()` helper to display `rank+suit` format (e.g., `A♠ K♥`)
 
-### Command Registration Quirk
+### Command Registration
 On `clientReady`, the bot:
 1. Fetches and deletes all **global** commands
-2. Re-registers all commands **per guild** for instant availability
+2. Re-registers all commands **per guild** in parallel (`Promise.allSettled`) for instant availability
 3. This avoids 1-hour cache delay of global commands during development
+4. On `guildCreate`, commands are registered immediately for new guilds (with guard for empty commandArray)
 
 ## Common Patterns
 

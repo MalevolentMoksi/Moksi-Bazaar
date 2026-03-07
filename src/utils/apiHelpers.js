@@ -1,5 +1,4 @@
 // src/utils/apiHelpers.js - Shared API Call Utilities
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const logger = require('./logger');
 const { TIMEOUTS } = require('./constants');
 

@@ -1,6 +1,6 @@
 /**
  * Duel Command
- * Challenge other users to wagered duels with persistent state
+ * Challenge other users to wagered duels with persistent DB-backed state
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -10,8 +10,10 @@ const {
   createPendingDuel,
   getPendingDuelsFor,
   updateDuelStatus,
+  deleteDuel,
 } = require('../../utils/db');
 const logger = require('../../utils/logger');
+const { GAME_CONFIG } = require('../../utils/constants');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -22,7 +24,7 @@ module.exports = {
         .setName('challenge')
         .setDescription('Invite someone to duel for currency')
         .addUserOption(o => o.setName('user').setDescription('Who to challenge').setRequired(true))
-        .addIntegerOption(o => o.setName('amount').setDescription('Amount to wager').setRequired(true))
+        .addIntegerOption(o => o.setName('amount').setDescription('Amount to wager').setRequired(true).setMinValue(1))
     )
     .addSubcommand(sub =>
       sub.setName('accept').setDescription('Accept a pending duel'))
@@ -40,40 +42,30 @@ module.exports = {
       const amount = interaction.options.getInteger('amount');
 
       if (target.id === me.id) {
-        return interaction.reply({ content: '❌ You can’t duel yourself!', flags: MessageFlags.Ephemeral});
+        return interaction.reply({ content: '❌ You can\'t duel yourself!', flags: MessageFlags.Ephemeral });
       }
-      if (pendingDuels.has(target.id)) {
-        return interaction.reply({ content: '❌ That user already has a pending duel.', flags: MessageFlags.Ephemeral});
+
+      // Check for existing pending duels in DB
+      const existingDuels = await getPendingDuelsFor(target.id);
+      if (existingDuels.length > 0) {
+        return interaction.reply({ content: '❌ That user already has a pending duel.', flags: MessageFlags.Ephemeral });
       }
 
       const myBal = await getBalance(me.id);
       if (myBal < amount) {
-        return interaction.reply({ content: `❌ You only have $${myBal}, cannot wager $${amount}.`, flags: MessageFlags.Ephemeral});
+        return interaction.reply({ content: `❌ You only have $${myBal}, cannot wager $${amount}.`, flags: MessageFlags.Ephemeral });
       }
 
-      // record the pending duel
-      const timeout = setTimeout(() => {
-        if (pendingDuels.has(target.id)) {
-          pendingDuels.delete(target.id);
-          guild.channels.cache
-            .get(interaction.channelId)
-            ?.send({ embeds: [
-              new EmbedBuilder()
-                .setTitle('⌛ Duel Expired')
-                .setDescription(`${me}’s duel request to ${target} for $${amount.toLocaleString()} expired.`)
-                .setColor('DarkRed')
-            ]});
-        }
-      }, 60_000);
-
-      pendingDuels.set(target.id, { challengerId: me.id, amount, timeout });
+      // Record the pending duel in DB (auto-expires via expires_at column)
+      const duelTimeout = GAME_CONFIG.DUELS.DUEL_TIMEOUT;
+      await createPendingDuel(me.id, target.id, amount, duelTimeout);
 
       return interaction.reply({
         embeds: [
           new EmbedBuilder()
             .setTitle('⚔️ Duel Challenge!')
             .setDescription(`${me} has challenged ${target} to a duel for **$${amount.toLocaleString()}**!\n\n` +
-                            `Type \`/duel accept\` or \`/duel decline\` within 60 seconds.`)
+                            `Type \`/duel accept\` or \`/duel decline\` within ${duelTimeout / 1000} seconds.`)
             .setColor('Blue')
         ]
       });
@@ -81,28 +73,41 @@ module.exports = {
 
     // ─── ACCEPT ────────────────────────────────────────────────────────────
     if (sub === 'accept') {
-      const duel = pendingDuels.get(me.id);
-      if (!duel) {
-        return interaction.reply({ content: '❌ You have no pending duel to accept.', flags: MessageFlags.Ephemeral});
+      const duels = await getPendingDuelsFor(me.id);
+      if (duels.length === 0) {
+        return interaction.reply({ content: '❌ You have no pending duel to accept.', flags: MessageFlags.Ephemeral });
       }
-      clearTimeout(duel.timeout);
-      pendingDuels.delete(me.id);
+      const duel = duels[0];
+      await updateDuelStatus(duel.id, 'accepted');
 
-      const challenger = await guild.members.fetch(duel.challengerId);
-      const amount = duel.amount;
-      const balA = await getBalance(challenger.id);
+      const challenger = await guild.members.fetch(duel.challenger_id);
+      const amount = parseInt(duel.amount, 10);
+      const balA = await getBalance(duel.challenger_id);
       const balB = await getBalance(me.id);
 
-      // determine winner
-      const challengerWins = Math.random() < 0.5;
-      const winner   = challengerWins ? challenger : interaction.member;
-      const loser    = challengerWins ? interaction.member : challenger;
-      const winBal   = challengerWins ? balA + amount : balB + amount;
-      const loseBal  = challengerWins ? balB - amount : balA - amount;
+      // Check both players still have funds
+      if (balA < amount) {
+        await deleteDuel(duel.id);
+        return interaction.reply({ content: `❌ ${challenger} no longer has enough funds.`, flags: MessageFlags.Ephemeral });
+      }
+      if (balB < amount) {
+        await deleteDuel(duel.id);
+        return interaction.reply({ content: '❌ You no longer have enough funds.', flags: MessageFlags.Ephemeral });
+      }
 
-      // update balances
-      await updateBalance(winner.id, winBal);
-      await updateBalance(loser.id, loseBal);
+      // Determine winner
+      const challengerWins = Math.random() < 0.5;
+      const winner = challengerWins ? challenger : interaction.member;
+      const loser = challengerWins ? interaction.member : challenger;
+      const winBal = challengerWins ? balA + amount : balB + amount;
+      const loseBal = challengerWins ? balB - amount : balA - amount;
+
+      // Update balances and mark duel completed
+      await Promise.all([
+        updateBalance(winner.id, winBal),
+        updateBalance(loser.id, loseBal),
+        updateDuelStatus(duel.id, 'completed'),
+      ]);
 
       return interaction.reply({
         embeds: [
@@ -110,8 +115,8 @@ module.exports = {
             .setTitle('🏆 Duel Result')
             .setDescription(
               `${winner} won **$${amount.toLocaleString()}** from ${loser}!\n\n` +
-              `• ${winner.user.tag}: $${winBal.toLocaleString()}\n` +
-              `• ${loser.user.tag}: $${loseBal.toLocaleString()}`
+              `• ${winner.user.username}: $${winBal.toLocaleString()}\n` +
+              `• ${loser.user.username}: $${loseBal.toLocaleString()}`
             )
             .setColor('Green')
         ]
@@ -120,14 +125,14 @@ module.exports = {
 
     // ─── DECLINE ───────────────────────────────────────────────────────────
     if (sub === 'decline') {
-      const duel = pendingDuels.get(me.id);
-      if (!duel) {
-        return interaction.reply({ content: '❌ No duel to decline.', flags: MessageFlags.Ephemeral});
+      const duels = await getPendingDuelsFor(me.id);
+      if (duels.length === 0) {
+        return interaction.reply({ content: '❌ No duel to decline.', flags: MessageFlags.Ephemeral });
       }
-      clearTimeout(duel.timeout);
-      pendingDuels.delete(me.id);
+      const duel = duels[0];
+      await deleteDuel(duel.id);
 
-      const challenger = await guild.members.fetch(duel.challengerId);
+      const challenger = await guild.members.fetch(duel.challenger_id);
       return interaction.reply({
         embeds: [
           new EmbedBuilder()

@@ -1,3 +1,4 @@
 .env
-SecretBotStuff/token.txt
-node_modules
+SecretBotStuff/
+node_modules/
+logs/

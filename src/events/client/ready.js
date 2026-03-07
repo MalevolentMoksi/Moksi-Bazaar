@@ -8,10 +8,21 @@ module.exports = {
   name: 'clientReady',
   once: true, // This event should only fire once
   async execute(client) {
-    await init();
+    try {
+      await init();
+      console.log('✅ Database initialized, balances table is ready.');
+    } catch (error) {
+      console.error('❌ Database initialization failed:', error.message);
+      process.exit(1);
+    }
+
     console.log(`Logged in as ${client.user.tag}`);
-    initUptimePresence(client);
-    console.log('✅ Database initialized, balances table is ready.');
+
+    try {
+      initUptimePresence(client);
+    } catch (error) {
+      console.error('❌ Presence initialization failed:', error.message);
+    }
     
     // Start reminder scheduler
     try {

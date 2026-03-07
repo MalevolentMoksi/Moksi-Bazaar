@@ -15,8 +15,5 @@ RUN npm ci --omit=dev --no-audit --no-fund
 # Copy source code
 COPY . .
 
-# Expose port (if your bot uses HTTP)
-EXPOSE 3000
-
 # Start the bot
 CMD ["node", "src/bot.js"]

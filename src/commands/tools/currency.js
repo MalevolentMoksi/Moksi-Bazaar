@@ -38,28 +38,33 @@ module.exports = {
     }
 
     if (sub === 'leaderboard') {
+      await interaction.deferReply();
+
       const DISPLAY_LIMIT = 10;
       const rankEmojis = ['👑', '🥈', '🥉'];
       const rows = await getTopBalances(DISPLAY_LIMIT * 2);
-      console.log('DB rows for leaderboard:', rows);
 
+      // Bulk-fetch guild members instead of individual fetches
+      const userIds = rows.map(r => r.user_id);
+      let guildMembers;
+      try {
+        guildMembers = await interaction.guild.members.fetch({ user: userIds });
+      } catch {
+        guildMembers = interaction.guild.members.cache;
+      }
 
       const board = [];
       for (const { user_id, balance } of rows) {
-        try {
-          const member = await interaction.guild.members.fetch(user_id);
-          if (member) {
-            board.push({ id: user_id, tag: member.user.tag, balance });
-          }
-        } catch {
-          // not in guild or invalid ID, skip
+        const member = guildMembers.get(user_id);
+        if (member) {
+          board.push({ id: user_id, balance });
         }
         if (board.length >= DISPLAY_LIMIT) break;
       }
 
       if (!board.length) {
-        return interaction.reply({
-          content: 'No balances found for members of this server yet.', flags: MessageFlags.Ephemeral
+        return interaction.editReply({
+          content: 'No balances found for members of this server yet.'
         });
       }
 
@@ -75,7 +80,7 @@ module.exports = {
         )
         .setColor('Gold');
 
-      return interaction.reply({ embeds: [embed] });
+      return interaction.editReply({ embeds: [embed] });
     }
   }
 };

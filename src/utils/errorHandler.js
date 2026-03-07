@@ -46,9 +46,9 @@ async function handleCommandError(interaction, error, context = {}, errorType = 
     // Send response (try both methods in case reply was already sent)
     try {
         if (interaction.replied || interaction.deferred) {
+            // Cannot add ephemeral flag to editReply if original wasn't ephemeral
             await interaction.editReply({
-                content: userMessage,
-                flags: MessageFlags.Ephemeral
+                content: userMessage
             });
         } else {
             await interaction.reply({

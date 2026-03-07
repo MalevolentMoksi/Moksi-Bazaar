@@ -4,7 +4,6 @@
  */
 
 const { Pool, types } = require('pg');
-const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const crypto = require('crypto');
 const logger = require('./logger');
 
@@ -95,10 +94,10 @@ const init = async () => {
         CREATE INDEX IF NOT EXISTS idx_pending_duels_challenged ON pending_duels(challenged_id);
         CREATE INDEX IF NOT EXISTS idx_pending_duels_status ON pending_duels(status, expires_at);
         CREATE TABLE IF NOT EXISTS user_cooldowns (
-            user_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
             command TEXT NOT NULL,
             expires_at TIMESTAMP NOT NULL,
-            UNIQUE(user_id, command)
+            PRIMARY KEY (user_id, command)
         );
         CREATE INDEX IF NOT EXISTS idx_user_cooldowns_expires ON user_cooldowns(expires_at);
         CREATE TABLE IF NOT EXISTS reminders (
@@ -224,7 +223,7 @@ async function getCachedMediaDescription(mediaId) {
 }
 
 // PRIMARY: Gemini 2.0 Flash (Fast, Smart, ~$0.10/1M tokens)
-async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image in a consise way, focusing on the main subject.") {
+async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image in a concise way, focusing on the main subject.") {
     if (!OPENROUTER_API_KEY) return null;
 
     const controller = new AbortController();
@@ -491,9 +490,12 @@ async function storeConversationMemory(userId, channelId, userMessage, botRespon
         VALUES ($1, $2, $3, $4, $5, $6)
     `, [userId, channelId, userMessage, botResponse, sentimentScore, Date.now()]);
 
-    // Deterministic cleanup: trigger when table exceeds 1000 rows
-    const { rows } = await pool.query('SELECT COUNT(*) as count FROM conversation_memories');
-    if (rows[0].count > 1000) {
+    // Deterministic cleanup: trigger when estimated row count is high
+    // Uses pg_class reltuples for fast approximate count instead of COUNT(*)
+    const { rows } = await pool.query(
+        `SELECT reltuples::bigint AS count FROM pg_class WHERE relname = 'conversation_memories'`
+    );
+    if (rows[0]?.count > 1000) {
         await pool.query(`
             DELETE FROM conversation_memories WHERE id IN (
                 SELECT id FROM conversation_memories ORDER BY timestamp ASC LIMIT 200

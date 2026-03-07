@@ -106,8 +106,9 @@ module.exports = {
 
                 else if (i.customId === 'add_bl' || i.customId === 'rem_bl') {
                     const action = i.customId === 'add_bl' ? 'Add' : 'Remove';
+                    const modalId = `modal_${i.customId}_${Date.now()}`;
                     const modal = new ModalBuilder()
-                        .setCustomId(`modal_${i.customId}`)
+                        .setCustomId(modalId)
                         .setTitle(`${action} Blacklist`)
                         .addComponents(new ActionRowBuilder().addComponents(
                             new TextInputBuilder()
@@ -117,40 +118,36 @@ module.exports = {
                                 .setRequired(true)
                         ));
                     await i.showModal(modal);
+
+                    // Await the modal submission directly after showing it
+                    try {
+                        const submitted = await i.awaitModalSubmit({
+                            filter: m => m.customId === modalId,
+                            time: TIMEOUTS.MODAL_SUBMIT
+                        });
+
+                        const uid = submitted.fields.getTextInputValue('uid');
+
+                        if (i.customId === 'add_bl') {
+                            await pool.query('INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [uid]);
+                            logger.info('User added to blacklist', { userId: uid, by: interaction.user.id });
+                            await submitted.reply({ content: `✅ <@${uid}> blocked.`, ephemeral: true });
+                        } else {
+                            await pool.query('DELETE FROM speak_blacklist WHERE user_id = $1', [uid]);
+                            logger.info('User removed from blacklist', { userId: uid, by: interaction.user.id });
+                            await submitted.reply({ content: `✅ <@${uid}> unblocked.`, ephemeral: true });
+                        }
+                    } catch (modalError) {
+                        if (modalError.message?.includes('time')) {
+                            logger.debug('Modal submission timeout');
+                        } else {
+                            logger.error('Modal submission error', { error: modalError.message });
+                        }
+                    }
                 }
             } catch (error) {
                 logger.error('Settings button interaction error', { error: error.message, customId: i.customId });
                 await i.reply({ content: 'An error occurred. Check logs.', ephemeral: true }).catch(() => {});
-            }
-        });
-
-        // Modal Handler (using awaitModalSubmit pattern)
-        collector.on('collect', async i => {
-            if (i.customId === 'add_bl' || i.customId === 'rem_bl') {
-                try {
-                    const submitted = await interaction.awaitModalSubmit({
-                        filter: m => m.user.id === interaction.user.id && m.customId.startsWith('modal_'),
-                        time: TIMEOUTS.MODAL_SUBMIT
-                    });
-
-                    const uid = submitted.fields.getTextInputValue('uid');
-                    
-                    if (submitted.customId === 'modal_add_bl') {
-                        await pool.query('INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [uid]);
-                        logger.info('User added to blacklist', { userId: uid, by: interaction.user.id });
-                        await submitted.reply({ content: `✅ <@${uid}> blocked.`, ephemeral: true });
-                    } else {
-                        await pool.query('DELETE FROM speak_blacklist WHERE user_id = $1', [uid]);
-                        logger.info('User removed from blacklist', { userId: uid, by: interaction.user.id });
-                        await submitted.reply({ content: `✅ <@${uid}> unblocked.`, ephemeral: true });
-                    }
-                } catch (error) {
-                    if (error.message?.includes('time')) {
-                        logger.debug('Modal submission timeout');
-                    } else {
-                        logger.error('Modal submission error', { error: error.message });
-                    }
-                }
             }
         });
 
