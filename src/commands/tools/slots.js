@@ -46,7 +46,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       `${preview[6]} ${preview[7]} ${preview[8]}`;
     spinEmbed.data.fields[2].value = grid;
     spinEmbed.setFooter({ text: `Balance: $${balanceAfterBet}` });
-    await msg.edit({ embeds: [spinEmbed] });
+    await msg.edit({ embeds: [spinEmbed], components: [] });
     await new Promise(r => setTimeout(r, 400));
   }
 
@@ -96,6 +96,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
 
   const payout = Math.round(lineWin + freeWin);
   let collected = false;
+  let spinLock = false;
 
   // — Step 6) Build result embed & buttons —
   const resultEmbed = new EmbedBuilder()
@@ -143,6 +144,8 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     await i.deferUpdate();
 
     if (i.customId === 'play_again') {
+      if (spinLock) return;
+      spinLock = true;
       collector.stop();
       const currentBal = await getBalance(userId);
       if (currentBal < bet) {
@@ -178,8 +181,9 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     await msg.edit({ embeds: [resultEmbed], components: [againRow] });
   });
 
-  collector.on('end', () => {
-    /* nothing extra needed */
+  collector.on('end', async (_, reason) => {
+    if (reason !== 'time') return;
+    try { await msg.edit({ components: [] }); } catch {}
   });
 }
 
