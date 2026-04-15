@@ -22,7 +22,7 @@ const caption = {
         )
         .addStringOption(opt =>
             opt.setName('position')
-                .setDescription('Where to place the caption (default: bottom)')
+                .setDescription('Where to place the caption (default: top)')
                 .addChoices(
                     { name: 'Bottom', value: 'bottom' },
                     { name: 'Top', value: 'top' }
@@ -30,7 +30,7 @@ const caption = {
         ),
     async execute(interaction) {
         const text = interaction.options.getString('text');
-        const position = interaction.options.getString('position') ?? 'bottom';
+        const position = interaction.options.getString('position') ?? 'top';
         await handleMediaCommand(interaction, {
             allowImage: true,
             allowVideo: true,

@@ -192,7 +192,7 @@ async function handleMediaCommand(interaction, {
 
         const replyPayload = { files: [outputPath] };
         if (usedRecentFallback) {
-            replyPayload.content = 'Using the most recent compatible media in this channel.';
+            replyPayload.content = ''; // I don't want it to say anything
         }
         await interaction.editReply(replyPayload);
     } catch (err) {
