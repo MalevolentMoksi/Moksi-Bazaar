@@ -15,7 +15,7 @@ const topng = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: async (inputPath) => toFormat(inputPath, 'png'),
+            processFn: async (inputPath, ext) => toFormat(inputPath, 'png', {}, ext),
         });
     },
 };
@@ -30,7 +30,7 @@ const tojpg = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: async (inputPath) => toFormat(inputPath, 'jpeg', { quality: 90 }),
+            processFn: async (inputPath, ext) => toFormat(inputPath, 'jpeg', { quality: 90 }, ext),
         });
     },
 };
@@ -45,7 +45,7 @@ const towebp = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: async (inputPath) => toFormat(inputPath, 'webp', { quality: 90 }),
+            processFn: async (inputPath, ext) => toFormat(inputPath, 'webp', { quality: 90 }, ext),
         });
     },
 };

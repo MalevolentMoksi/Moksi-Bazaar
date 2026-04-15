@@ -1,17 +1,17 @@
 // src/commands/media/caption.js
 const { SlashCommandBuilder } = require('discord.js');
 const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
-const { renderCaption, renderCaptionVideo, renderMeme } = require('../../utils/media/captionUtils');
+const { renderCaption, renderCaptionVideo, renderCaptionGif, renderMeme, renderMemeGif } = require('../../utils/media/captionUtils');
 
 const caption = {
     data: new SlashCommandBuilder()
         .setName('caption')
-        .setDescription('Add a MediaForge-style caption bar to an image or video')
+        .setDescription('Add a MediaForge-style caption bar to an image, GIF, or video')
         .addStringOption(opt =>
             opt.setName('text').setDescription('Caption text').setRequired(true).setMaxLength(300)
         )
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image or video to caption (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to caption (optional: uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('position')
@@ -31,6 +31,9 @@ const caption = {
                 if (isVideo) {
                     return renderCaptionVideo(inputPath, text, position);
                 }
+                if (ext === 'gif') {
+                    return renderCaptionGif(inputPath, text, position);
+                }
                 return renderCaption(inputPath, text, position);
             },
         });
@@ -40,9 +43,9 @@ const caption = {
 const meme = {
     data: new SlashCommandBuilder()
         .setName('meme')
-        .setDescription('Add classic Impact meme text to an image')
+        .setDescription('Add classic Impact meme text to an image or GIF')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to meme-ify (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image or GIF to meme-ify (optional: uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('top').setDescription('Top text').setMaxLength(200)
@@ -58,7 +61,12 @@ const meme = {
         }
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath) => renderMeme(inputPath, topText, bottomText),
+            processFn: (inputPath, ext) => {
+                if (ext === 'gif') {
+                    return renderMemeGif(inputPath, topText, bottomText);
+                }
+                return renderMeme(inputPath, topText, bottomText);
+            },
         });
     },
 };

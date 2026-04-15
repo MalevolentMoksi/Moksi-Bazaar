@@ -183,6 +183,56 @@ async function renderCaptionVideo(inputPath, text, position = 'bottom') {
     }
 }
 
+// Add a white caption bar above or below an animated GIF, preserving animation.
+async function renderCaptionGif(inputPath, text, position = 'bottom') {
+    const probeData = await probeFile(inputPath);
+    const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
+    if (!videoStream?.width || !videoStream?.height) {
+        throw new Error('Could not determine GIF dimensions.');
+    }
+
+    const width = evenNumber(videoStream.width);
+    const height = evenNumber(videoStream.height);
+    const fontSize = Math.max(18, Math.floor(width * 0.065));
+    const { svg, svgH } = buildCaptionSVG(text, width, fontSize);
+    const captionHeight = svgH % 2 === 0 ? svgH : svgH + 1;
+
+    const captionPath = createTempPath('png');
+    const outputPath = createTempPath('gif');
+
+    try {
+        const captionBuf = await svgToPng(svg);
+        await fs.promises.writeFile(captionPath, captionBuf);
+
+        const padOffsetY = position === 'top' ? captionHeight : 0;
+        const overlayY = position === 'top' ? '0' : 'H-h';
+
+        await runFFmpeg(inputPath, outputPath, cmd => {
+            cmd
+                .input(captionPath)
+                .complexFilter([
+                    `[0:v]scale=${width}:${height}:flags=lanczos[scaled]`,
+                    `[scaled]pad=${width}:${height + captionHeight}:0:${padOffsetY}:color=white[padded]`,
+                    `[1:v]scale=${width}:${captionHeight}:flags=lanczos[caption]`,
+                    `[padded][caption]overlay=0:${overlayY}[v]`,
+                ])
+                .outputOptions([
+                    '-map [v]',
+                    '-an',
+                    '-loop 0',
+                    '-gifflags -offsetting',
+                ]);
+        });
+
+        return outputPath;
+    } catch (err) {
+        await cleanup(outputPath);
+        throw err;
+    } finally {
+        await cleanup(captionPath);
+    }
+}
+
 // Overlay classic Impact meme text (top and/or bottom) onto an image
 async function renderMeme(inputPath, topText, bottomText) {
     const { width, height } = await sharp(inputPath).metadata();
@@ -207,4 +257,69 @@ async function renderMeme(inputPath, topText, bottomText) {
     return outputPath;
 }
 
-module.exports = { renderCaption, renderCaptionVideo, renderMeme };
+// Overlay top/bottom meme text on an animated GIF, preserving animation.
+async function renderMemeGif(inputPath, topText, bottomText) {
+    const probeData = await probeFile(inputPath);
+    const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
+    if (!videoStream?.width || !videoStream?.height) {
+        throw new Error('Could not determine GIF dimensions.');
+    }
+
+    const width = evenNumber(videoStream.width);
+    const height = evenNumber(videoStream.height);
+    const fontSize = Math.max(18, Math.floor(width * 0.07));
+
+    const overlays = [];
+    if (topText) {
+        overlays.push({
+            input: await svgToPng(buildMemeTextSVG(topText, width, height, true, fontSize)),
+            top: 0,
+            left: 0,
+        });
+    }
+    if (bottomText) {
+        overlays.push({
+            input: await svgToPng(buildMemeTextSVG(bottomText, width, height, false, fontSize)),
+            top: 0,
+            left: 0,
+        });
+    }
+
+    const overlayPath = createTempPath('png');
+    const outputPath = createTempPath('gif');
+
+    try {
+        await sharp({
+            create: {
+                width,
+                height,
+                channels: 4,
+                background: { r: 0, g: 0, b: 0, alpha: 0 },
+            },
+        })
+            .composite(overlays)
+            .png()
+            .toFile(overlayPath);
+
+        await runFFmpeg(inputPath, outputPath, cmd => {
+            cmd
+                .input(overlayPath)
+                .complexFilter('[0:v][1:v]overlay=0:0:format=auto[v]')
+                .outputOptions([
+                    '-map [v]',
+                    '-an',
+                    '-loop 0',
+                    '-gifflags -offsetting',
+                ]);
+        });
+
+        return outputPath;
+    } catch (err) {
+        await cleanup(outputPath);
+        throw err;
+    } finally {
+        await cleanup(overlayPath);
+    }
+}
+
+module.exports = { renderCaption, renderCaptionVideo, renderCaptionGif, renderMeme, renderMemeGif };
