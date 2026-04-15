@@ -72,9 +72,17 @@ async function fetchRecentMedia(interaction, {
                 if (allowedByType && allowedByPredicate) return info;
             }
 
-            // Image embeds (e.g. image links Discord auto-previews)
-            if (allowImage) {
-                for (const embed of msg.embeds) {
+            // Embed media (video first, then image previews)
+            for (const embed of msg.embeds) {
+                if (allowVideo) {
+                    const videoSrc = embed.video?.url || embed.video?.proxyURL;
+                    if (videoSrc) {
+                        const info = resolveMedia(videoSrc, null, embed.video?.proxyURL);
+                        if (info?.isVideo && (!mediaPredicate || mediaPredicate(info))) return info;
+                    }
+                }
+
+                if (allowImage) {
                     for (const key of ['image', 'thumbnail']) {
                         const src = embed[key]?.url || embed[key]?.proxyURL;
                         if (!src) continue;

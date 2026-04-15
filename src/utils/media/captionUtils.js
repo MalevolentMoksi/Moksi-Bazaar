@@ -95,6 +95,15 @@ async function svgToPng(svgString) {
     return sharp(Buffer.from(svgString)).png().toBuffer();
 }
 
+async function isAnimatedImage(inputPath) {
+    try {
+        const meta = await sharp(inputPath, { animated: true }).metadata();
+        return (meta.pages || 1) > 1;
+    } catch {
+        return false;
+    }
+}
+
 function evenNumber(n, fallback = 2) {
     const safe = Number.isFinite(n) ? Math.floor(n) : fallback;
     if (safe <= 0) return fallback;
@@ -322,4 +331,4 @@ async function renderMemeGif(inputPath, topText, bottomText) {
     }
 }
 
-module.exports = { renderCaption, renderCaptionVideo, renderCaptionGif, renderMeme, renderMemeGif };
+module.exports = { renderCaption, renderCaptionVideo, renderCaptionGif, renderMeme, renderMemeGif, isAnimatedImage };
