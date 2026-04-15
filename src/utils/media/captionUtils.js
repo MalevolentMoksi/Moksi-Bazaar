@@ -1,127 +1,146 @@
 // src/utils/media/captionUtils.js
-const { createCanvas, loadImage, registerFont } = require('canvas');
-const path = require('path');
-const fs = require('fs');
-const { getMetadata } = require('./imageUtils');
+// Uses pure SVG rendered via sharp/libvips — no native canvas binary required.
+const sharp = require('sharp');
 const { createTempPath } = require('./tempFiles');
 
-const FONTS_DIR = path.join(__dirname, '..', '..', 'assets', 'fonts');
-
-// Register fonts once at load time
-const fontRegistrations = [
-    { file: 'ImpactMix.ttf', family: 'Impact' },
-    { file: 'arial.ttf', family: 'Arial' },
-    { file: 'caption.otf', family: 'Caption' },
-    { file: 'Ubuntu-R.ttf', family: 'Ubuntu' },
-];
-
-for (const { file, family } of fontRegistrations) {
-    try {
-        registerFont(path.join(FONTS_DIR, file), { family });
-    } catch {}
+function escapeXml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
 
-function wrapText(ctx, text, maxWidth) {
+// Rough per-character width estimate for Impact (condensed, roughly 0.55 em wide)
+function estimateWidth(text, fontSize) {
+    return text.length * fontSize * 0.55;
+}
+
+function wrapLines(text, maxWidth, fontSize) {
     const words = text.split(' ');
     const lines = [];
-    let current = '';
+    let line = '';
     for (const word of words) {
-        const test = current ? `${current} ${word}` : word;
-        if (ctx.measureText(test).width > maxWidth && current) {
-            lines.push(current);
-            current = word;
+        const test = line ? `${line} ${word}` : word;
+        if (estimateWidth(test, fontSize) > maxWidth && line) {
+            lines.push(line);
+            line = word;
         } else {
-            current = test;
+            line = test;
         }
     }
-    if (current) lines.push(current);
+    if (line) lines.push(line);
     return lines;
 }
 
-function drawImpactText(ctx, lines, centerX, startY, lineHeight, fontSize) {
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = Math.max(2, fontSize * 0.08);
-    ctx.fillStyle = '#ffffff';
-    for (let i = 0; i < lines.length; i++) {
-        const y = startY + i * lineHeight;
-        ctx.strokeText(lines[i], centerX, y);
-        ctx.fillText(lines[i], centerX, y);
-    }
+// Build <tspan> elements for multi-line SVG text
+function tspans(lines, cx, lineH) {
+    return lines
+        .map((l, i) => `<tspan x="${cx}" dy="${i === 0 ? 0 : lineH}">${escapeXml(l)}</tspan>`)
+        .join('');
 }
 
-// Render a white caption bar with Impact text above or below the image
+// White bar SVG with black Impact text (for /caption command)
+function buildCaptionSVG(text, width, fontSize) {
+    const padding = Math.max(6, Math.floor(fontSize * 0.4));
+    const lineH   = Math.ceil(fontSize * 1.25);
+    const lines   = wrapLines(text.toUpperCase(), width - padding * 2, fontSize);
+    const svgH    = lines.length * lineH + padding * 2;
+    const cx      = width / 2;
+    const baseY   = padding + fontSize; // y = text baseline of first line
+
+    const body = tspans(lines, cx, lineH);
+
+    return {
+        svgH,
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${svgH}">
+  <rect width="${width}" height="${svgH}" fill="white"/>
+  <text x="${cx}" y="${baseY}" text-anchor="middle"
+        font-family="Impact,Arial Black,sans-serif"
+        font-size="${fontSize}" font-weight="bold" fill="black">
+    ${body}
+  </text>
+</svg>`,
+    };
+}
+
+// Impact outline text SVG for meme overlay (white text with black stroke)
+// Double-renders the text: stroke pass first, then fill pass on top.
+function buildMemeTextSVG(text, width, imageHeight, isTop, fontSize) {
+    const padding  = Math.max(6, Math.floor(fontSize * 0.4));
+    const lineH    = Math.ceil(fontSize * 1.25);
+    const strokeW  = Math.max(2, Math.ceil(fontSize * 0.09));
+    const lines    = wrapLines(text.toUpperCase(), width - padding * 2, fontSize);
+    const cx       = width / 2;
+
+    const baseY = isTop
+        ? padding + fontSize
+        : imageHeight - padding - (lines.length - 1) * lineH;
+
+    const body = tspans(lines, cx, lineH);
+    const attrs = `x="${cx}" y="${baseY}" text-anchor="middle"
+        font-family="Impact,Arial Black,sans-serif"
+        font-size="${fontSize}" font-weight="bold"`;
+
+    // Two passes: black stroke outline first, white fill on top
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${imageHeight}">
+  <text ${attrs} stroke="black" stroke-width="${strokeW}" fill="none">${body}</text>
+  <text ${attrs} fill="white" stroke="none">${body}</text>
+</svg>`;
+}
+
+async function svgToPng(svgString) {
+    return sharp(Buffer.from(svgString)).png().toBuffer();
+}
+
+// Add a white Impact-text caption bar above or below an image
 async function renderCaption(inputPath, text, position = 'bottom') {
-    const meta = await getMetadata(inputPath);
-    const { width, height } = meta;
-
+    const { width, height } = await sharp(inputPath).metadata();
     const fontSize = Math.max(18, Math.floor(width * 0.065));
-    const padding = Math.floor(fontSize * 0.5);
-    const lineHeight = fontSize * 1.2;
+    const { svg, svgH } = buildCaptionSVG(text, width, fontSize);
 
-    // Measure wrapped lines using a scratch canvas
-    const scratch = createCanvas(width, 100);
-    const scratchCtx = scratch.getContext('2d');
-    scratchCtx.font = `bold ${fontSize}px Impact`;
-    const lines = wrapText(scratchCtx, text.toUpperCase(), width - padding * 2);
+    const captionBuf = await svgToPng(svg);
+    const outputPath  = createTempPath('png');
 
-    const captionHeight = Math.ceil(lines.length * lineHeight + padding * 2);
-    const totalHeight = height + captionHeight;
+    await sharp({
+        create: {
+            width,
+            height: height + svgH,
+            channels: 4,
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+        },
+    })
+    .composite([
+        { input: inputPath,  top: position === 'bottom' ? 0      : svgH,   left: 0 },
+        { input: captionBuf, top: position === 'bottom' ? height : 0,       left: 0 },
+    ])
+    .png()
+    .toFile(outputPath);
 
-    const canvas = createCanvas(width, totalHeight);
-    const ctx = canvas.getContext('2d');
-
-    // White background for the entire canvas
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, totalHeight);
-
-    const img = await loadImage(inputPath);
-    ctx.font = `bold ${fontSize}px Impact`;
-
-    if (position === 'top') {
-        ctx.drawImage(img, 0, captionHeight, width, height);
-        drawImpactText(ctx, lines, width / 2, padding, lineHeight, fontSize);
-    } else {
-        ctx.drawImage(img, 0, 0, width, height);
-        drawImpactText(ctx, lines, width / 2, height + padding, lineHeight, fontSize);
-    }
-
-    const outputPath = createTempPath('png');
-    fs.writeFileSync(outputPath, canvas.toBuffer('image/png'));
     return outputPath;
 }
 
-// Render classic top+bottom meme Impact text directly onto the image
+// Overlay classic Impact meme text (top and/or bottom) onto an image
 async function renderMeme(inputPath, topText, bottomText) {
-    const meta = await getMetadata(inputPath);
-    const { width, height } = meta;
-
-    const canvas = createCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-
-    const img = await loadImage(inputPath);
-    ctx.drawImage(img, 0, 0, width, height);
-
+    const { width, height } = await sharp(inputPath).metadata();
     const fontSize = Math.max(18, Math.floor(width * 0.07));
-    const padding = Math.floor(fontSize * 0.4);
-    const lineHeight = fontSize * 1.15;
-    ctx.font = `bold ${fontSize}px Impact`;
 
+    const composites = [];
     if (topText) {
-        const lines = wrapText(ctx, topText.toUpperCase(), width - padding * 2);
-        drawImpactText(ctx, lines, width / 2, padding, lineHeight, fontSize);
+        composites.push({
+            input: await svgToPng(buildMemeTextSVG(topText, width, height, true, fontSize)),
+            top: 0, left: 0,
+        });
     }
-
     if (bottomText) {
-        const lines = wrapText(ctx, bottomText.toUpperCase(), width - padding * 2);
-        const blockHeight = lines.length * lineHeight;
-        const startY = height - padding - blockHeight;
-        drawImpactText(ctx, lines, width / 2, startY, lineHeight, fontSize);
+        composites.push({
+            input: await svgToPng(buildMemeTextSVG(bottomText, width, height, false, fontSize)),
+            top: 0, left: 0,
+        });
     }
 
     const outputPath = createTempPath('png');
-    fs.writeFileSync(outputPath, canvas.toBuffer('image/png'));
+    await sharp(inputPath).composite(composites).png().toFile(outputPath);
     return outputPath;
 }
 

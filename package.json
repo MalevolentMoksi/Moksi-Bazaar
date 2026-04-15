@@ -13,7 +13,6 @@
   "author": "Moksi",
   "license": "ISC",
   "dependencies": {
-    "canvas": "^3.2.3",
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
     "fluent-ffmpeg": "^2.1.3",
