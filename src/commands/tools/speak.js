@@ -132,9 +132,9 @@ module.exports = {
       const conversationContext = await buildConversationContext(messages, userId);
 
       // 4. Sentiment Analysis (only if user sent a message)
-      let sentimentAnalysis = { sentiment: 0, reasoning: 'No message' };
+      let sentimentAnalysis = { sentiment: 0, originalSentiment: 0, reasoning: 'No message' };
       if (userRequest && userRequest.trim()) {
-        sentimentAnalysis = await updateUserAttitudeWithAI(userId, userRequest, conversationContext);
+        sentimentAnalysis = await updateUserAttitudeWithAI(userId, userRequest, conversationContext, userContext);
       }
       
       // 5. Build AI Instructions
@@ -212,8 +212,8 @@ ${memoryText}`;
       let replyText = rawContent;
       let finalEmoji = "";
 
-      // Regex looks for a known emoji key at the VERY end of the string
-      const emojiRegex = new RegExp(`(?:\\s|\\n)(${Object.keys(GOAT_EMOJIS).join('|')}|none)$`, 'i');
+      // Regex looks for a known emoji key anywhere in the text (word boundary, not position-dependent)
+      const emojiRegex = new RegExp(`\\b(${Object.keys(GOAT_EMOJIS).join('|')}|none)\\b`, 'i');
       const match = rawContent.match(emojiRegex);
 
       if (match) {
@@ -222,11 +222,20 @@ ${memoryText}`;
         if (GOAT_EMOJIS[emojiKey]) finalEmoji = GOAT_EMOJIS[emojiKey];
       }
 
-      // Fallback: If no emoji found but sentiment is extreme, auto-pick one
+      // Fallback: If no emoji found, consider user's attitude level and raw sentiment
       if (!finalEmoji) {
-         if (sentimentAnalysis.sentiment <= SENTIMENT_THRESHOLDS.AUTO_EMOJI_NEGATIVE) {
+         // Prioritize attitude if hostile/cold to maintain relationship tone
+         if (userContext.attitudeLevel === 'hostile') {
+           finalEmoji = GOAT_EMOJIS['goat_angry'] || GOAT_EMOJIS['goat_exhausted'];
+         } else if (userContext.attitudeLevel === 'cautious') {
+           finalEmoji = GOAT_EMOJIS['goat_skeptical'] || GOAT_EMOJIS['goat_confused'];
+         } else if (userContext.attitudeLevel === 'friendly' || userContext.attitudeLevel === 'familiar') {
+           finalEmoji = GOAT_EMOJIS['goat_smile'];
+         }
+         // Then fall back to raw sentiment if no attitude-based emoji selected
+         else if (sentimentAnalysis.originalSentiment <= SENTIMENT_THRESHOLDS.AUTO_EMOJI_NEGATIVE) {
            finalEmoji = GOAT_EMOJIS['goat_exhausted'];
-         } else if (sentimentAnalysis.sentiment >= SENTIMENT_THRESHOLDS.AUTO_EMOJI_POSITIVE) {
+         } else if (sentimentAnalysis.originalSentiment >= SENTIMENT_THRESHOLDS.AUTO_EMOJI_POSITIVE) {
            finalEmoji = GOAT_EMOJIS['goat_smile'];
          }
       }
@@ -243,12 +252,15 @@ ${memoryText}`;
       }
 
       // 9. SAVE MEMORY (non-blocking)
+      // Mark as context-only if user didn't send a message (just lurking)
+      const isContextOnly = !userRequest || !userRequest.trim();
       storeConversationMemory(
         userId, 
         channelId, 
         userRequest || '[context]', 
         replyText, 
-        sentimentAnalysis.sentiment
+        sentimentAnalysis.sentiment,  // Use smoothed sentiment, not raw
+        isContextOnly
       ).catch(e => 
         logger.error('Failed to store conversation memory', { userId, error: e.message })
       );

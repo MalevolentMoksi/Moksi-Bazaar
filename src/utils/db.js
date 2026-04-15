@@ -60,7 +60,8 @@ const init = async () => {
             bot_response TEXT,
             sentiment_score DECIMAL(4,2),
             timestamp BIGINT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_context_only BOOLEAN DEFAULT false
         );
         CREATE TABLE IF NOT EXISTS speak_blacklist (
             user_id TEXT PRIMARY KEY
@@ -122,6 +123,11 @@ const init = async () => {
         INSERT INTO settings (setting, state)
         VALUES ('active_speak', true), ('active_media_analysis', true)
         ON CONFLICT DO NOTHING
+    `);
+
+    // Migration: Add is_context_only column if it doesn't exist
+    await pool.query(`
+        ALTER TABLE conversation_memories ADD COLUMN IF NOT EXISTS is_context_only BOOLEAN DEFAULT false
     `);
 };
 
@@ -454,11 +460,11 @@ async function getUserContext(userId) {
     };
 }
 
-async function updateUserAttitudeWithAI(userId, userMessage, conversationContext) {
+async function updateUserAttitudeWithAI(userId, userMessage, conversationContext, userContext) {
     const analysis = await analyzeMessageSentiment(userMessage, conversationContext);
-    const userContext = await getUserContext(userId);
     
-    let currentScore = userContext.sentimentScore;
+    // Use provided userContext to eliminate N+1 query
+    let currentScore = userContext.sentimentScore ?? 0;
     let impactFactor = Math.abs(analysis.sentiment) > 0.8 ? 0.2 : 0.1;
     let newScore = (currentScore * (1 - impactFactor)) + (analysis.sentiment * impactFactor);
     newScore = Math.max(-1, Math.min(1, newScore));
@@ -480,15 +486,16 @@ async function updateUserAttitudeWithAI(userId, userMessage, conversationContext
             updated_at = NOW()
     `, [userId, newLevel, newScore]);
 
-    return { sentiment: newScore, reasoning: analysis.reasoning };
+    // Return both smoothed score and original for proper recording
+    return { sentiment: newScore, originalSentiment: analysis.sentiment, reasoning: analysis.reasoning };
 }
 
 // ── MEMORY ──────────────────────────────────────────────────────────────────
-async function storeConversationMemory(userId, channelId, userMessage, botResponse, sentimentScore) {
+async function storeConversationMemory(userId, channelId, userMessage, botResponse, sentimentScore, isContextOnly = false) {
     await pool.query(`
-        INSERT INTO conversation_memories (user_id, channel_id, user_message, bot_response, sentiment_score, timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6)
-    `, [userId, channelId, userMessage, botResponse, sentimentScore, Date.now()]);
+        INSERT INTO conversation_memories (user_id, channel_id, user_message, bot_response, sentiment_score, timestamp, is_context_only)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [userId, channelId, userMessage, botResponse, sentimentScore, Date.now(), isContextOnly]);
 
     // Deterministic cleanup: trigger when estimated row count is high
     // Uses pg_class reltuples for fast approximate count instead of COUNT(*)
@@ -510,7 +517,7 @@ async function getRecentMemories(userId, limit = 5, options = {}) {
 
     const query = excludeContext
         ? `SELECT user_message, bot_response FROM conversation_memories
-           WHERE user_id = $1 AND user_message <> '[context]'
+           WHERE user_id = $1 AND is_context_only = false
            ORDER BY timestamp DESC LIMIT $2`
         : `SELECT user_message, bot_response FROM conversation_memories
            WHERE user_id = $1 ORDER BY timestamp DESC LIMIT $2`;
