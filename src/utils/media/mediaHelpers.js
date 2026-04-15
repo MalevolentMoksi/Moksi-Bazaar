@@ -72,8 +72,21 @@ async function fetchRecentMedia(interaction, {
                 if (allowedByType && allowedByPredicate) return info;
             }
 
-            // Embed media (video first, then image previews)
+            // Embed media (prefer GIF images first, then video, then static images)
             for (const embed of msg.embeds) {
+                let staticImageCandidate = null;
+                if (allowImage) {
+                    for (const key of ['image', 'thumbnail']) {
+                        const src = embed[key]?.url || embed[key]?.proxyURL;
+                        if (!src) continue;
+                        const info = resolveMedia(src, null, embed[key]?.proxyURL);
+                        if (!info?.isImage) continue;
+                        if (mediaPredicate && !mediaPredicate(info)) continue;
+                        if (info.ext === 'gif') return info;
+                        if (!staticImageCandidate) staticImageCandidate = info;
+                    }
+                }
+
                 if (allowVideo) {
                     const videoSrc = embed.video?.url || embed.video?.proxyURL;
                     if (videoSrc) {
@@ -82,15 +95,7 @@ async function fetchRecentMedia(interaction, {
                     }
                 }
 
-                if (allowImage) {
-                    for (const key of ['image', 'thumbnail']) {
-                        const src = embed[key]?.url || embed[key]?.proxyURL;
-                        if (!src) continue;
-                        const info = resolveMedia(src, null, embed[key]?.proxyURL);
-                        if (!info?.isImage) continue;
-                        if (!mediaPredicate || mediaPredicate(info)) return info;
-                    }
-                }
+                if (staticImageCandidate) return staticImageCandidate;
             }
         }
     } catch {

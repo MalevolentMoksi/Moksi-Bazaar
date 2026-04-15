@@ -1,7 +1,14 @@
 // src/commands/media/caption.js
 const { SlashCommandBuilder } = require('discord.js');
 const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
-const { renderCaption, renderCaptionVideo, renderCaptionGif, renderMeme, renderMemeGif, isAnimatedImage } = require('../../utils/media/captionUtils');
+const {
+    renderCaption,
+    renderCaptionVideo,
+    renderCaptionGif,
+    renderMeme,
+    renderMemeGif,
+    isGifImage,
+} = require('../../utils/media/captionUtils');
 
 const caption = {
     data: new SlashCommandBuilder()
@@ -28,12 +35,12 @@ const caption = {
             allowImage: true,
             allowVideo: true,
             processFn: async (inputPath, ext, { isVideo }) => {
+                const gifInput = ext === 'gif' || await isGifImage(inputPath);
+                if (gifInput) {
+                    return renderCaptionGif(inputPath, text, position);
+                }
                 if (isVideo) {
                     return renderCaptionVideo(inputPath, text, position);
-                }
-                const animatedImage = ext === 'gif' || await isAnimatedImage(inputPath);
-                if (animatedImage) {
-                    return renderCaptionGif(inputPath, text, position);
                 }
                 return renderCaption(inputPath, text, position);
             },
@@ -63,8 +70,8 @@ const meme = {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
             processFn: async (inputPath, ext) => {
-                const animatedImage = ext === 'gif' || await isAnimatedImage(inputPath);
-                if (animatedImage) {
+                const gifInput = ext === 'gif' || await isGifImage(inputPath);
+                if (gifInput) {
                     return renderMemeGif(inputPath, topText, bottomText);
                 }
                 return renderMeme(inputPath, topText, bottomText);

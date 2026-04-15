@@ -104,6 +104,15 @@ async function isAnimatedImage(inputPath) {
     }
 }
 
+async function isGifImage(inputPath) {
+    try {
+        const meta = await sharp(inputPath, { animated: true }).metadata();
+        return meta.format === 'gif';
+    } catch {
+        return false;
+    }
+}
+
 function evenNumber(n, fallback = 2) {
     const safe = Number.isFinite(n) ? Math.floor(n) : fallback;
     if (safe <= 0) return fallback;
@@ -331,4 +340,12 @@ async function renderMemeGif(inputPath, topText, bottomText) {
     }
 }
 
-module.exports = { renderCaption, renderCaptionVideo, renderCaptionGif, renderMeme, renderMemeGif, isAnimatedImage };
+module.exports = {
+    renderCaption,
+    renderCaptionVideo,
+    renderCaptionGif,
+    renderMeme,
+    renderMemeGif,
+    isAnimatedImage,
+    isGifImage,
+};
