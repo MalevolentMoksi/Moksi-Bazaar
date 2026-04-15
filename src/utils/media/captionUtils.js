@@ -119,6 +119,23 @@ function evenNumber(n, fallback = 2) {
     return safe % 2 === 0 ? safe : safe - 1;
 }
 
+// Extract the frame rate (FPS) of an input video/GIF to preserve animation speed
+async function getFrameRate(inputPath) {
+    try {
+        const probeData = await probeFile(inputPath);
+        const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
+        if (!videoStream) return 15;
+        const rFrameRate = videoStream.r_frame_rate;
+        if (rFrameRate && rFrameRate.includes('/')) {
+            const [num, den] = rFrameRate.split('/').map(Number);
+            return num / den;
+        }
+        return videoStream.avg_frame_rate ? parseFloat(videoStream.avg_frame_rate) : 15;
+    } catch {
+        return 15;
+    }
+}
+
 // Add a white caption bar above or below an image
 async function renderCaption(inputPath, text, position = 'bottom') {
     const { width, height } = await sharp(inputPath).metadata();
@@ -201,7 +218,7 @@ async function renderCaptionVideo(inputPath, text, position = 'bottom') {
     }
 }
 
-// Add a white caption bar above or below an animated GIF, preserving animation.
+// Add a white caption bar above or below an animated GIF, preserving animation and quality.
 async function renderCaptionGif(inputPath, text, position = 'bottom') {
     const probeData = await probeFile(inputPath);
     const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
@@ -214,8 +231,10 @@ async function renderCaptionGif(inputPath, text, position = 'bottom') {
     const fontSize = Math.max(18, Math.floor(width * 0.065));
     const { svg, svgH } = buildCaptionSVG(text, width, fontSize);
     const captionHeight = svgH % 2 === 0 ? svgH : svgH + 1;
+    const fps = await getFrameRate(inputPath);
 
     const captionPath = createTempPath('png');
+    const palettePath = createTempPath('png');
     const outputPath = createTempPath('gif');
 
     try {
@@ -224,22 +243,30 @@ async function renderCaptionGif(inputPath, text, position = 'bottom') {
 
         const padOffsetY = position === 'top' ? captionHeight : 0;
         const overlayY = position === 'top' ? '0' : 'H-h';
+        const captionFilter = `[0:v]scale=${width}:${height}:flags=lanczos[scaled];[scaled]pad=${width}:${height + captionHeight}:0:${padOffsetY}:color=white[padded];[1:v]scale=${width}:${captionHeight}:flags=lanczos[caption];[padded][caption]overlay=0:${overlayY}[v]`;
 
-        await runFFmpeg(inputPath, outputPath, cmd => {
-            cmd
+        // Pass 1: Generate palette from the captioned video with FPS applied
+        await new Promise((resolve, reject) => {
+            const ffmpeg = require('fluent-ffmpeg');
+            ffmpeg(inputPath)
                 .input(captionPath)
-                .complexFilter([
-                    `[0:v]scale=${width}:${height}:flags=lanczos[scaled]`,
-                    `[scaled]pad=${width}:${height + captionHeight}:0:${padOffsetY}:color=white[padded]`,
-                    `[1:v]scale=${width}:${captionHeight}:flags=lanczos[caption]`,
-                    `[padded][caption]overlay=0:${overlayY}[v]`,
-                ])
-                .outputOptions([
-                    '-map [v]',
-                    '-an',
-                    '-loop 0',
-                    '-gifflags -offsetting',
-                ]);
+                .complexFilter(`${captionFilter};[v]fps=${fps},palettegen=max_colors=256:reserve_transparent=0`)
+                .on('end', resolve)
+                .on('error', err => reject(new Error(`FFmpeg palette error: ${err.message}`)))
+                .save(palettePath);
+        });
+
+        // Pass 2: Render GIF using the palette with Sierra2-4a dithering for color quality
+        await new Promise((resolve, reject) => {
+            const ffmpeg = require('fluent-ffmpeg');
+            ffmpeg(inputPath)
+                .input(captionPath)
+                .input(palettePath)
+                .complexFilter(`${captionFilter};[v]fps=${fps}[f];[f][2:v]paletteuse=dither=sierra2_4a`)
+                .outputOptions(['-an', '-loop', '0'])
+                .on('end', resolve)
+                .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
+                .save(outputPath);
         });
 
         return outputPath;
@@ -247,7 +274,7 @@ async function renderCaptionGif(inputPath, text, position = 'bottom') {
         await cleanup(outputPath);
         throw err;
     } finally {
-        await cleanup(captionPath);
+        await cleanup(captionPath, palettePath);
     }
 }
 
@@ -275,7 +302,7 @@ async function renderMeme(inputPath, topText, bottomText) {
     return outputPath;
 }
 
-// Overlay top/bottom meme text on an animated GIF, preserving animation.
+// Overlay top/bottom meme text on an animated GIF, preserving animation and quality.
 async function renderMemeGif(inputPath, topText, bottomText) {
     const probeData = await probeFile(inputPath);
     const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
@@ -286,6 +313,7 @@ async function renderMemeGif(inputPath, topText, bottomText) {
     const width = evenNumber(videoStream.width);
     const height = evenNumber(videoStream.height);
     const fontSize = Math.max(18, Math.floor(width * 0.07));
+    const fps = await getFrameRate(inputPath);
 
     const overlays = [];
     if (topText) {
@@ -304,6 +332,7 @@ async function renderMemeGif(inputPath, topText, bottomText) {
     }
 
     const overlayPath = createTempPath('png');
+    const palettePath = createTempPath('png');
     const outputPath = createTempPath('gif');
 
     try {
@@ -319,16 +348,30 @@ async function renderMemeGif(inputPath, topText, bottomText) {
             .png()
             .toFile(overlayPath);
 
-        await runFFmpeg(inputPath, outputPath, cmd => {
-            cmd
+        const memeFilter = `[0:v][1:v]overlay=0:0:format=auto[v]`;
+
+        // Pass 1: Generate palette from the meme-overlay GIF with FPS applied
+        await new Promise((resolve, reject) => {
+            const ffmpeg = require('fluent-ffmpeg');
+            ffmpeg(inputPath)
                 .input(overlayPath)
-                .complexFilter('[0:v][1:v]overlay=0:0:format=auto[v]')
-                .outputOptions([
-                    '-map [v]',
-                    '-an',
-                    '-loop 0',
-                    '-gifflags -offsetting',
-                ]);
+                .complexFilter(`${memeFilter};[v]fps=${fps},palettegen=max_colors=256:reserve_transparent=0`)
+                .on('end', resolve)
+                .on('error', err => reject(new Error(`FFmpeg palette error: ${err.message}`)))
+                .save(palettePath);
+        });
+
+        // Pass 2: Render GIF using the palette with Sierra2-4a dithering for color quality
+        await new Promise((resolve, reject) => {
+            const ffmpeg = require('fluent-ffmpeg');
+            ffmpeg(inputPath)
+                .input(overlayPath)
+                .input(palettePath)
+                .complexFilter(`${memeFilter};[v]fps=${fps}[f];[f][2:v]paletteuse=dither=sierra2_4a`)
+                .outputOptions(['-an', '-loop', '0'])
+                .on('end', resolve)
+                .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
+                .save(outputPath);
         });
 
         return outputPath;
@@ -336,7 +379,7 @@ async function renderMemeGif(inputPath, topText, bottomText) {
         await cleanup(outputPath);
         throw err;
     } finally {
-        await cleanup(overlayPath);
+        await cleanup(overlayPath, palettePath);
     }
 }
 
