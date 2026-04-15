@@ -1,6 +1,9 @@
 [variables]
 NIXPACKS_NODE_PACKAGE_MANAGER = "pnpm"
 
+[phases.setup]
+nixPkgs = ["ffmpeg", "imagemagick", "cairo", "pango", "libjpeg", "giflib", "librsvg", "pkg-config"]
+
 [phases.install]
 cmd = "pnpm i --frozen-lockfile"
 if [ ! -f /app/.npm_hash ] || \

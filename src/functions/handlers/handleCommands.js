@@ -12,10 +12,13 @@ module.exports = (client) => {
       const categoryPath = path.join(commandsPath, category);
       if (!fs.lstatSync(categoryPath).isDirectory()) continue;
       for (const file of fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'))) {
-        const cmd = require(path.join(categoryPath, file));
-        if (cmd.data && cmd.execute) {
-          client.commands.set(cmd.data.name, cmd);
-          commands.push(cmd.data.toJSON());
+        const exported = require(path.join(categoryPath, file));
+        const cmdList = Array.isArray(exported) ? exported : [exported];
+        for (const cmd of cmdList) {
+          if (cmd.data && cmd.execute) {
+            client.commands.set(cmd.data.name, cmd);
+            commands.push(cmd.data.toJSON());
+          }
         }
       }
     }
