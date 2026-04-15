@@ -1,10 +1,7 @@
 // src/utils/media/captionUtils.js
 // Uses pure SVG rendered via sharp/libvips — no native canvas binary required.
-const fs = require('fs');
 const sharp = require('sharp');
 const { createTempPath } = require('./tempFiles');
-
-const MAX_ATTACHMENT_BYTES = 24 * 1024 * 1024;
 
 function escapeXml(s) {
     return String(s)
@@ -96,25 +93,6 @@ async function svgToPng(svgString) {
     return sharp(Buffer.from(svgString)).png().toBuffer();
 }
 
-async function preferSmallerRaster(outputPath) {
-    const originalStats = await fs.promises.stat(outputPath);
-    if (originalStats.size <= MAX_ATTACHMENT_BYTES) {
-        return outputPath;
-    }
-
-    const fallbackPath = createTempPath('jpg');
-    await sharp(outputPath).jpeg({ quality: 92, mozjpeg: true }).toFile(fallbackPath);
-
-    const fallbackStats = await fs.promises.stat(fallbackPath);
-    if (fallbackStats.size < originalStats.size) {
-        try { await fs.promises.unlink(outputPath); } catch {}
-        return fallbackPath;
-    }
-
-    try { await fs.promises.unlink(fallbackPath); } catch {}
-    return outputPath;
-}
-
 // Add a white Impact-text caption bar above or below an image
 async function renderCaption(inputPath, text, position = 'bottom') {
     const { width, height } = await sharp(inputPath).metadata();
@@ -136,10 +114,10 @@ async function renderCaption(inputPath, text, position = 'bottom') {
         { input: inputPath,  top: position === 'bottom' ? 0      : svgH,   left: 0 },
         { input: captionBuf, top: position === 'bottom' ? height : 0,       left: 0 },
     ])
-    .png({ compressionLevel: 9, adaptiveFiltering: true })
+    .png()
     .toFile(outputPath);
 
-    return preferSmallerRaster(outputPath);
+    return outputPath;
 }
 
 // Overlay classic Impact meme text (top and/or bottom) onto an image
@@ -162,8 +140,8 @@ async function renderMeme(inputPath, topText, bottomText) {
     }
 
     const outputPath = createTempPath('png');
-    await sharp(inputPath).composite(composites).png({ compressionLevel: 9, adaptiveFiltering: true }).toFile(outputPath);
-    return preferSmallerRaster(outputPath);
+    await sharp(inputPath).composite(composites).png().toFile(outputPath);
+    return outputPath;
 }
 
 module.exports = { renderCaption, renderMeme };

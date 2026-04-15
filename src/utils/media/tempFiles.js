@@ -14,16 +14,67 @@ function createTempPath(ext) {
 function downloadToTemp(url, ext) {
     const dest = createTempPath(ext || 'bin');
     return new Promise((resolve, reject) => {
-        function get(u) {
+        const MAX_REDIRECTS = 5;
+
+        function readSmallBody(res, maxChars = 400) {
+            return new Promise((resResolve) => {
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', chunk => {
+                    if (body.length < maxChars) body += chunk;
+                });
+                res.on('end', () => resResolve(body.trim().slice(0, maxChars)));
+                res.on('error', () => resResolve(''));
+            });
+        }
+
+        function get(u, redirects = 0) {
             const mod = u.startsWith('https') ? https : http;
-            mod.get(u, res => {
-                if (res.statusCode === 301 || res.statusCode === 302) {
-                    return get(res.headers.location);
-                }
-                if (res.statusCode !== 200) {
+            mod.get(u, {
+                headers: {
+                    'User-Agent': 'MoksisBazaarBot/1.0',
+                    Accept: '*/*',
+                },
+            }, async (res) => {
+                if ([301, 302, 307, 308].includes(res.statusCode)) {
+                    if (redirects >= MAX_REDIRECTS) {
+                        res.resume();
+                        return reject(new Error('Too many redirects downloading media'));
+                    }
+                    const location = res.headers.location;
+                    if (!location) {
+                        res.resume();
+                        return reject(new Error('Redirect missing location header while downloading media'));
+                    }
+                    let nextUrl;
+                    try {
+                        nextUrl = new URL(location, u).toString();
+                    } catch {
+                        res.resume();
+                        return reject(new Error('Invalid redirect URL while downloading media'));
+                    }
                     res.resume();
-                    return reject(new Error(`HTTP ${res.statusCode} downloading media`));
+                    return get(nextUrl, redirects + 1);
                 }
+
+                if (res.statusCode !== 200) {
+                    const body = await readSmallBody(res);
+                    const suffix = body ? `: ${body}` : '';
+                    return reject(new Error(`HTTP ${res.statusCode} downloading media${suffix}`));
+                }
+
+                const contentType = String(res.headers['content-type'] || '').toLowerCase();
+                const looksLikeText = contentType.startsWith('text/')
+                    || contentType.includes('json')
+                    || contentType.includes('xml')
+                    || contentType.includes('javascript');
+
+                if (looksLikeText) {
+                    const body = await readSmallBody(res);
+                    const suffix = body ? `: ${body}` : '';
+                    return reject(new Error(`Unexpected non-media download response (${contentType || 'unknown'})${suffix}`));
+                }
+
                 const file = fs.createWriteStream(dest);
                 res.pipe(file);
                 file.on('finish', () => file.close(() => resolve(dest)));

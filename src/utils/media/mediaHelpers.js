@@ -17,11 +17,34 @@ function extFromContentType(ct) {
     return aliases[sub] || sub;
 }
 
-function resolveMedia(url, contentType) {
-    const ext = extFromUrl(url) || extFromContentType(contentType);
+function resolveMedia(url, contentType, backupUrl = null) {
+    const urlExt = extFromUrl(url);
+    const contentTypeExt = extFromContentType(contentType);
+    const ext = (urlExt && urlExt !== 'bin') ? urlExt : contentTypeExt;
+    if (!ext) return null;
+
     const isImage = IMAGE_EXTS.has(ext);
     const isVideo = VIDEO_EXTS.has(ext);
-    return ext ? { url, ext, isImage, isVideo } : null;
+    if (!isImage && !isVideo) return null;
+
+    return { url, backupUrl, ext, isImage, isVideo };
+}
+
+async function downloadMediaToTemp(mediaInfo) {
+    try {
+        return await downloadToTemp(mediaInfo.url, mediaInfo.ext);
+    } catch (primaryErr) {
+        if (!mediaInfo.backupUrl || mediaInfo.backupUrl === mediaInfo.url) throw primaryErr;
+        try {
+            return await downloadToTemp(mediaInfo.backupUrl, mediaInfo.ext);
+        } catch (secondaryErr) {
+            const combinedErr = new Error(
+                `Failed to download media from both primary and proxy URLs: ${secondaryErr.message}`
+            );
+            combinedErr.cause = primaryErr;
+            throw combinedErr;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -34,12 +57,11 @@ async function fetchRecentMedia(interaction, { allowImage = true, allowVideo = t
         if (!channel?.messages?.fetch) return null;
 
         const messages = await channel.messages.fetch({ limit: 20 });
-        const recentMessages = [...messages.values()].sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
-        for (const msg of recentMessages) {
+        for (const msg of messages.values()) {
             // Attachments
             for (const att of msg.attachments.values()) {
-                const info = resolveMedia(att.url, att.contentType);
+                const info = resolveMedia(att.url, att.contentType, att.proxyURL);
                 if (!info) continue;
                 if ((allowImage && info.isImage) || (allowVideo && info.isVideo)) return info;
             }
@@ -48,10 +70,10 @@ async function fetchRecentMedia(interaction, { allowImage = true, allowVideo = t
             if (allowImage) {
                 for (const embed of msg.embeds) {
                     for (const key of ['image', 'thumbnail']) {
-                        const src = embed[key]?.url;
+                        const src = embed[key]?.url || embed[key]?.proxyURL;
                         if (!src) continue;
-                        const ext = extFromUrl(src);
-                        if (IMAGE_EXTS.has(ext)) return { url: src, ext, isImage: true, isVideo: false };
+                        const info = resolveMedia(src, null, embed[key]?.proxyURL);
+                        if (info?.isImage) return info;
                     }
                 }
             }
@@ -79,17 +101,21 @@ async function handleMediaCommand(interaction, { allowVideo = false, allowImage 
 
     // 1. Explicit attachment takes priority
     let mediaInfo = null;
+    let usedRecentFallback = false;
     const attachment = interaction.options.getAttachment('media');
     if (attachment) {
-        mediaInfo = resolveMedia(attachment.url, attachment.contentType);
+        mediaInfo = resolveMedia(attachment.url, attachment.contentType, attachment.proxyURL);
+        if (!mediaInfo) {
+            return interaction.editReply(
+                'The provided attachment is not a supported image/video format for this command.'
+            );
+        }
     }
 
     // 2. Fall back to recent channel messages
     if (!mediaInfo) {
         mediaInfo = await fetchRecentMedia(interaction, { allowImage, allowVideo });
-        if (mediaInfo) {
-            // Let the user know we're using a previous message's media
-        }
+        usedRecentFallback = Boolean(mediaInfo);
     }
 
     // 3. Nothing found anywhere
@@ -109,10 +135,11 @@ async function handleMediaCommand(interaction, { allowVideo = false, allowImage 
         return interaction.editReply('That file doesn\'t look like a video. Please provide an MP4, MOV, WebM, or similar.');
     }
 
-    const inputPath = await downloadToTemp(url, ext);
+    let inputPath = null;
     let outputPath = null;
 
     try {
+        inputPath = await downloadMediaToTemp(mediaInfo);
         outputPath = await processFn(inputPath, ext, { isImage, isVideo });
 
         if (!outputPath) throw new Error('Processing produced no output file.');
@@ -125,25 +152,36 @@ async function handleMediaCommand(interaction, { allowVideo = false, allowImage 
             );
         }
 
-        await interaction.editReply({ files: [outputPath] });
+        const replyPayload = { files: [outputPath] };
+        if (usedRecentFallback) {
+            replyPayload.content = 'Using the most recent compatible media in this channel.';
+        }
+        await interaction.editReply(replyPayload);
     } catch (err) {
+        const rawErrorText = [
+            err?.message,
+            err?.rawError?.message,
+            err?.cause?.message,
+        ]
+            .filter(Boolean)
+            .join(' | ');
+
         // Log full details to Railway for debugging
         logger.error('Media command failed', {
             command: interaction.commandName,
             userId: interaction.user.id,
             errorName: err.name,
             errorCode: err.code,
-            error: err.message,
+            error: rawErrorText || err.message,
             stack: err.stack,
         });
 
-        const message = [err.message, err?.response?.data?.message].filter(Boolean).join(' ').toLowerCase();
-
         // Discord API 40005 = "Request entity too large"
+        const lowered = (rawErrorText || '').toLowerCase();
         const isDiscordSizeError = err.code === 40005 || err.status === 413
-            || message.includes('entity too large')
-            || message.includes('max file size')
-            || message.includes('500mb');
+            || lowered.includes('entity too large')
+            || lowered.includes('request entity too large')
+            || (lowered.includes('max file size') && lowered.includes('mb'));
 
         const reply = isDiscordSizeError
             ? '⚠️ The output file is too large for Discord (max 25 MB). Try a smaller/shorter input.'

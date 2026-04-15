@@ -9,7 +9,7 @@ const reverse = {
         .setName('reverse')
         .setDescription('Reverse a video (plays it backwards)')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to reverse (optional; uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Video to reverse (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
@@ -41,10 +41,10 @@ const speed = {
                 .setRequired(true)
                 .setMinValue(0.25)
                 .setMaxValue(4)
-        ),
-        .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to adjust (optional; uses recent media if omitted)').setRequired(false)
         )
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Video to adjust (optional: uses recent media if omitted)').setRequired(false)
+        ),
     async execute(interaction) {
         const multiplier = interaction.options.getNumber('multiplier');
         await handleMediaCommand(interaction, {
@@ -75,10 +75,10 @@ const trim = {
         )
         .addStringOption(opt =>
             opt.setName('end').setDescription('End time (e.g. 00:00:15 or 15)').setRequired(true)
-        ),
-        .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to trim (optional; uses recent media if omitted)').setRequired(false)
         )
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Video to trim (optional: uses recent media if omitted)').setRequired(false)
+        ),
     async execute(interaction) {
         const start = interaction.options.getString('start');
         const end = interaction.options.getString('end');
@@ -101,7 +101,7 @@ const mute = {
         .setName('mute')
         .setDescription('Remove the audio track from a video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to mute (optional; uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Video to mute (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
@@ -122,7 +122,7 @@ const loop = {
         .setName('loop')
         .setDescription('Loop a video multiple times')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to loop (optional; uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Video to loop (optional: uses recent media if omitted)').setRequired(false)
         )
         .addIntegerOption(opt =>
             opt.setName('count').setDescription('Number of times to loop (default 3, max 10)').setMinValue(2).setMaxValue(10)
@@ -148,7 +148,7 @@ const addaudio = {
             opt.setName('audio').setDescription('Audio file (MP3, WAV, OGG, etc.)').setRequired(true)
         )
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video file (optional; uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Video file (optional: uses recent media if omitted)').setRequired(false)
         )
         .addNumberOption(opt =>
             opt.setName('volume').setDescription('Audio volume (0–2, default 1)').setMinValue(0).setMaxValue(2)
@@ -156,24 +156,30 @@ const addaudio = {
     async execute(interaction) {
         await interaction.deferReply();
 
-        let videoAttachment = interaction.options.getAttachment('media');
+        const videoAttachment = interaction.options.getAttachment('media');
         const audioAttachment = interaction.options.getAttachment('audio');
         const volume = interaction.options.getNumber('volume') ?? 1;
-
-        if (!videoAttachment) {
-            videoAttachment = await fetchRecentMedia(interaction, { allowImage: false, allowVideo: true });
-            if (!videoAttachment) {
-                return interaction.editReply('No video found. Attach a video to the command, or use it in a channel where a video was recently posted.');
-            }
-        }
 
         const { downloadToTemp, cleanup, extFromUrl } = require('../../utils/media/tempFiles');
         const fs = require('fs');
 
-        const videoExt = extFromUrl(videoAttachment.url);
+        let videoUrl = videoAttachment?.url;
+        let videoExt = videoAttachment ? extFromUrl(videoAttachment.url) : null;
+
+        if (!videoAttachment) {
+            const recentVideo = await fetchRecentMedia(interaction, { allowImage: false, allowVideo: true });
+            if (!recentVideo) {
+                return interaction.editReply(
+                    'No video found. Attach one to the command, or post one in the recent channel messages first.'
+                );
+            }
+            videoUrl = recentVideo.url;
+            videoExt = recentVideo.ext;
+        }
+
         const audioExt = extFromUrl(audioAttachment.url);
 
-        const videoPath = await downloadToTemp(videoAttachment.url, videoExt);
+        const videoPath = await downloadToTemp(videoUrl, videoExt);
         const audioPath = await downloadToTemp(audioAttachment.url, audioExt);
         const outputPath = createTempPath('mp4');
 
