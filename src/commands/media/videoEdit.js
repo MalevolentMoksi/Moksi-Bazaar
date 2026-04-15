@@ -1,6 +1,6 @@
 // src/commands/media/videoEdit.js
 const { SlashCommandBuilder } = require('discord.js');
-const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
+const { handleMediaCommand, fetchRecentMedia } = require('../../utils/media/mediaHelpers');
 const { runFFmpeg, hasAudio, atempoChain, loopVideo } = require('../../utils/media/ffmpegUtils');
 const { createTempPath } = require('../../utils/media/tempFiles');
 
@@ -9,7 +9,7 @@ const reverse = {
         .setName('reverse')
         .setDescription('Reverse a video (plays it backwards)')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to reverse').setRequired(true)
+            opt.setName('media').setDescription('Video to reverse (optional; uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
@@ -36,7 +36,7 @@ const speed = {
         .setName('speed')
         .setDescription('Change the playback speed of a video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to adjust').setRequired(true)
+            opt.setName('media').setDescription('Video to adjust (optional; uses recent media if omitted)').setRequired(false)
         )
         .addNumberOption(opt =>
             opt.setName('multiplier')
@@ -71,7 +71,7 @@ const trim = {
         .setName('trim')
         .setDescription('Trim a video to a specific time range')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to trim').setRequired(true)
+            opt.setName('media').setDescription('Video to trim (optional; uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('start').setDescription('Start time (e.g. 00:00:05 or 5)').setRequired(true)
@@ -101,7 +101,7 @@ const mute = {
         .setName('mute')
         .setDescription('Remove the audio track from a video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to mute').setRequired(true)
+            opt.setName('media').setDescription('Video to mute (optional; uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
@@ -122,7 +122,7 @@ const loop = {
         .setName('loop')
         .setDescription('Loop a video multiple times')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to loop').setRequired(true)
+            opt.setName('media').setDescription('Video to loop (optional; uses recent media if omitted)').setRequired(false)
         )
         .addIntegerOption(opt =>
             opt.setName('count').setDescription('Number of times to loop (default 3, max 10)').setMinValue(2).setMaxValue(10)
@@ -145,7 +145,7 @@ const addaudio = {
         .setName('addaudio')
         .setDescription('Overlay an audio file onto a video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video file').setRequired(true)
+            opt.setName('media').setDescription('Video file (optional; uses recent media if omitted)').setRequired(false)
         )
         .addAttachmentOption(opt =>
             opt.setName('audio').setDescription('Audio file (MP3, WAV, OGG, etc.)').setRequired(true)
@@ -156,9 +156,16 @@ const addaudio = {
     async execute(interaction) {
         await interaction.deferReply();
 
-        const videoAttachment = interaction.options.getAttachment('media');
+        let videoAttachment = interaction.options.getAttachment('media');
         const audioAttachment = interaction.options.getAttachment('audio');
         const volume = interaction.options.getNumber('volume') ?? 1;
+
+        if (!videoAttachment) {
+            videoAttachment = await fetchRecentMedia(interaction, { allowImage: false, allowVideo: true });
+            if (!videoAttachment) {
+                return interaction.editReply('No video found. Attach a video to the command, or use it in a channel where a video was recently posted.');
+            }
+        }
 
         const { downloadToTemp, cleanup, extFromUrl } = require('../../utils/media/tempFiles');
         const fs = require('fs');

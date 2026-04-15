@@ -8,7 +8,7 @@ const caption = {
         .setName('caption')
         .setDescription('Add an Impact-style caption bar to an image')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to caption').setRequired(true)
+            opt.setName('media').setDescription('Image to caption (optional; uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('text').setDescription('Caption text').setRequired(true).setMaxLength(300)
@@ -36,7 +36,7 @@ const meme = {
         .setName('meme')
         .setDescription('Add classic Impact meme text to an image')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to meme-ify').setRequired(true)
+            opt.setName('media').setDescription('Image to meme-ify (optional; uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('top').setDescription('Top text').setMaxLength(200)

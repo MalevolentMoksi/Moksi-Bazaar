@@ -3,6 +3,8 @@ const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
 const { createTempPath } = require('./tempFiles');
 
+const MAX_ATTACHMENT_BYTES = 24 * 1024 * 1024;
+
 // Promisified ffmpeg runner. configureFn receives the fluent-ffmpeg command object.
 function runFFmpeg(input, output, configureFn) {
     return new Promise((resolve, reject) => {
@@ -51,23 +53,39 @@ function atempoChain(speed) {
 
 // Create a high-quality GIF from a video using the two-pass palette method
 async function videoToGif(inputPath, outputPath, fps = 15, scale = 480) {
-    const palettePath = createTempPath('png');
-    try {
-        // Pass 1: generate palette
-        await runFFmpeg(inputPath, palettePath, cmd => {
-            cmd.videoFilters(`fps=${fps},scale=${scale}:-1:flags=lanczos,palettegen`);
-        });
-        // Pass 2: render GIF using palette
-        await new Promise((resolve, reject) => {
-            ffmpeg(inputPath)
-                .input(palettePath)
-                .complexFilter(`fps=${fps},scale=${scale}:-1:flags=lanczos[x];[x][1:v]paletteuse`)
-                .on('end', resolve)
-                .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
-                .save(outputPath);
-        });
-    } finally {
-        try { fs.unlinkSync(palettePath); } catch {}
+    const attempts = [
+        { fps, scale },
+        { fps: Math.max(8, Math.floor(fps * 0.75)), scale: Math.max(240, Math.floor(scale * 0.75)) },
+    ];
+
+    for (let index = 0; index < attempts.length; index += 1) {
+        const current = attempts[index];
+        const palettePath = createTempPath('png');
+        try {
+            try { fs.unlinkSync(outputPath); } catch {}
+
+            // Pass 1: generate palette
+            await runFFmpeg(inputPath, palettePath, cmd => {
+                cmd.videoFilters(`fps=${current.fps},scale=${current.scale}:-1:flags=lanczos,palettegen`);
+            });
+
+            // Pass 2: render GIF using palette
+            await new Promise((resolve, reject) => {
+                ffmpeg(inputPath)
+                    .input(palettePath)
+                    .complexFilter(`fps=${current.fps},scale=${current.scale}:-1:flags=lanczos[x];[x][1:v]paletteuse`)
+                    .on('end', resolve)
+                    .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
+                    .save(outputPath);
+            });
+
+            const stats = fs.statSync(outputPath);
+            if (stats.size <= MAX_ATTACHMENT_BYTES || index === attempts.length - 1) {
+                return;
+            }
+        } finally {
+            try { fs.unlinkSync(palettePath); } catch {}
+        }
     }
 }
 
