@@ -7,13 +7,16 @@ const { createTempPath } = require('../../utils/media/tempFiles');
 const reverse = {
     data: new SlashCommandBuilder()
         .setName('reverse')
-        .setDescription('Reverse a video (plays it backwards)')
+        .setDescription('Reverse a video or GIF (plays it backwards)')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to reverse (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Video or GIF to reverse (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: false, allowVideo: true,
+            allowImage: true,
+            allowVideo: true,
+            mediaPredicate: (mediaInfo) => mediaInfo.isVideo || mediaInfo.ext === 'gif',
+            invalidMediaMessage: 'This command supports videos and GIFs only.',
             processFn: async (inputPath, ext) => {
                 const outputPath = createTempPath(ext === 'gif' ? 'gif' : 'mp4');
                 const audio = await hasAudio(inputPath);

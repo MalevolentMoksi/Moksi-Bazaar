@@ -1,7 +1,9 @@
 // src/utils/media/captionUtils.js
 // Uses pure SVG rendered via sharp/libvips — no native canvas binary required.
+const fs = require('fs');
 const sharp = require('sharp');
-const { createTempPath } = require('./tempFiles');
+const { createTempPath, cleanup } = require('./tempFiles');
+const { runFFmpeg, probeFile } = require('./ffmpegUtils');
 
 function escapeXml(s) {
     return String(s)
@@ -93,6 +95,12 @@ async function svgToPng(svgString) {
     return sharp(Buffer.from(svgString)).png().toBuffer();
 }
 
+function evenNumber(n, fallback = 2) {
+    const safe = Number.isFinite(n) ? Math.floor(n) : fallback;
+    if (safe <= 0) return fallback;
+    return safe % 2 === 0 ? safe : safe - 1;
+}
+
 // Add a white Impact-text caption bar above or below an image
 async function renderCaption(inputPath, text, position = 'bottom') {
     const { width, height } = await sharp(inputPath).metadata();
@@ -120,6 +128,61 @@ async function renderCaption(inputPath, text, position = 'bottom') {
     return outputPath;
 }
 
+// Add a white Impact-text caption bar above or below a video
+async function renderCaptionVideo(inputPath, text, position = 'bottom') {
+    const probeData = await probeFile(inputPath);
+    const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
+    if (!videoStream?.width || !videoStream?.height) {
+        throw new Error('Could not determine video dimensions.');
+    }
+
+    const width = evenNumber(videoStream.width);
+    const height = evenNumber(videoStream.height);
+    const fontSize = Math.max(18, Math.floor(width * 0.065));
+    const { svg, svgH } = buildCaptionSVG(text, width, fontSize);
+    const captionHeight = svgH % 2 === 0 ? svgH : svgH + 1;
+
+    const captionPath = createTempPath('png');
+    const outputPath = createTempPath('mp4');
+
+    try {
+        const captionBuf = await svgToPng(svg);
+        await fs.promises.writeFile(captionPath, captionBuf);
+
+        const padOffsetY = position === 'top' ? captionHeight : 0;
+        const overlayY = position === 'top' ? '0' : 'H-h';
+
+        await runFFmpeg(inputPath, outputPath, cmd => {
+            cmd
+                .input(captionPath)
+                .complexFilter([
+                    `[0:v]scale=${width}:${height}:flags=lanczos[scaled]`,
+                    `[scaled]pad=${width}:${height + captionHeight}:0:${padOffsetY}:color=white[padded]`,
+                    `[1:v]scale=${width}:${captionHeight}:flags=lanczos[caption]`,
+                    `[padded][caption]overlay=0:${overlayY}[v]`,
+                ])
+                .outputOptions([
+                    '-map [v]',
+                    '-map 0:a?',
+                    '-c:v libx264',
+                    '-preset veryfast',
+                    '-crf 20',
+                    '-pix_fmt yuv420p',
+                    '-movflags faststart',
+                    '-c:a copy',
+                    '-shortest',
+                ]);
+        });
+
+        return outputPath;
+    } catch (err) {
+        await cleanup(outputPath);
+        throw err;
+    } finally {
+        await cleanup(captionPath);
+    }
+}
+
 // Overlay classic Impact meme text (top and/or bottom) onto an image
 async function renderMeme(inputPath, topText, bottomText) {
     const { width, height } = await sharp(inputPath).metadata();
@@ -144,4 +207,4 @@ async function renderMeme(inputPath, topText, bottomText) {
     return outputPath;
 }
 
-module.exports = { renderCaption, renderMeme };
+module.exports = { renderCaption, renderCaptionVideo, renderMeme };

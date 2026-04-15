@@ -51,7 +51,11 @@ async function downloadMediaToTemp(mediaInfo) {
 // Recent-message media scanner
 // ---------------------------------------------------------------------------
 
-async function fetchRecentMedia(interaction, { allowImage = true, allowVideo = true } = {}) {
+async function fetchRecentMedia(interaction, {
+    allowImage = true,
+    allowVideo = true,
+    mediaPredicate = null,
+} = {}) {
     try {
         const channel = interaction.channel;
         if (!channel?.messages?.fetch) return null;
@@ -63,7 +67,9 @@ async function fetchRecentMedia(interaction, { allowImage = true, allowVideo = t
             for (const att of msg.attachments.values()) {
                 const info = resolveMedia(att.url, att.contentType, att.proxyURL);
                 if (!info) continue;
-                if ((allowImage && info.isImage) || (allowVideo && info.isVideo)) return info;
+                const allowedByType = (allowImage && info.isImage) || (allowVideo && info.isVideo);
+                const allowedByPredicate = !mediaPredicate || mediaPredicate(info);
+                if (allowedByType && allowedByPredicate) return info;
             }
 
             // Image embeds (e.g. image links Discord auto-previews)
@@ -73,7 +79,8 @@ async function fetchRecentMedia(interaction, { allowImage = true, allowVideo = t
                         const src = embed[key]?.url || embed[key]?.proxyURL;
                         if (!src) continue;
                         const info = resolveMedia(src, null, embed[key]?.proxyURL);
-                        if (info?.isImage) return info;
+                        if (!info?.isImage) continue;
+                        if (!mediaPredicate || mediaPredicate(info)) return info;
                     }
                 }
             }
@@ -96,7 +103,13 @@ async function fetchRecentMedia(interaction, { allowImage = true, allowVideo = t
  *
  * processFn(inputPath, ext, { isImage, isVideo }) → Promise<string outputPath>
  */
-async function handleMediaCommand(interaction, { allowVideo = false, allowImage = true, processFn }) {
+async function handleMediaCommand(interaction, {
+    allowVideo = false,
+    allowImage = true,
+    processFn,
+    mediaPredicate = null,
+    invalidMediaMessage = null,
+}) {
     await interaction.deferReply();
 
     // 1. Explicit attachment takes priority
@@ -110,11 +123,14 @@ async function handleMediaCommand(interaction, { allowVideo = false, allowImage 
                 'The provided attachment is not a supported image/video format for this command.'
             );
         }
+        if (mediaPredicate && !mediaPredicate(mediaInfo)) {
+            return interaction.editReply(invalidMediaMessage || 'That media type is not supported for this command.');
+        }
     }
 
     // 2. Fall back to recent channel messages
     if (!mediaInfo) {
-        mediaInfo = await fetchRecentMedia(interaction, { allowImage, allowVideo });
+        mediaInfo = await fetchRecentMedia(interaction, { allowImage, allowVideo, mediaPredicate });
         usedRecentFallback = Boolean(mediaInfo);
     }
 
@@ -133,6 +149,9 @@ async function handleMediaCommand(interaction, { allowVideo = false, allowImage 
     }
     if (!allowImage && allowVideo && !isVideo) {
         return interaction.editReply('That file doesn\'t look like a video. Please provide an MP4, MOV, WebM, or similar.');
+    }
+    if (mediaPredicate && !mediaPredicate(mediaInfo)) {
+        return interaction.editReply(invalidMediaMessage || 'That media type is not supported for this command.');
     }
 
     let inputPath = null;

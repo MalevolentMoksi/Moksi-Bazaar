@@ -1,17 +1,17 @@
 // src/commands/media/caption.js
 const { SlashCommandBuilder } = require('discord.js');
 const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
-const { renderCaption, renderMeme } = require('../../utils/media/captionUtils');
+const { renderCaption, renderCaptionVideo, renderMeme } = require('../../utils/media/captionUtils');
 
 const caption = {
     data: new SlashCommandBuilder()
         .setName('caption')
-        .setDescription('Add an Impact-style caption bar to an image')
+        .setDescription('Add an Impact-style caption bar to an image or video')
         .addStringOption(opt =>
             opt.setName('text').setDescription('Caption text').setRequired(true).setMaxLength(300)
         )
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to caption (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image or video to caption (optional: uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('position')
@@ -25,8 +25,14 @@ const caption = {
         const text = interaction.options.getString('text');
         const position = interaction.options.getString('position') ?? 'bottom';
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
-            processFn: (inputPath) => renderCaption(inputPath, text, position),
+            allowImage: true,
+            allowVideo: true,
+            processFn: (inputPath, ext, { isVideo }) => {
+                if (isVideo) {
+                    return renderCaptionVideo(inputPath, text, position);
+                }
+                return renderCaption(inputPath, text, position);
+            },
         });
     },
 };
