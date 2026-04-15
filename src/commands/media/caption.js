@@ -34,8 +34,8 @@ const caption = {
         await handleMediaCommand(interaction, {
             allowImage: true,
             allowVideo: true,
-            processFn: async (inputPath, ext, { isVideo }) => {
-                const gifInput = ext === 'gif' || await isGifImage(inputPath);
+            processFn: async (inputPath, ext, { isVideo, isGifLike }) => {
+                const gifInput = isGifLike || ext === 'gif' || await isGifImage(inputPath);
                 if (gifInput) {
                     return renderCaptionGif(inputPath, text, position);
                 }

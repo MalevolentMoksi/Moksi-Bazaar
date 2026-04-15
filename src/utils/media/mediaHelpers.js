@@ -17,7 +17,7 @@ function extFromContentType(ct) {
     return aliases[sub] || sub;
 }
 
-function resolveMedia(url, contentType, backupUrl = null) {
+function resolveMedia(url, contentType, backupUrl = null, extra = {}) {
     const urlExt = extFromUrl(url);
     const contentTypeExt = extFromContentType(contentType);
     const ext = (urlExt && urlExt !== 'bin') ? urlExt : contentTypeExt;
@@ -27,7 +27,9 @@ function resolveMedia(url, contentType, backupUrl = null) {
     const isVideo = VIDEO_EXTS.has(ext);
     if (!isImage && !isVideo) return null;
 
-    return { url, backupUrl, ext, isImage, isVideo };
+    const isGifLike = extra.isGifLike === true || ext === 'gif' || contentTypeExt === 'gif';
+
+    return { url, backupUrl, ext, isImage, isVideo, isGifLike };
 }
 
 async function downloadMediaToTemp(mediaInfo) {
@@ -74,6 +76,10 @@ async function fetchRecentMedia(interaction, {
 
             // Embed media (prefer GIF images first, then video, then static images)
             for (const embed of msg.embeds) {
+                const embedType = String(embed.type || '').toLowerCase();
+                const embedUrl = String(embed.url || '');
+                const isGifLikeEmbed = embedType === 'gifv' || /tenor\.com|giphy\.com/i.test(embedUrl);
+
                 let staticImageCandidate = null;
                 if (allowImage) {
                     for (const key of ['image', 'thumbnail']) {
@@ -90,7 +96,7 @@ async function fetchRecentMedia(interaction, {
                 if (allowVideo) {
                     const videoSrc = embed.video?.url || embed.video?.proxyURL;
                     if (videoSrc) {
-                        const info = resolveMedia(videoSrc, null, embed.video?.proxyURL);
+                        const info = resolveMedia(videoSrc, null, embed.video?.proxyURL, { isGifLike: isGifLikeEmbed });
                         if (info?.isVideo && (!mediaPredicate || mediaPredicate(info))) return info;
                     }
                 }
@@ -154,7 +160,7 @@ async function handleMediaCommand(interaction, {
         );
     }
 
-    const { url, ext, isImage, isVideo } = mediaInfo;
+    const { url, ext, isImage, isVideo, isGifLike } = mediaInfo;
 
     // 4. Type guard
     if (allowImage && !allowVideo && !isImage) {
@@ -172,7 +178,7 @@ async function handleMediaCommand(interaction, {
 
     try {
         inputPath = await downloadMediaToTemp(mediaInfo);
-        outputPath = await processFn(inputPath, ext, { isImage, isVideo });
+        outputPath = await processFn(inputPath, ext, { isImage, isVideo, isGifLike });
 
         if (!outputPath) throw new Error('Processing produced no output file.');
 
