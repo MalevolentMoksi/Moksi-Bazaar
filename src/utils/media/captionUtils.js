@@ -42,7 +42,7 @@ function tspans(lines, cx, lineH) {
         .join('');
 }
 
-// White bar SVG with black Impact text (for /caption command)
+// White bar SVG with black text in MediaForge-like caption style
 function buildCaptionSVG(text, width, fontSize) {
     const padding = Math.max(6, Math.floor(fontSize * 0.4));
     const lineH   = Math.ceil(fontSize * 1.25);
@@ -58,7 +58,7 @@ function buildCaptionSVG(text, width, fontSize) {
         svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${svgH}">
   <rect width="${width}" height="${svgH}" fill="white"/>
   <text x="${cx}" y="${baseY}" text-anchor="middle"
-        font-family="Impact,Arial Black,sans-serif"
+                font-family="Atkinson Hyperlegible,Atkinson Hyperlegible Bold,Arial,sans-serif"
         font-size="${fontSize}" font-weight="bold" fill="black">
     ${body}
   </text>
@@ -101,7 +101,7 @@ function evenNumber(n, fallback = 2) {
     return safe % 2 === 0 ? safe : safe - 1;
 }
 
-// Add a white Impact-text caption bar above or below an image
+// Add a white caption bar above or below an image
 async function renderCaption(inputPath, text, position = 'bottom') {
     const { width, height } = await sharp(inputPath).metadata();
     const fontSize = Math.max(18, Math.floor(width * 0.065));
@@ -128,7 +128,7 @@ async function renderCaption(inputPath, text, position = 'bottom') {
     return outputPath;
 }
 
-// Add a white Impact-text caption bar above or below a video
+// Add a white caption bar above or below a video
 async function renderCaptionVideo(inputPath, text, position = 'bottom') {
     const probeData = await probeFile(inputPath);
     const videoStream = probeData.streams?.find(s => s.codec_type === 'video');

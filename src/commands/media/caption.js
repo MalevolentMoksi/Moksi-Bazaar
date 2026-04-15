@@ -6,7 +6,7 @@ const { renderCaption, renderCaptionVideo, renderMeme } = require('../../utils/m
 const caption = {
     data: new SlashCommandBuilder()
         .setName('caption')
-        .setDescription('Add an Impact-style caption bar to an image or video')
+        .setDescription('Add a MediaForge-style caption bar to an image or video')
         .addStringOption(opt =>
             opt.setName('text').setDescription('Caption text').setRequired(true).setMaxLength(300)
         )
