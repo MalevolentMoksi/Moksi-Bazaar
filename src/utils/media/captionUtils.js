@@ -46,7 +46,7 @@ function tspans(lines, cx, lineH) {
 function buildCaptionSVG(text, width, fontSize) {
     const padding = Math.max(6, Math.floor(fontSize * 0.4));
     const lineH   = Math.ceil(fontSize * 1.25);
-    const lines   = wrapLines(text.toUpperCase(), width - padding * 2, fontSize);
+    const lines   = wrapLines(text, width - padding * 2, fontSize);
     const svgH    = lines.length * lineH + padding * 2;
     const cx      = width / 2;
     const baseY   = padding + fontSize; // y = text baseline of first line
