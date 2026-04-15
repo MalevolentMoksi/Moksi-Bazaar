@@ -7,11 +7,11 @@ const caption = {
     data: new SlashCommandBuilder()
         .setName('caption')
         .setDescription('Add an Impact-style caption bar to an image')
-        .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to caption (optional; uses recent media if omitted)').setRequired(false)
-        )
         .addStringOption(opt =>
             opt.setName('text').setDescription('Caption text').setRequired(true).setMaxLength(300)
+        )
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Image to caption (optional; uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('position')

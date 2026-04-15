@@ -35,9 +35,6 @@ const speed = {
     data: new SlashCommandBuilder()
         .setName('speed')
         .setDescription('Change the playback speed of a video')
-        .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to adjust (optional; uses recent media if omitted)').setRequired(false)
-        )
         .addNumberOption(opt =>
             opt.setName('multiplier')
                 .setDescription('Speed multiplier (e.g. 2 = double speed, 0.5 = half speed)')
@@ -45,6 +42,9 @@ const speed = {
                 .setMinValue(0.25)
                 .setMaxValue(4)
         ),
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Video to adjust (optional; uses recent media if omitted)').setRequired(false)
+        )
     async execute(interaction) {
         const multiplier = interaction.options.getNumber('multiplier');
         await handleMediaCommand(interaction, {
@@ -70,15 +70,15 @@ const trim = {
     data: new SlashCommandBuilder()
         .setName('trim')
         .setDescription('Trim a video to a specific time range')
-        .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video to trim (optional; uses recent media if omitted)').setRequired(false)
-        )
         .addStringOption(opt =>
             opt.setName('start').setDescription('Start time (e.g. 00:00:05 or 5)').setRequired(true)
         )
         .addStringOption(opt =>
             opt.setName('end').setDescription('End time (e.g. 00:00:15 or 15)').setRequired(true)
         ),
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Video to trim (optional; uses recent media if omitted)').setRequired(false)
+        )
     async execute(interaction) {
         const start = interaction.options.getString('start');
         const end = interaction.options.getString('end');
@@ -145,10 +145,10 @@ const addaudio = {
         .setName('addaudio')
         .setDescription('Overlay an audio file onto a video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Video file (optional; uses recent media if omitted)').setRequired(false)
+            opt.setName('audio').setDescription('Audio file (MP3, WAV, OGG, etc.)').setRequired(true)
         )
         .addAttachmentOption(opt =>
-            opt.setName('audio').setDescription('Audio file (MP3, WAV, OGG, etc.)').setRequired(true)
+            opt.setName('media').setDescription('Video file (optional; uses recent media if omitted)').setRequired(false)
         )
         .addNumberOption(opt =>
             opt.setName('volume').setDescription('Audio volume (0–2, default 1)').setMinValue(0).setMaxValue(2)
