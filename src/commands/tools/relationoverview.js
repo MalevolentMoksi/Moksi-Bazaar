@@ -1,9 +1,10 @@
 // src/commands/tools/relationoverview.js - Refactored with New Utilities
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { pool } = require('../../utils/db.js');
-const { callGroqAPI } = require('../../utils/apiHelpers');
+const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { createOverviewEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
+const logger = require('../../utils/logger');
 
 // ── DATA GATHERING ────────────────────────────────────────────────────────────
 async function getAllUserRelationships(limit = 20) {
@@ -70,13 +71,20 @@ Favourites: ${favourites.map(u => u.displayName).join(', ') || 'none'}.
 Enemies: ${enemies.map(u => u.displayName).join(', ') || 'none'}.
 No zoomer slang. No standard emojis. If mentioning names, use them naturally in a sentence.`;
 
-  // PRIMARY: Groq Llama 3.3 8B ($0.05/$0.08/M) — lightweight, cost-efficient
-  // FALLBACK: Groq Llama 3.3 70B ($0.59/$0.79/M) — full power if 8B fails
-  const response = await callGroqAPI(prompt, {
-    model: 'meta-llama/llama-3.3-8b-instruct',
-    maxTokens: 110,
-    temperature: 0.7,
-    fallbackModel: 'meta-llama/llama-3.3-70b-versatile'
+  // PRIMARY: MiMo-V2-Flash ($0.09/$0.29/M) — ultra-cheap, fast, excellent for short text
+  // FALLBACK: Gemma 4 31B ($0.13/M) — dense model, reliable fallback
+  const response = await callOpenRouterAPI(
+    'xiaomi/mimo-v2-flash',
+    [{ role: 'user', content: prompt }],
+    {
+      maxTokens: 110,
+      temperature: 0.7,
+      timeout: 10000,
+      fallbackModel: 'google/gemma-4-31b-it'
+    }
+  ).catch(e => {
+    logger.error('Relationship summary generation failed', { error: e.message });
+    return null;
   });
 
   const warmCount = stats.friendly + stats.familiar;

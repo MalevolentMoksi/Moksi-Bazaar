@@ -2,87 +2,12 @@
 const logger = require('./logger');
 const { TIMEOUTS } = require('./constants');
 
-const GROQ_API_KEY = process.env.LANGUAGE_API_KEY;
+// DEPRECATED (April 2026): Groq API removed. All models migrated to OpenRouter.
+// - Sentiment: MiMo-V2-Flash (primary) + Groq Llama 8B (fallback) + DeepSeek V3 (safety)
+// - Relationships: MiMo-V2-Flash (primary) + Gemma 4 31B (fallback)
+// - Chat: DeepSeek V3 (unchanged, kept for personality coherence)
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-/**
- * Calls Groq API with timeout and error handling
- * @param {string} prompt - The prompt to send
- * @param {Object} options - Configuration options
- * @param {string} options.model - Model to use (default: llama-3.3-70b-versatile)
- * @param {number} options.maxTokens - Max tokens (default: 150)
- * @param {number} options.temperature - Temperature (default: 0.8)
- * @param {number} options.timeout - Timeout in ms (default: 15000)
- * @param {string} options.fallbackModel - Fallback model if primary fails
- * @returns {Promise<string|null>} AI response or null on error
- */
-async function callGroqAPI(prompt, options = {}) {
-    const {
-        model = 'meta-llama/llama-3.3-70b-versatile',
-        maxTokens = 150,
-        temperature = 0.8,
-        timeout = TIMEOUTS.API_CALL,
-        fallbackModel = null
-    } = options;
-
-    if (!GROQ_API_KEY) {
-        logger.error('GROQ API key not configured');
-        return null;
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-    try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${GROQ_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model,
-                messages: [{ role: 'user', content: prompt }],
-                max_tokens: maxTokens,
-                temperature
-            }),
-            signal: controller.signal
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            logger.error('Groq API error', { status: response.status, error: errorText });
-            return null;
-        }
-
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content?.trim();
-        
-        if (content) {
-            logger.debug('Groq API success', { model, tokens: maxTokens, promptLength: prompt.length });
-        }
-
-        return content || null;
-    } catch (error) {
-        clearTimeout(timeoutId);
-        
-        if (error.name === 'AbortError') {
-            logger.warn('Groq API timeout', { timeout, model });
-        } else {
-            logger.error('Groq API exception', { error: error.message, model });
-        }
-        
-        // Try fallback model if primary failed
-        if (fallbackModel && fallbackModel !== model) {
-            logger.info('Attempting Groq fallback model', { primary: model, fallback: fallbackModel });
-            return await callGroqAPI(prompt, { ...options, model: fallbackModel, fallbackModel: null });
-        }
-        
-        return null;
-    }
-}
 
 /**
  * Calls OpenRouter API with timeout and error handling
@@ -204,7 +129,6 @@ function getErrorType(error) {
 }
 
 module.exports = {
-    callGroqAPI,
     callOpenRouterAPI,
     getErrorType
 };

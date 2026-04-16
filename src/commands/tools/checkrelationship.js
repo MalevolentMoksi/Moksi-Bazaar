@@ -1,10 +1,11 @@
 // src/commands/tools/checkrelationship.js - Nuanced, trend-aware
 const { SlashCommandBuilder } = require('discord.js');
 const { getUserContext, getRecentMemories, getSentimentHistory } = require('../../utils/db.js');
-const { callGroqAPI } = require('../../utils/apiHelpers');
+const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { createRelationshipEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
 const { isOwner, ATTITUDE_INSTRUCTIONS } = require('../../utils/constants');
+const logger = require('../../utils/logger');
 
 // ── TREND CALCULATION ───────────────────────────────────────────────────────
 function describeTrend(history) {
@@ -49,11 +50,18 @@ INSTRUCTIONS:
 - If a trend is provided: warming → let a trace of softening show, perhaps mild surprise at yourself; cooling → let quiet suspicion or distance show.
 - If Creator: affectionately annoyed or loyal.`;
 
-  const response = await callGroqAPI(prompt, { 
-    model: 'meta-llama/llama-3.3-8b-instruct',
-    maxTokens: 150, 
-    temperature: 0.8,
-    fallbackModel: 'meta-llama/llama-3.3-70b-versatile'
+  const response = await callOpenRouterAPI(
+    'xiaomi/mimo-v2-flash',
+    [{ role: 'user', content: prompt }],
+    {
+      maxTokens: 150,
+      temperature: 0.8,
+      timeout: 10000,
+      fallbackModel: 'google/gemma-4-31b-it'
+    }
+  ).catch(e => {
+    logger.error('Relationship analysis generation failed', { error: e.message });
+    return null;
   });
 
   if (response) return response;
