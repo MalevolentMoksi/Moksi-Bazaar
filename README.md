@@ -1,9 +1,10 @@
 # Moksi's Bazaar - Discord Bot Documentation
 
 ![Discord Bot](https://img.shields.io/badge/Discord-Bot-7289da?style=for-the-badge&logo=discord)
-![Node.js](https://img.shields.io/badge/Node.js-18-339933?style=for-the-badge&logo=node.js)
+![Node.js](https://img.shields.io/badge/Node.js-22-339933?style=for-the-badge&logo=node.js)
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?style=for-the-badge&logo=javascript)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-336791?style=for-the-badge&logo=postgresql)
+![OpenRouter](https://img.shields.io/badge/OpenRouter-API-FF6B6B?style=for-the-badge)
 
 Moksi's Bazaar is a feature-rich Discord bot built with Discord.js v14, offering various games, utilities, and interactive features centered around a virtual currency system. The bot provides entertainment through gambling games, AI conversation with personality adaptation, and productivity tools.
 
@@ -33,10 +34,11 @@ Moksi's Bazaar is a feature-rich Discord bot built with Discord.js v14, offering
 
 ### Key Statistics
 - **Created**: May 24, 2025
-- **Last Updated**: October 5, 2025
+- **Last Updated**: April 16, 2026 (API migration to OpenRouter)
 - **Size**: 22,787 KB
 - **Commands**: 20+ interactive commands
 - **Language**: JavaScript (Primary)
+- **AI Models**: DeepSeek Chat (conversation), Gemini 3.1 Flash-Lite (vision), MiMo-V2-Flash (sentiment)
 
 ## 🏗️ Architecture
 
@@ -307,9 +309,10 @@ for (const folder of functionFolders) {
 ## 📥 Installation & Setup
 
 ### Prerequisites
-- Node.js 22+
-- PostgreSQL database
+- Node.js 22+ (native fetch support required)
+- PostgreSQL 12+ database
 - Discord Bot Token
+- OpenRouter API Key (for AI features)
 - Git
 
 ### Local Development Setup
@@ -330,6 +333,8 @@ Create a `.env` file:
 ```env
 TOKEN=your_discord_bot_token
 DATABASE_URL=postgresql://username:password@localhost:5432/moksi_bazaar
+OPENROUTER_API_KEY=your_openrouter_api_key
+LANGUAGE_API_KEY=your_groq_api_key  # Optional: for shh command
 NODE_ENV=development
 ```
 
@@ -420,8 +425,9 @@ cmd = "npm start"
 | Variable | Required | Description | Default |
 |----------|----------|-------------|---------|
 | `TOKEN` | ✅ | Discord bot token | - |
-| `DATABASE_URL` | ✅ | PostgreSQL connection string | - |
-| `NODE_ENV` | ❌ | Environment mode | `development` |
+| `DATABASE_URL` | ✅ | PostgreSQL connection string | - || `OPENROUTER_API_KEY` | ✅ | OpenRouter API key (AI features) | - |
+| `LANGUAGE_API_KEY` | ❌ | Groq API key (shh command) | - |
+| `CLIENT_ID` | ❌ | Discord application ID | Auto-fetched || `NODE_ENV` | ❌ | Environment mode | `development` |
 | `PORT` | ❌ | HTTP server port | `3000` |
 
 ## 🔄 Development Workflow
@@ -546,14 +552,61 @@ The bot integrates with several external APIs and services:
 - **Slash Commands**: Modern command interface
 - **Embeds**: Rich message formatting
 - **Reactions**: Interactive button responses
+- **Gateway Intents**: Guilds, Guild Messages, Message Content
+
+#### AI Models via OpenRouter (April 2026 Migration)
+All AI features now use OpenRouter for cost optimization and model variety:
+
+**Conversation AI**
+- **Model**: DeepSeek Chat (`deepseek/deepseek-chat`)
+- **Purpose**: Main personality-driven conversations
+- **Features**: Cache control for 20% cost savings on large system prompts
+- **Cost**: $0.14/$0.28 per 1M tokens
+
+**Vision & Image Analysis**
+- **Primary**: Gemini 3.1 Flash-Lite (`google/gemini-3.1-flash-lite-preview`)
+  - 2.5X faster TTFT, 45% faster output than Gemini 2.0
+  - Cost: $0.25/$1.50 per 1M tokens
+  - Timeout: 10s with automatic retry (exponential backoff)
+- **Fallback**: Qwen 2.5 VL 7B (`qwen/qwen-2.5-vl-7b-instruct`)
+  - Excellent for text/meme detection in images
+  - Cost: $0.12/$0.36 per 1M tokens
+  - Timeout: 8s
+
+**Sentiment Analysis**
+- **Model**: MiMo-V2-Flash (`xiaomi/mimo-v2-flash`)
+- **Purpose**: Scoring message sentiment directed at bot
+- **Output**: JSON with sentiment score (-1.0 to 1.0) and reasoning
+- **Cost**: $0.09/$0.29 per 1M tokens (cheapest for this task)
+- **Usage**: Updates user attitude levels for personality adaptation
 
 #### Database Services
-- **PostgreSQL**: Primary data storage
-- **Connection Pooling**: Efficient database connections
-- **Migrations**: Schema version management
+- **PostgreSQL 12+**: Primary data storage with connection pooling
+- **Automatic Cleanup**: Conversation memories auto-prune at 1000+ rows
+- **Media Cache**: Reduces API calls and costs (~60-70% hit rate)
 
 #### Media Processing
+- **SHA256 Hashing**: Media IDs combine URL + messageId + fileName
+- **Fallback Strategy**: Silent failures with cache retention
 - **WebSocket**: Real-time communication for randomyt command
+
+### API Performance & Optimization
+
+**Cache Strategy**
+- Image analysis results cached in `media_cache` table
+- System prompts cached via OpenRouter ephemeral cache
+- Hit rates typically save 20-60% on API costs
+
+**Error Handling & Retry Logic**
+- Automatic exponential backoff for image analysis (100ms, 200ms, 400ms)
+- Fallback models for transient failures
+- Rate limit handling (429) with backoff
+
+**Cost Optimization**
+- Only newest message images analyzed (not entire history)
+- Media deduplication via SHA256 hashing
+- Cache control on large system prompts
+- Model selection based on task (cheaper models for sentiment)
 
 ### Custom API Endpoints
 
@@ -571,7 +624,8 @@ GET /stats
 Response: { 
   "guilds": 15, 
   "users": 1250, 
-  "commands_executed": 5432 
+  "commands_executed": 5432,
+  "ai_models": "DeepSeek, Gemini 3.1, MiMo-V2"
 }
 ```
 
@@ -641,12 +695,34 @@ For support and questions:
 | **Dependencies** | 12 production, 2 development |
 | **Docker Image Size** | ~200MB |
 | **Supported Users** | Unlimited |
+| **AI Models** | 4 (DeepSeek, Gemini, Qwen, MiMo) |
+| **Avg API Cost/Request** | $0.001-0.005 (with cache optimization) |
 
 ## 🔮 Future Roadmap
 
 - [ ] Web dashboard for bot management
 - [ ] Advanced analytics and reporting
-- [ ] Better AI context comprehension
+- [ ] Multi-language sentiment detection
+- [ ] Extended conversation memory (beyond current 50-message limit)
+- [ ] Custom model selection per guild
+- [ ] API cost dashboard and analytics
+
+## 📝 Recent Changes (April 2026)
+
+- **API Migration**: All AI calls migrated from multiple providers to OpenRouter
+- **Model Updates**: 
+  - Vision: Gemini 2.0 → Gemini 3.1 Flash-Lite (2.5X faster)
+  - Sentiment: Added MiMo-V2-Flash for cost efficiency
+  - Conversation: DeepSeek Chat with cache control
+- **Performance**: Cache control added to system prompts (20% cost reduction)
+- **Retry Logic**: Exponential backoff for transient failures
+- **Fallback Models**: Qwen VL for vision backup
+
+## ⚠️ Breaking Changes
+
+- `callGroqAPI()` deprecated (April 2026) - use `callOpenRouterAPI()` instead
+- `LANGUAGE_API_KEY` still supported for legacy features (shh command)
+- All new features require `OPENROUTER_API_KEY`
 
 ---
 
