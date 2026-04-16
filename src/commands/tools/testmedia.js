@@ -42,10 +42,20 @@ module.exports = {
           // embeds
           msg.embeds.forEach(e => {
             const embedType = String(e.type || '').toLowerCase();
-            const embedUrl = String(e.url || '').toLowerCase();
-            const gifLikeEmbed = embedType === 'gifv' || /tenor\.com|giphy\.com/.test(embedUrl);
+            const candidateUrls = [
+              e.url,
+              e.video?.url,
+              e.video?.proxyURL,
+              e.image?.url,
+              e.image?.proxyURL,
+              e.thumbnail?.url,
+              e.thumbnail?.proxyURL
+            ].filter(Boolean).map(u => String(u).toLowerCase());
+            const gifLikeEmbed = embedType === 'gifv'
+              || candidateUrls.some(u => /tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com/.test(u))
+              || candidateUrls.some(u => u.includes('.gif') || u.includes('.webm') || u.includes('.mp4'));
 
-            if (gifLikeEmbed && e.video?.url) {
+            if (gifLikeEmbed && (e.video?.url || e.video?.proxyURL)) {
               mediaList.push({ icon: '🎞️', name: 'gifv/video' });
               return;
             }
@@ -73,7 +83,7 @@ module.exports = {
           let descriptions = [];
           try {
             // Force analysis = true for the test command
-            descriptions = await processMediaInMessage(msg, true);
+            descriptions = await processMediaInMessage(msg, true, { forceReanalyze: true });
             
             // Check if descriptions actually contains text, if empty array it failed or was skipped
             if (descriptions.length > 0) {

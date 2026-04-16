@@ -381,6 +381,24 @@ function isGifMedia(url = '', fileName = '', contentType = '') {
         || urlLower.includes('.gif');
 }
 
+function isAnimatedEmbedCandidate(embed) {
+    const embedType = String(embed?.type || '').toLowerCase();
+    const candidates = [
+        embed?.url,
+        embed?.video?.url,
+        embed?.video?.proxyURL,
+        embed?.image?.url,
+        embed?.image?.proxyURL,
+        embed?.thumbnail?.url,
+        embed?.thumbnail?.proxyURL
+    ].filter(Boolean).map(v => String(v).toLowerCase());
+
+    const hasAnimatedHost = candidates.some(u => /tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com/.test(u));
+    const hasAnimatedExt = candidates.some(u => u.includes('.gif') || u.includes('.webm') || u.includes('.mp4'));
+
+    return embedType === 'gifv' || hasAnimatedHost || hasAnimatedExt;
+}
+
 async function buildGifStoryboard(gifUrl) {
     let inputPath = null;
     let storyboardPath = null;
@@ -421,7 +439,8 @@ async function analyzeGifWithOpenRouter(gifUrl, prompt) {
     }
 }
 
-async function processMediaInMessage(message, shouldAnalyze = true) {
+async function processMediaInMessage(message, shouldAnalyze = true, options = {}) {
+    const { forceReanalyze = false } = options;
     const activeMedia = await getSettingState('active_media_analysis');
     if (activeMedia === false) return [];
 
@@ -434,7 +453,7 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         const cached = await getCachedMediaDescription(mediaId);
         const needsGifReanalysis = Boolean(mediaMeta.isGif && cached && cached.media_type !== 'gif');
 
-        if (cached && !needsGifReanalysis) {
+        if (!forceReanalyze && cached && !needsGifReanalysis) {
             descriptions.push(`[${type}: ${cached.description}]`);
         } else if (shouldAnalyze) {
             // Your preferred concise prompt
@@ -490,12 +509,11 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         for (const embed of message.embeds) {
             if (embed.video && message.attachments.size > 0) continue;
 
-            const embedType = String(embed.type || '').toLowerCase();
-            const embedUrl = String(embed.url || '').toLowerCase();
-            const gifLikeEmbed = embedType === 'gifv' || /tenor\.com|giphy\.com/.test(embedUrl);
+            const gifLikeEmbed = isAnimatedEmbedCandidate(embed);
+            const preferredUrl = embed.video?.url || embed.video?.proxyURL;
 
-            if (gifLikeEmbed && embed.video?.url) {
-                await processUrl(embed.video.url, "Embedded GIF", "embed-gifv", { isGif: true });
+            if (gifLikeEmbed && preferredUrl) {
+                await processUrl(preferredUrl, "Embedded GIF", "embed-gifv", { isGif: true });
                 continue;
             }
 
