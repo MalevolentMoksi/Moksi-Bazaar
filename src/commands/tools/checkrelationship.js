@@ -49,7 +49,12 @@ INSTRUCTIONS:
 - If a trend is provided: warming → let a trace of softening show, perhaps mild surprise at yourself; cooling → let quiet suspicion or distance show.
 - If Creator: affectionately annoyed or loyal.`;
 
-  const response = await callGroqAPI(prompt, { maxTokens: 150, temperature: 0.8 });
+  const response = await callGroqAPI(prompt, { 
+    model: 'meta-llama/llama-3.3-8b-instruct',
+    maxTokens: 150, 
+    temperature: 0.8,
+    fallbackModel: 'meta-llama/llama-3.3-70b-versatile'
+  });
 
   if (response) return response;
 

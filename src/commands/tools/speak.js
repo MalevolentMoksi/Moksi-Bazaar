@@ -246,7 +246,7 @@ ${memoryText}`;
         ? `${askerName}: ${userRequest}`
         : `(${askerName} pinged you without saying anything — react to the chat log above)`;
 
-      // 6. API CALL
+      // 6. API CALL with context caching (system prompt is static, worth caching)
       const rawContent = await callOpenRouterAPI(
         'deepseek/deepseek-chat',
         [
@@ -255,7 +255,8 @@ ${memoryText}`;
         ],
         {
           maxTokens: 250,       // was 200 — avoids mid-sentence cut-offs
-          temperature: 0.85     // was 1.0 — less chaotic, still varied
+          temperature: 0.85,    // was 1.0 — less chaotic, still varied
+          cacheControl: true    // NEW: Enable caching for large system prompt (20% input cost savings on hits)
         }
       );
 

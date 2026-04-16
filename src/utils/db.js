@@ -238,9 +238,13 @@ async function getCachedMediaDescription(mediaId) {
     return null;
 }
 
-// PRIMARY: Gemini 2.0 Flash (Fast, Smart, ~$0.10/1M tokens)
-async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image in a concise way, focusing on the main subject.") {
+// PRIMARY: Gemini 3.1 Flash-Lite (2.5X faster TTFT, 45% faster output, $0.25/$1.50/1M, replaces deprecated Gemini 2.0)
+// FALLBACK: Qwen 2.5 VL 7B ($0.12/$0.36/1M) — excellent for text/memes, proven reliable
+// RETRY: Exponential backoff (100ms, 200ms, 400ms) for transient failures
+async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image in a concise way, focusing on the main subject.", attempt = 1) {
     if (!OPENROUTER_API_KEY) return null;
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_BASE = 100; // milliseconds
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 Seconds Max
@@ -256,8 +260,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             },
             signal: controller.signal,
             body: JSON.stringify({
-                // CHANGED: From free Llama to paid (but cheap) Gemini 2.0 Flash
-                model: 'google/gemini-2.0-flash-001', 
+                model: 'google/gemini-3.1-flash-lite-preview',
                 messages: [
                     {
                         role: 'user',
@@ -267,29 +270,55 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
                         ]
                     }
                 ],
-                max_tokens: 300 // Increased slightly for better detail
+                max_tokens: 300
             })
         });
 
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-             // If Gemini fails, try Qwen
-             return await analyzeImageFallback(imageUrl, prompt);
+            // HTTP error — try fallback
+            logger.warn('[MEDIA] Gemini HTTP error, attempting fallback', { status: response.status, attempt });
+            return await analyzeImageFallback(imageUrl, prompt);
         }
 
         const data = await response.json();
-        return data.choices?.[0]?.message?.content?.trim() || null;
+        const result = data.choices?.[0]?.message?.content?.trim();
+        if (result) {
+            logger.debug('[MEDIA] Gemini primary success', { urlLength: imageUrl.length });
+            return result;
+        }
+        
+        // Empty response — try fallback
+        logger.warn('[MEDIA] Gemini returned empty response, trying fallback');
+        return await analyzeImageFallback(imageUrl, prompt);
     } catch (e) {
         clearTimeout(timeoutId);
-        console.error("[MEDIA] Primary Analysis Failed, trying fallback...", e.message);
+        
+        // Retry logic for transient errors (network, timeout, etc.)
+        if (attempt < MAX_ATTEMPTS && (e.name === 'AbortError' || e.message.includes('fetch'))) {
+            const backoffMs = BACKOFF_BASE * Math.pow(2, attempt - 1); // 100ms, 200ms, 400ms
+            logger.warn('[MEDIA] Transient error, retrying Gemini', { attempt, nextAttemptMs: backoffMs, error: e.message });
+            await new Promise(resolve => setTimeout(resolve, backoffMs));
+            return await analyzeImageWithOpenRouter(imageUrl, prompt, attempt + 1);
+        }
+        
+        // Failed after retries — fall through to fallback
+        logger.error('[MEDIA] Gemini failed after retries, trying fallback', { error: e.message });
         return await analyzeImageFallback(imageUrl, prompt);
     }
 }
 
-// FALLBACK: Qwen 2.5 VL 7B (Very good at reading text/memes, ~$0.20/1M tokens)
+// FALLBACK: Qwen 2.5 VL 7B (excellent for text/memes, proven reliable, $0.12/$0.36/1M)
 async function analyzeImageFallback(imageUrl, prompt) {
+    const FALLBACK_TIMEOUT = 8000; // Slightly shorter timeout than primary
+    
     try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), FALLBACK_TIMEOUT);
+        
+        logger.debug('[MEDIA] Qwen fallback attempt', { urlLength: imageUrl.length });
+        
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -298,6 +327,7 @@ async function analyzeImageFallback(imageUrl, prompt) {
                 'HTTP-Referer': 'https://discord.com',
                 'X-Title': 'Cooler Moksi Media Fallback',
             },
+            signal: controller.signal,
             body: JSON.stringify({
                 model: 'qwen/qwen-2.5-vl-7b-instruct', 
                 messages: [
@@ -312,10 +342,25 @@ async function analyzeImageFallback(imageUrl, prompt) {
                 max_tokens: 200
             })
         });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            logger.warn('[MEDIA] Qwen HTTP error', { status: response.status });
+            return null;
+        }
+        
         const data = await response.json();
-        return data.choices?.[0]?.message?.content?.trim() || null;
+        const result = data.choices?.[0]?.message?.content?.trim();
+        if (result) {
+            logger.info('[MEDIA] Qwen fallback success');
+            return result;
+        }
+        
+        logger.warn('[MEDIA] Qwen returned empty result');
+        return null;
     } catch (e) {
-        console.error("[MEDIA] Fallback Analysis Failed:", e.message);
+        logger.error('[MEDIA] Qwen fallback exception', { error: e.message });
         return null;
     }
 }
@@ -410,6 +455,9 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
 }
 
 // ── SENTIMENT & RELATIONSHIP ────────────────────────────────────────────────
+// PRIMARY: MiMo-V2-Flash ($0.09/$0.29/M) — cost-efficient JSON scoring
+// FALLBACK 1: Groq Llama 3.3 8B ($0.05/$0.08/M) — lightweight dense model
+// FALLBACK 2: DeepSeek V3 ($0.32/$0.89/M) — full reasoning fallback (safe but expensive)
 async function analyzeMessageSentiment(userMessage, conversationContext) {
     if (!OPENROUTER_API_KEY) return { sentiment: 0, reasoning: 'No API' };
 
@@ -424,7 +472,51 @@ Rules:
 - Clamp to [-1.0, 1.0].
 Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
 
+    // Try MiMo-V2-Flash first (cheapest, native JSON mode, reasoning toggle)
     try {
+        logger.debug('Sentiment: Attempting MiMo-V2-Flash primary', { promptLength: prompt.length });
+        const { callOpenRouterAPI } = require('./apiHelpers');
+        const result = await callOpenRouterAPI('xiaomi/mimo-v2-flash', [
+            { role: 'system', content: 'Output JSON only.' },
+            { role: 'user', content: prompt }
+        ], {
+            maxTokens: 100,
+            temperature: 0.1,
+            timeout: 8000
+        });
+        if (result) {
+            const parsed = JSON.parse(result);
+            logger.info('Sentiment: MiMo-V2-Flash success', { sentiment: parsed.sentiment });
+            return parsed;
+        }
+    } catch (e) {
+        logger.warn('Sentiment: MiMo-V2-Flash failed', { error: e.message });
+    }
+
+    // Fallback 1: Groq Llama 3.3 8B (cheaper than 70B, same family)
+    try {
+        logger.debug('Sentiment: Attempting Groq Llama 3.3 8B fallback');
+        const { callOpenRouterAPI } = require('./apiHelpers');
+        const result = await callOpenRouterAPI('meta-llama/llama-3.3-8b-instruct', [
+            { role: 'system', content: 'Output JSON only.' },
+            { role: 'user', content: prompt }
+        ], {
+            maxTokens: 100,
+            temperature: 0.1,
+            timeout: 8000
+        });
+        if (result) {
+            const parsed = JSON.parse(result);
+            logger.info('Sentiment: Groq 8B fallback success', { sentiment: parsed.sentiment });
+            return parsed;
+        }
+    } catch (e) {
+        logger.warn('Sentiment: Groq 8B fallback failed', { error: e.message });
+    }
+
+    // Fallback 2: DeepSeek V3 (proven reliable, use as final safety net)
+    try {
+        logger.debug('Sentiment: Attempting DeepSeek V3 final fallback');
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -434,7 +526,7 @@ Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
                 'X-Title': 'Cooler Moksi Sentiment',
             },
             body: JSON.stringify({
-                model: 'deepseek/deepseek-chat', 
+                model: 'deepseek/deepseek-chat',
                 messages: [
                     { role: 'system', content: 'Output JSON only.' },
                     { role: 'user', content: prompt }
@@ -445,10 +537,18 @@ Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
             })
         });
         const data = await response.json();
-        return JSON.parse(data.choices?.[0]?.message?.content);
+        const result = data.choices?.[0]?.message?.content;
+        if (result) {
+            const parsed = JSON.parse(result);
+            logger.info('Sentiment: DeepSeek V3 fallback success', { sentiment: parsed.sentiment });
+            return parsed;
+        }
     } catch (e) {
-        return { sentiment: 0, reasoning: "Error" };
+        logger.error('Sentiment: All models failed', { error: e.message });
     }
+
+    // Last resort: neutral
+    return { sentiment: 0, reasoning: 'All sentiment models failed; defaulting to neutral' };
 }
 
 async function getUserContext(userId) {
