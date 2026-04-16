@@ -95,6 +95,14 @@ async function svgToPng(svgString) {
     return sharp(Buffer.from(svgString)).png().toBuffer();
 }
 
+// Returns the output extension and a sharp format applicator matching the source format.
+// JPEG/WebP are re-encoded at quality 92 (high quality, good compression); everything else is PNG.
+function outputFormatFor(format) {
+    if (format === 'jpeg') return { ext: 'jpg', applyFormat: s => s.jpeg({ quality: 92 }) };
+    if (format === 'webp') return { ext: 'webp', applyFormat: s => s.webp({ quality: 92 }) };
+    return { ext: 'png', applyFormat: s => s.png() };
+}
+
 async function isAnimatedImage(inputPath) {
     try {
         const meta = await sharp(inputPath, { animated: true }).metadata();
@@ -138,27 +146,34 @@ async function getFrameRate(inputPath) {
 
 // Add a white caption bar above or below an image
 async function renderCaption(inputPath, text, position = 'bottom') {
-    const { width, height } = await sharp(inputPath).metadata();
-    const fontSize = Math.max(18, Math.floor(width * 0.065));
-    const { svg, svgH } = buildCaptionSVG(text, width, fontSize);
+    const { width, height, format } = await sharp(inputPath).metadata();
+    const { ext, applyFormat } = outputFormatFor(format);
+
+    const MAX_WIDTH = 2048;
+    const scale = width > MAX_WIDTH ? MAX_WIDTH / width : 1;
+    const outW = scale < 1 ? Math.round(width * scale) : width;
+    const outH = scale < 1 ? Math.round(height * scale) : height;
+
+    const fontSize = Math.max(18, Math.floor(outW * 0.065));
+    const { svg, svgH } = buildCaptionSVG(text, outW, fontSize);
 
     const captionBuf = await svgToPng(svg);
-    const outputPath  = createTempPath('png');
+    const imageInput = scale < 1 ? await sharp(inputPath).resize(outW, outH).toBuffer() : inputPath;
+    const outputPath = createTempPath(ext);
 
-    await sharp({
-        create: {
-            width,
-            height: height + svgH,
-            channels: 4,
-            background: { r: 255, g: 255, b: 255, alpha: 1 },
-        },
-    })
-    .composite([
-        { input: inputPath,  top: position === 'bottom' ? 0      : svgH,   left: 0 },
-        { input: captionBuf, top: position === 'bottom' ? height : 0,       left: 0 },
-    ])
-    .png()
-    .toFile(outputPath);
+    await applyFormat(
+        sharp({
+            create: {
+                width: outW,
+                height: outH + svgH,
+                channels: 4,
+                background: { r: 255, g: 255, b: 255, alpha: 1 },
+            },
+        }).composite([
+            { input: imageInput, top: position === 'bottom' ? 0    : svgH, left: 0 },
+            { input: captionBuf, top: position === 'bottom' ? outH : 0,    left: 0 },
+        ])
+    ).toFile(outputPath);
 
     return outputPath;
 }
@@ -171,14 +186,22 @@ async function renderCaptionVideo(inputPath, text, position = 'bottom') {
         throw new Error('Could not determine video dimensions.');
     }
 
-    const width = evenNumber(videoStream.width);
-    const height = evenNumber(videoStream.height);
+    const MAX_VIDEO_WIDTH = 1920;
+    const vScale = videoStream.width > MAX_VIDEO_WIDTH ? MAX_VIDEO_WIDTH / videoStream.width : 1;
+    const width = evenNumber(vScale < 1 ? videoStream.width * vScale : videoStream.width);
+    const height = evenNumber(vScale < 1 ? videoStream.height * vScale : videoStream.height);
     const fontSize = Math.max(18, Math.floor(width * 0.065));
     const { svg, svgH } = buildCaptionSVG(text, width, fontSize);
     const captionHeight = svgH % 2 === 0 ? svgH : svgH + 1;
 
     const captionPath = createTempPath('png');
     const outputPath = createTempPath('mp4');
+
+    const sourceBps = parseInt(videoStream.bit_rate || probeData.format?.bit_rate || 0, 10);
+    const maxrateKbps = sourceBps > 0 ? Math.min(Math.round(sourceBps * 1.15 / 1000), 6000) : 0;
+    const bitrateOpts = maxrateKbps > 0
+        ? [`-maxrate ${maxrateKbps}k`, `-bufsize ${maxrateKbps * 2}k`]
+        : [];
 
     try {
         const captionBuf = await svgToPng(svg);
@@ -202,6 +225,7 @@ async function renderCaptionVideo(inputPath, text, position = 'bottom') {
                     '-c:v libx264',
                     '-preset veryfast',
                     '-crf 20',
+                    ...bitrateOpts,
                     '-pix_fmt yuv420p',
                     '-movflags faststart',
                     '-c:a copy',
@@ -226,8 +250,10 @@ async function renderCaptionGif(inputPath, text, position = 'bottom') {
         throw new Error('Could not determine GIF dimensions.');
     }
 
-    const width = evenNumber(videoStream.width);
-    const height = evenNumber(videoStream.height);
+    const MAX_GIF_WIDTH = 1280;
+    const gScale = videoStream.width > MAX_GIF_WIDTH ? MAX_GIF_WIDTH / videoStream.width : 1;
+    const width = evenNumber(gScale < 1 ? videoStream.width * gScale : videoStream.width);
+    const height = evenNumber(gScale < 1 ? videoStream.height * gScale : videoStream.height);
     const fontSize = Math.max(18, Math.floor(width * 0.065));
     const { svg, svgH } = buildCaptionSVG(text, width, fontSize);
     const captionHeight = svgH % 2 === 0 ? svgH : svgH + 1;
@@ -280,25 +306,34 @@ async function renderCaptionGif(inputPath, text, position = 'bottom') {
 
 // Overlay classic Impact meme text (top and/or bottom) onto an image
 async function renderMeme(inputPath, topText, bottomText) {
-    const { width, height } = await sharp(inputPath).metadata();
-    const fontSize = Math.max(18, Math.floor(width * 0.07));
+    const { width, height, format } = await sharp(inputPath).metadata();
+    const { ext, applyFormat } = outputFormatFor(format);
+
+    const MAX_WIDTH = 2048;
+    const scale = width > MAX_WIDTH ? MAX_WIDTH / width : 1;
+    const outW = scale < 1 ? Math.round(width * scale) : width;
+    const outH = scale < 1 ? Math.round(height * scale) : height;
+
+    const fontSize = Math.max(18, Math.floor(outW * 0.07));
 
     const composites = [];
     if (topText) {
         composites.push({
-            input: await svgToPng(buildMemeTextSVG(topText, width, height, true, fontSize)),
+            input: await svgToPng(buildMemeTextSVG(topText, outW, outH, true, fontSize)),
             top: 0, left: 0,
         });
     }
     if (bottomText) {
         composites.push({
-            input: await svgToPng(buildMemeTextSVG(bottomText, width, height, false, fontSize)),
+            input: await svgToPng(buildMemeTextSVG(bottomText, outW, outH, false, fontSize)),
             top: 0, left: 0,
         });
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath).composite(composites).png().toFile(outputPath);
+    const outputPath = createTempPath(ext);
+    let base = sharp(inputPath);
+    if (scale < 1) base = base.resize(outW, outH);
+    await applyFormat(base.composite(composites)).toFile(outputPath);
     return outputPath;
 }
 
@@ -310,8 +345,10 @@ async function renderMemeGif(inputPath, topText, bottomText) {
         throw new Error('Could not determine GIF dimensions.');
     }
 
-    const width = evenNumber(videoStream.width);
-    const height = evenNumber(videoStream.height);
+    const MAX_GIF_WIDTH = 1280;
+    const gScale = videoStream.width > MAX_GIF_WIDTH ? MAX_GIF_WIDTH / videoStream.width : 1;
+    const width = evenNumber(gScale < 1 ? videoStream.width * gScale : videoStream.width);
+    const height = evenNumber(gScale < 1 ? videoStream.height * gScale : videoStream.height);
     const fontSize = Math.max(18, Math.floor(width * 0.07));
     const fps = await getFrameRate(inputPath);
 
