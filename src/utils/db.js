@@ -386,7 +386,8 @@ async function buildGifStoryboard(gifUrl) {
     let storyboardPath = null;
 
     try {
-        inputPath = await downloadToTemp(gifUrl, 'gif');
+        const sourceExt = extFromUrl(gifUrl) || 'gif';
+        inputPath = await downloadToTemp(gifUrl, sourceExt);
         storyboardPath = createTempPath('jpg');
 
         // Sample animation across time and tile frames into one image (3x2).
@@ -431,8 +432,9 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
     const processUrl = async (url, type, name, mediaMeta = {}) => {
         const mediaId = generateMediaId(url, null, name, messageId);
         const cached = await getCachedMediaDescription(mediaId);
+        const needsGifReanalysis = Boolean(mediaMeta.isGif && cached && cached.media_type !== 'gif');
 
-        if (cached) {
+        if (cached && !needsGifReanalysis) {
             descriptions.push(`[${type}: ${cached.description}]`);
         } else if (shouldAnalyze) {
             // Your preferred concise prompt
@@ -446,7 +448,13 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
                 descriptions.push(`[${type}: ${desc}]`);
                 await pool.query(
                     `INSERT INTO media_cache (media_id, description, media_type, original_url) 
-                     VALUES ($1, $2, $3, $4) ON CONFLICT (media_id) DO NOTHING`,
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (media_id)
+                     DO UPDATE SET
+                        description = EXCLUDED.description,
+                        media_type = EXCLUDED.media_type,
+                        original_url = EXCLUDED.original_url,
+                        last_accessed = CURRENT_TIMESTAMP`,
                     [mediaId, desc, mediaMeta.isGif ? 'gif' : 'image', url]
                 );
             } else {

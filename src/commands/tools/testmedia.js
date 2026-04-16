@@ -41,8 +41,23 @@ module.exports = {
           }
           // embeds
           msg.embeds.forEach(e => {
-            if (e.image?.url)     mediaList.push({ icon: '🖼️', name: 'image' });
-            if (e.thumbnail?.url) mediaList.push({ icon: '🖼️', name: 'thumbnail' });
+            const embedType = String(e.type || '').toLowerCase();
+            const embedUrl = String(e.url || '').toLowerCase();
+            const gifLikeEmbed = embedType === 'gifv' || /tenor\.com|giphy\.com/.test(embedUrl);
+
+            if (gifLikeEmbed && e.video?.url) {
+              mediaList.push({ icon: '🎞️', name: 'gifv/video' });
+              return;
+            }
+
+            if (e.image?.url) {
+              const imageUrl = String(e.image.url).toLowerCase();
+              mediaList.push({ icon: '🖼️', name: imageUrl.includes('.gif') ? 'gif image' : 'image' });
+            }
+            if (e.thumbnail?.url) {
+              const thumbUrl = String(e.thumbnail.url).toLowerCase();
+              mediaList.push({ icon: '🖼️', name: thumbUrl.includes('.gif') ? 'gif thumbnail' : 'thumbnail' });
+            }
           });
           // stickers
           msg.stickers.forEach(s => mediaList.push({ icon: '🎨', name: s.name }));
