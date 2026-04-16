@@ -1,7 +1,7 @@
 // src/commands/tools/remind.js
 // FIXED: Handles long-duration reminders beyond setTimeout's 24.8 day limit
 
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db');
 const { randomUUID } = require('crypto');
 
@@ -452,7 +452,7 @@ module.exports = {
                                 console.error('Error deleting reminder:', error);
                                 await buttonInteraction.reply({
                                     content: 'Failed to delete reminder. It may have already been removed.',
-                                    ephemeral: true
+                                    flags: MessageFlags.Ephemeral
                                 });
                             }
                         }

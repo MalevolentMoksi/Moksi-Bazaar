@@ -1,5 +1,5 @@
 // src/commands/tools/speak_settings.js - Refactored with New Utilities
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require('discord.js');
 const { pool, getSettingState } = require('../../utils/db.js');
 const { OWNER_REJECTION_JOKES, isOwner, EMBED_COLORS, TIMEOUTS } = require('../../utils/constants');
 const { handleCommandError } = require('../../utils/errorHandler');
@@ -44,7 +44,7 @@ module.exports = {
         // Humorous rejection for non-owners
         if (!isOwner(interaction.user.id)) {
             const msg = OWNER_REJECTION_JOKES[Math.floor(Math.random() * OWNER_REJECTION_JOKES.length)];
-            return await interaction.reply({ content: msg, ephemeral: true });
+            return await interaction.reply({ content: msg, flags: MessageFlags.Ephemeral });
         }
 
         // Fetch States
@@ -87,7 +87,7 @@ module.exports = {
             new ButtonBuilder().setCustomId('clear_cache').setLabel('Purge Vision Cache').setStyle(ButtonStyle.Danger)
         );
 
-        const reply = await interaction.reply({ embeds: [embed], components: [row1, row2], ephemeral: true });
+        const reply = await interaction.reply({ embeds: [embed], components: [row1, row2], flags: MessageFlags.Ephemeral });
 
         // Collector
         const collector = reply.createMessageComponentCollector({ time: TIMEOUTS.BUTTON_COLLECTOR });
@@ -119,7 +119,7 @@ module.exports = {
                 else if (i.customId === 'clear_cache') {
                     const { rowCount } = await pool.query('DELETE FROM media_cache');
                     logger.info('Media cache cleared', { deleted: rowCount, by: i.user.id });
-                    await i.reply({ content: `✅ Purged ${rowCount} cached items.`, ephemeral: true });
+                    await i.reply({ content: `✅ Purged ${rowCount} cached items.`, flags: MessageFlags.Ephemeral });
                 }
 
                 else if (i.customId === 'reset_user') {
@@ -148,9 +148,9 @@ module.exports = {
                         `, [uid]);
                         if (rowCount > 0) {
                             logger.info('User attitude reset', { userId: uid, by: interaction.user.id });
-                            await submitted.reply({ content: `✅ Reset <@${uid}> to neutral (sentiment 0).`, ephemeral: true });
+                            await submitted.reply({ content: `✅ Reset <@${uid}> to neutral (sentiment 0).`, flags: MessageFlags.Ephemeral });
                         } else {
-                            await submitted.reply({ content: `⚠️ No record found for <@${uid}>.`, ephemeral: true });
+                            await submitted.reply({ content: `⚠️ No record found for <@${uid}>.`, flags: MessageFlags.Ephemeral });
                         }
                     } catch (modalError) {
                         if (!modalError.message?.includes('time')) {
@@ -186,11 +186,11 @@ module.exports = {
                         if (i.customId === 'add_bl') {
                             await pool.query('INSERT INTO speak_blacklist (user_id) VALUES ($1) ON CONFLICT DO NOTHING', [uid]);
                             logger.info('User added to blacklist', { userId: uid, by: interaction.user.id });
-                            await submitted.reply({ content: `✅ <@${uid}> blocked.`, ephemeral: true });
+                            await submitted.reply({ content: `✅ <@${uid}> blocked.`, flags: MessageFlags.Ephemeral });
                         } else {
                             await pool.query('DELETE FROM speak_blacklist WHERE user_id = $1', [uid]);
                             logger.info('User removed from blacklist', { userId: uid, by: interaction.user.id });
-                            await submitted.reply({ content: `✅ <@${uid}> unblocked.`, ephemeral: true });
+                            await submitted.reply({ content: `✅ <@${uid}> unblocked.`, flags: MessageFlags.Ephemeral });
                         }
                     } catch (modalError) {
                         if (modalError.message?.includes('time')) {
@@ -202,7 +202,7 @@ module.exports = {
                 }
             } catch (error) {
                 logger.error('Settings button interaction error', { error: error.message, customId: i.customId });
-                await i.reply({ content: 'An error occurred. Check logs.', ephemeral: true }).catch(() => {});
+                await i.reply({ content: 'An error occurred. Check logs.', flags: MessageFlags.Ephemeral }).catch(() => {});
             }
         });
 

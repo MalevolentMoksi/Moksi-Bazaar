@@ -1,5 +1,5 @@
 // src/commands/games/tetris.js - Full Discord Tetris Implementation
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 
 // Tetris piece definitions with rotations
 const PIECES = {
@@ -437,13 +437,13 @@ module.exports = {
                 )
                 .setFooter({ text: 'Good luck! Try to clear lines by filling entire rows.' });
 
-            return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+            return interaction.reply({ embeds: [helpEmbed], flags: MessageFlags.Ephemeral });
         }
 
         let game = activeGames.get(gameKey);
 
         if (action === 'resume' && !game) {
-            return interaction.reply({ content: '❌ No active game found. Start a new game!', ephemeral: true });
+            return interaction.reply({ content: '❌ No active game found. Start a new game!', flags: MessageFlags.Ephemeral });
         }
 
         if (action === 'new' || !game) {

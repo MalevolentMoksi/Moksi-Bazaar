@@ -1,5 +1,5 @@
 // src/commands/media/imageEffects.js
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
 const img = require('../../utils/media/imageUtils');
 
@@ -101,7 +101,7 @@ const resize = {
         const width = interaction.options.getInteger('width');
         const height = interaction.options.getInteger('height');
         if (!width && !height) {
-            return interaction.reply({ content: 'Please provide at least one of `width` or `height`.', ephemeral: true });
+            return interaction.reply({ content: 'Please provide at least one of `width` or `height`.', flags: MessageFlags.Ephemeral });
         }
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,

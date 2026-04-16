@@ -1,5 +1,5 @@
 // ENHANCED SPEAK.JS - DeepSeek V3 + Relationship-Aware Context
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 
 const {
   isUserBlacklisted,
@@ -129,7 +129,7 @@ module.exports = {
 
     const thinkingTimeout = setTimeout(async () => {
       try {
-        await interaction.followUp({ content: '_thinking..._', ephemeral: true });
+        await interaction.followUp({ content: '_thinking..._', flags: MessageFlags.Ephemeral });
       } catch (e) { /* Ignore if interaction already completed */ }
     }, 2000);
 

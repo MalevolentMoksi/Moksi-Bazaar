@@ -1,5 +1,5 @@
 // src/commands/media/caption.js
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
 const {
     renderCaption,
@@ -65,7 +65,7 @@ const meme = {
         const topText = interaction.options.getString('top');
         const bottomText = interaction.options.getString('bottom');
         if (!topText && !bottomText) {
-            return interaction.reply({ content: 'Please provide at least `top` or `bottom` text.', ephemeral: true });
+            return interaction.reply({ content: 'Please provide at least `top` or `bottom` text.', flags: MessageFlags.Ephemeral });
         }
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,

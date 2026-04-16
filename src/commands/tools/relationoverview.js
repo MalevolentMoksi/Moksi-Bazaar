@@ -1,5 +1,5 @@
 // src/commands/tools/relationoverview.js - Refactored with New Utilities
-const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db.js');
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { createOverviewEmbed } = require('../../utils/embedBuilder');
@@ -156,7 +156,7 @@ module.exports = {
 
         collector.on('collect', async i => {
           if (i.user.id !== interaction.user.id) {
-            return i.reply({ content: 'This is not your menu!', ephemeral: true });
+            return i.reply({ content: 'This is not your menu!', flags: MessageFlags.Ephemeral });
           }
 
           if (i.customId === 'next_page') currentPage++;
