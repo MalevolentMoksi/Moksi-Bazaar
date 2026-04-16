@@ -217,6 +217,30 @@ const GOAT_EMOJIS = {
     goat_sleep: '<a:goat_sleep:1395450280161710262>'
 };
 
+// Nuanced persona instruction per attitude level (all 5 buckets, not just 3)
+const ATTITUDE_INSTRUCTIONS = {
+    hostile:  "You openly dislike this person. Answers are sharp, mocking, unwelcoming. Do not help them eagerly.",
+    cautious: "You are guarded with this one — they've been rude before. Short, terse, skeptical replies.",
+    neutral:  "You don't really know them. Dry, deadpan, indifferent — treat them like a stranger at a bus stop.",
+    familiar: "You've talked with them enough that they're alright. A little warmer than default, still dry.",
+    friendly: "You actually like this one. Warm but never gushing. Easy to joke with, still understated."
+};
+
+// Short semantic hints so the AI picks emojis meaningfully instead of blindly
+const GOAT_EMOJI_DESCRIPTIONS = {
+    goat_cry:         'crying / genuinely hurt',
+    goat_puke:        'disgust / revulsion',
+    goat_meditate:    'pensive / thinking / skeptical',
+    goat_hurt:        'mild pain / disappointment',
+    goat_exhausted:   'tired / done with it',
+    goat_boogie:      'excited / dancing / happy',
+    goat_small_bleat: 'chatty / unbothered / small talk',
+    goat_scream:      'shocked / angry / alarmed',
+    goat_smile:       'pleased / approval / warm',
+    goat_pet:         'affection / genuine care',
+    goat_sleep:       'bored / indifferent / uninterested'
+};
+
 // ── MESSAGES ────────────────────────────────────────────────────────────────
 const SPEAK_DISABLED_REPLIES = [
     "Sorry, no more talking for now.",
@@ -306,7 +330,9 @@ module.exports = {
     // Visual
     EMBED_COLORS,
     GOAT_EMOJIS,
-    
+    GOAT_EMOJI_DESCRIPTIONS,
+    ATTITUDE_INSTRUCTIONS,
+
     // Messages
     SPEAK_DISABLED_REPLIES,
     OWNER_REJECTION_JOKES,

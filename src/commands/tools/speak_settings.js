@@ -20,6 +20,21 @@ async function getMediaCacheStats() {
     return { totalCached: rows[0]?.total_cached || 0, cachedToday: rows[0]?.cached_today || 0 };
 }
 
+async function getMemoryStats() {
+    const { rows } = await pool.query(`
+        SELECT
+            (SELECT COUNT(*) FROM conversation_memories) AS total_memories,
+            (SELECT COUNT(*) FROM conversation_memories WHERE is_context_only = false) AS real_exchanges,
+            (SELECT COUNT(*) FROM user_preferences WHERE interaction_count > 0) AS tracked_users
+    `);
+    const r = rows[0] || {};
+    return {
+        totalMemories: Number(r.total_memories) || 0,
+        realExchanges: Number(r.real_exchanges) || 0,
+        trackedUsers:  Number(r.tracked_users)  || 0
+    };
+}
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('speak_settings')
@@ -33,11 +48,12 @@ module.exports = {
         }
 
         // Fetch States
-        const [activeSpeak, activeMedia, blacklist, mediaStats] = await Promise.all([
+        const [activeSpeak, activeMedia, blacklist, mediaStats, memoryStats] = await Promise.all([
             getSettingState('active_speak'),
             getSettingState('active_media_analysis'),
             getBlacklistSummary(),
-            getMediaCacheStats()
+            getMediaCacheStats(),
+            getMemoryStats()
         ]);
 
         // Build Embed
@@ -48,6 +64,7 @@ module.exports = {
                 { name: '🗣️ Speak System', value: activeSpeak ? '🟢 **ONLINE**' : '🔴 **OFFLINE**', inline: true },
                 { name: '👁️ Vision (OpenRouter)', value: activeMedia ? '🟢 **ONLINE**' : '🔴 **OFFLINE**', inline: true },
                 { name: '📦 Media Cache', value: `${mediaStats.totalCached} items (${mediaStats.cachedToday} new today)`, inline: false },
+                { name: '🧠 Memory', value: `${memoryStats.realExchanges} real / ${memoryStats.totalMemories} total | ${memoryStats.trackedUsers} users tracked`, inline: false },
                 { name: '🚫 Blacklist', value: `${blacklist.count} users`, inline: true }
             );
 
@@ -66,6 +83,7 @@ module.exports = {
         const row2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('add_bl').setLabel('Block User').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('rem_bl').setLabel('Unblock User').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('reset_user').setLabel('Reset User Attitude').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('clear_cache').setLabel('Purge Vision Cache').setStyle(ButtonStyle.Danger)
         );
 
@@ -102,6 +120,43 @@ module.exports = {
                     const { rowCount } = await pool.query('DELETE FROM media_cache');
                     logger.info('Media cache cleared', { deleted: rowCount, by: i.user.id });
                     await i.reply({ content: `✅ Purged ${rowCount} cached items.`, ephemeral: true });
+                }
+
+                else if (i.customId === 'reset_user') {
+                    const modalId = `modal_reset_${Date.now()}`;
+                    const modal = new ModalBuilder()
+                        .setCustomId(modalId)
+                        .setTitle('Reset User Attitude')
+                        .addComponents(new ActionRowBuilder().addComponents(
+                            new TextInputBuilder()
+                                .setCustomId('uid')
+                                .setLabel('User ID to reset to neutral')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(true)
+                        ));
+                    await i.showModal(modal);
+                    try {
+                        const submitted = await i.awaitModalSubmit({
+                            filter: m => m.customId === modalId,
+                            time: TIMEOUTS.MODAL_SUBMIT
+                        });
+                        const uid = submitted.fields.getTextInputValue('uid').trim();
+                        const { rowCount } = await pool.query(`
+                            UPDATE user_preferences
+                            SET sentiment_score = 0, attitude_level = 'neutral', last_sentiment_update = NOW(), updated_at = NOW()
+                            WHERE user_id = $1
+                        `, [uid]);
+                        if (rowCount > 0) {
+                            logger.info('User attitude reset', { userId: uid, by: interaction.user.id });
+                            await submitted.reply({ content: `✅ Reset <@${uid}> to neutral (sentiment 0).`, ephemeral: true });
+                        } else {
+                            await submitted.reply({ content: `⚠️ No record found for <@${uid}>.`, ephemeral: true });
+                        }
+                    } catch (modalError) {
+                        if (!modalError.message?.includes('time')) {
+                            logger.error('Reset modal error', { error: modalError.message });
+                        }
+                    }
                 }
 
                 else if (i.customId === 'add_bl' || i.customId === 'rem_bl') {

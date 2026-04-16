@@ -7,25 +7,20 @@ const { handleCommandError } = require('../../utils/errorHandler');
 
 // ── DATA GATHERING ────────────────────────────────────────────────────────────
 async function getAllUserRelationships(limit = 20) {
+  // Sort best-to-worst by sentiment (friendly → familiar → neutral → cautious → hostile),
+  // tiebreak by interaction volume. Previous ORDER BY put hostile above neutral which
+  // made the overview weirdly flag enemies before unknowns.
   const { rows } = await pool.query(`
-    SELECT 
-      user_id, 
-      display_name, 
-      interaction_count, 
+    SELECT
+      user_id,
+      display_name,
+      interaction_count,
       attitude_level,
       sentiment_score,
       last_seen
     FROM user_preferences
     WHERE interaction_count > 0
-    ORDER BY 
-      CASE attitude_level
-        WHEN 'familiar' THEN 5
-        WHEN 'friendly' THEN 4  
-        WHEN 'hostile' THEN 3
-        WHEN 'cautious' THEN 2
-        ELSE 1
-      END DESC,
-      interaction_count DESC
+    ORDER BY sentiment_score DESC, interaction_count DESC
     LIMIT $1
   `, [limit]);
 
@@ -44,31 +39,44 @@ async function getAllUserRelationships(limit = 20) {
 async function generateRelationshipSummary(relationships) {
   if (relationships.length === 0) return "i don't really know anyone yet.";
 
+  const countBy = lvl => relationships.filter(r => r.attitudeLevel === lvl).length;
   const stats = {
     total: relationships.length,
-    familiar: relationships.filter(r => r.attitudeLevel === 'familiar').length,
-    friendly: relationships.filter(r => r.attitudeLevel === 'friendly').length,
-    neutral: relationships.filter(r => r.attitudeLevel === 'neutral').length,
-    hostile: relationships.filter(r => r.attitudeLevel === 'hostile' || r.attitudeLevel === 'cautious').length,
+    friendly: countBy('friendly'),
+    familiar: countBy('familiar'),
+    neutral: countBy('neutral'),
+    cautious: countBy('cautious'),
+    hostile: countBy('hostile'),
     avgSentiment: relationships.reduce((sum, r) => sum + r.sentimentScore, 0) / relationships.length
   };
 
-  const topFriends = relationships.filter(r => r.attitudeLevel === 'familiar').slice(0, 3);
-  const enemies = relationships.filter(r => r.attitudeLevel === 'hostile').slice(0, 3);
+  // Favourites: friendly first, then familiar. Enemies: hostile first, then cautious.
+  const favourites = [
+    ...relationships.filter(r => r.attitudeLevel === 'friendly'),
+    ...relationships.filter(r => r.attitudeLevel === 'familiar')
+  ].slice(0, 3);
+  const enemies = [
+    ...relationships.filter(r => r.attitudeLevel === 'hostile'),
+    ...relationships.filter(r => r.attitudeLevel === 'cautious')
+  ].slice(0, 3);
 
-  const prompt = `Summarize Cooler Moksi's social life.
-Stats: ${stats.total} known users. ${stats.familiar} close friends. ${stats.hostile} enemies. Avg Sentiment: ${stats.avgSentiment.toFixed(2)}.
-Best Friends: ${topFriends.map(u => u.displayName).join(', ') || 'None'}.
-Enemies: ${enemies.map(u => u.displayName).join(', ') || 'None'}.
+  const overallMood = stats.avgSentiment >= 0.3 ? 'mostly warm'
+    : stats.avgSentiment <= -0.2 ? 'mostly cold'
+    : 'mixed';
 
-Write 2 sentences. Be cynical and casual.`;
+  const prompt = `Summarize Cooler Moksi's social life in 2 lowercase sentences. Match the tone to the actual data — if it's mostly grim, be grim; if surprisingly warm, let a trace of that through, reluctantly.
+Known users: ${stats.total}. Breakdown — friendly: ${stats.friendly}, familiar: ${stats.familiar}, neutral: ${stats.neutral}, cautious: ${stats.cautious}, hostile: ${stats.hostile}. Overall mood: ${overallMood}.
+Favourites: ${favourites.map(u => u.displayName).join(', ') || 'none'}.
+Enemies: ${enemies.map(u => u.displayName).join(', ') || 'none'}.
+No zoomer slang. No standard emojis. If mentioning names, use them naturally in a sentence.`;
 
   const response = await callGroqAPI(prompt, {
-    maxTokens: 100,
+    maxTokens: 110,
     temperature: 0.7
   });
 
-  return response || `i know ${stats.total} people. ${stats.familiar} are cool, the rest are testing my patience.`;
+  const warmCount = stats.friendly + stats.familiar;
+  return response || `i know ${stats.total} people. ${warmCount} are cool, the rest are testing my patience.`;
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────

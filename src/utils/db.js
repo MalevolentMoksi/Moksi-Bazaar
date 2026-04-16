@@ -6,6 +6,16 @@
 const { Pool, types } = require('pg');
 const crypto = require('crypto');
 const logger = require('./logger');
+const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY } = require('./constants');
+
+// Single source of truth for score → attitude level mapping
+function scoreToAttitudeLevel(score) {
+    if (score <= SENTIMENT_THRESHOLDS.HOSTILE_THRESHOLD)  return 'hostile';
+    if (score <= SENTIMENT_THRESHOLDS.CAUTIOUS_THRESHOLD) return 'cautious';
+    if (score >= SENTIMENT_THRESHOLDS.FRIENDLY_THRESHOLD) return 'friendly';
+    if (score >= SENTIMENT_THRESHOLDS.FAMILIAR_THRESHOLD) return 'familiar';
+    return 'neutral';
+}
 
 // Parse BigInts as integers
 types.setTypeParser(types.builtins.INT8, v => parseInt(v, 10));
@@ -326,7 +336,7 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
             descriptions.push(`[${type}: ${cached.description}]`);
         } else if (shouldAnalyze) {
             // Your preferred concise prompt
-            const prompt = "Describe this image in a concise way, focusing on the main subject.";
+            const prompt = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared — prioritize anything visually striking, emotionally notable, or that would naturally prompt a reaction.";
             
             const desc = await analyzeImageWithOpenRouter(url, prompt);
             if (desc) {
@@ -403,11 +413,16 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
 async function analyzeMessageSentiment(userMessage, conversationContext) {
     if (!OPENROUTER_API_KEY) return { sentiment: 0, reasoning: 'No API' };
 
-    const prompt = `Analyze the sentiment of the last message towards the bot.
-    CONTEXT:
-    ${conversationContext.slice(-800)}
-    MESSAGE: "${userMessage}"
-    Determine sentiment (-1.0 to 1.0). Be cynical. Return JSON: {"sentiment": 0.0, "reasoning": "..."}`;
+    const contextSlice = conversationContext.slice(-800).replace(/^[^\n]*\n/, '');
+    const prompt = `Analyze the sentiment of the last message as directed specifically at the bot — not the user's general mood or topic.
+CONTEXT:
+${contextSlice}
+MESSAGE: "${userMessage}"
+Rules:
+- Score only sentiment directed AT the bot. Venting, seeking help, or expressing emotions about unrelated topics should score near 0.
+- Examples: "haha you're actually funny" → 0.5 | "you're so annoying, shut up" → -0.8 | "my day was terrible, help me" → 0.0
+- Clamp to [-1.0, 1.0].
+Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
 
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -442,17 +457,29 @@ async function getUserContext(userId) {
         [userId]
     );
     if (rows.length === 0) return { isNewUser: true, attitudeLevel: 'neutral', sentimentScore: 0, interactionCount: 0 };
-    
+
     const data = rows[0];
     const lastUpdate = new Date(data.last_sentiment_update).getTime();
     const daysSince = (Date.now() - lastUpdate) / (1000 * 60 * 60 * 24);
-    
+
     let currentScore = parseFloat(data.sentiment_score);
-    if (daysSince > 3) currentScore = currentScore * 0.9; // Decay
+    let currentLevel = data.attitude_level;
+
+    // Persist decay so reads and writes never disagree (fire-and-forget)
+    if (daysSince > SENTIMENT_DECAY.DAYS_THRESHOLD) {
+        currentScore = currentScore * SENTIMENT_DECAY.DECAY_MULTIPLIER;
+        currentLevel = scoreToAttitudeLevel(currentScore);
+        pool.query(
+            `UPDATE user_preferences
+             SET sentiment_score = $1, attitude_level = $2, last_sentiment_update = NOW(), updated_at = NOW()
+             WHERE user_id = $3`,
+            [currentScore, currentLevel, userId]
+        ).catch(e => logger.warn('Sentiment decay persistence failed', { userId, error: e.message }));
+    }
 
     return {
         isNewUser: false,
-        attitudeLevel: data.attitude_level,
+        attitudeLevel: currentLevel,
         sentimentScore: currentScore,
         displayName: data.display_name,
         interactionCount: data.interaction_count || 0,
@@ -464,16 +491,14 @@ async function updateUserAttitudeWithAI(userId, userMessage, conversationContext
     const analysis = await analyzeMessageSentiment(userMessage, conversationContext);
     
     // Use provided userContext to eliminate N+1 query
-    let currentScore = userContext.sentimentScore ?? 0;
-    let impactFactor = Math.abs(analysis.sentiment) > 0.8 ? 0.2 : 0.1;
+    const currentScore = userContext.sentimentScore ?? 0;
+    const impactFactor = Math.abs(analysis.sentiment) > 0.8
+        ? SENTIMENT_THRESHOLDS.HIGH_IMPACT
+        : SENTIMENT_THRESHOLDS.LOW_IMPACT;
     let newScore = (currentScore * (1 - impactFactor)) + (analysis.sentiment * impactFactor);
     newScore = Math.max(-1, Math.min(1, newScore));
 
-    let newLevel = 'neutral';
-    if (newScore <= -0.6) newLevel = 'hostile';
-    else if (newScore <= -0.25) newLevel = 'cautious';
-    else if (newScore >= 0.6) newLevel = 'friendly';
-    else if (newScore >= 0.25) newLevel = 'familiar';
+    const newLevel = scoreToAttitudeLevel(newScore);
     
     await pool.query(`
         INSERT INTO user_preferences (user_id, interaction_count, attitude_level, sentiment_score, last_sentiment_update)
@@ -510,6 +535,24 @@ async function storeConversationMemory(userId, channelId, userMessage, botRespon
         `);
         logger.info('Cleaned up old conversation memories', { deleted: 200, remaining: rows[0].count - 200 });
     }
+}
+
+/**
+ * Returns chronological sentiment history for a user, oldest first.
+ * Used by checkrelationship/stats to compute trend (improving / declining).
+ * Excludes context-only rows so lurking doesn't skew the trendline.
+ */
+async function getSentimentHistory(userId, limit = 10) {
+    const { rows } = await pool.query(
+        `SELECT sentiment_score, timestamp FROM conversation_memories
+         WHERE user_id = $1 AND is_context_only = false AND sentiment_score IS NOT NULL
+         ORDER BY timestamp DESC LIMIT $2`,
+        [userId, limit]
+    );
+    return rows.reverse().map(r => ({
+        sentiment: parseFloat(r.sentiment_score),
+        timestamp: Number(r.timestamp)
+    }));
 }
 
 async function getRecentMemories(userId, limit = 5, options = {}) {
@@ -714,6 +757,8 @@ module.exports = {
     // Memory & Sentiment
     storeConversationMemory,
     getRecentMemories,
+    getSentimentHistory,
+    scoreToAttitudeLevel,
     // Duels (Persistent State)
     createPendingDuel,
     getPendingDuelsFor,

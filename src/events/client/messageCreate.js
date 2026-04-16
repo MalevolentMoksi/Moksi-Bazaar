@@ -27,6 +27,9 @@ module.exports = {
       options: {
         getString: (name) => (name === 'request' ? (requestText || null) : null),
       },
+      // Expose the original message so speak.js can detect reply-chain context
+      // (Discord slash commands have no native reply reference; mentions do).
+      _sourceMessage: message,
       deferred: false,
       replied: false,
       _lastReply: null,
