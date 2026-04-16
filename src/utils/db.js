@@ -5,8 +5,11 @@
 
 const { Pool, types } = require('pg');
 const crypto = require('crypto');
+const fs = require('fs');
 const logger = require('./logger');
 const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY } = require('./constants');
+const { downloadToTemp, createTempPath, cleanup, extFromUrl } = require('./media/tempFiles');
+const { runFFmpeg } = require('./media/ffmpegUtils');
 
 // Single source of truth for score → attitude level mapping
 function scoreToAttitudeLevel(score) {
@@ -365,6 +368,58 @@ async function analyzeImageFallback(imageUrl, prompt) {
     }
 }
 
+function isGifMedia(url = '', fileName = '', contentType = '') {
+    const ct = String(contentType || '').toLowerCase();
+    const name = String(fileName || '').toLowerCase();
+    const urlLower = String(url || '').toLowerCase();
+    const ext = extFromUrl(urlLower);
+
+    return ct === 'image/gif'
+        || ct.includes('gif')
+        || name.endsWith('.gif')
+        || ext === 'gif'
+        || urlLower.includes('.gif');
+}
+
+async function buildGifStoryboard(gifUrl) {
+    let inputPath = null;
+    let storyboardPath = null;
+
+    try {
+        inputPath = await downloadToTemp(gifUrl, 'gif');
+        storyboardPath = createTempPath('jpg');
+
+        // Sample animation across time and tile frames into one image (3x2).
+        await runFFmpeg(inputPath, storyboardPath, cmd => {
+            cmd
+                .videoFilters('fps=2,scale=320:-1:flags=lanczos,tile=3x2')
+                .outputOptions(['-frames:v 1']);
+        });
+
+        return { inputPath, storyboardPath };
+    } catch (e) {
+        logger.warn('[MEDIA] GIF storyboard generation failed', { error: e.message });
+        await cleanup(inputPath, storyboardPath);
+        return null;
+    }
+}
+
+async function analyzeGifWithOpenRouter(gifUrl, prompt) {
+    const storyboard = await buildGifStoryboard(gifUrl);
+    if (!storyboard?.storyboardPath) {
+        return await analyzeImageWithOpenRouter(gifUrl, prompt);
+    }
+
+    try {
+        const storyboardBuffer = await fs.promises.readFile(storyboard.storyboardPath);
+        const storyboardDataUrl = `data:image/jpeg;base64,${storyboardBuffer.toString('base64')}`;
+        const gifPrompt = `${prompt}\n\nThis source is an animated GIF. The attached image is a storyboard made of sampled frames in timeline order (left-to-right, top-to-bottom). Describe both scene content and the likely motion/event progression.`;
+        return await analyzeImageWithOpenRouter(storyboardDataUrl, gifPrompt);
+    } finally {
+        await cleanup(storyboard.inputPath, storyboard.storyboardPath);
+    }
+}
+
 async function processMediaInMessage(message, shouldAnalyze = true) {
     const activeMedia = await getSettingState('active_media_analysis');
     if (activeMedia === false) return [];
@@ -373,7 +428,7 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
     const messageId = message.id || Date.now().toString();
 
     // Helper to process a URL
-    const processUrl = async (url, type, name) => {
+    const processUrl = async (url, type, name, mediaMeta = {}) => {
         const mediaId = generateMediaId(url, null, name, messageId);
         const cached = await getCachedMediaDescription(mediaId);
 
@@ -382,14 +437,17 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         } else if (shouldAnalyze) {
             // Your preferred concise prompt
             const prompt = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared — prioritize anything visually striking, emotionally notable, or that would naturally prompt a reaction.";
-            
-            const desc = await analyzeImageWithOpenRouter(url, prompt);
+
+            const desc = mediaMeta.isGif
+                ? await analyzeGifWithOpenRouter(url, prompt)
+                : await analyzeImageWithOpenRouter(url, prompt);
+
             if (desc) {
                 descriptions.push(`[${type}: ${desc}]`);
                 await pool.query(
                     `INSERT INTO media_cache (media_id, description, media_type, original_url) 
                      VALUES ($1, $2, $3, $4) ON CONFLICT (media_id) DO NOTHING`,
-                    [mediaId, desc, 'image', url]
+                    [mediaId, desc, mediaMeta.isGif ? 'gif' : 'image', url]
                 );
             } else {
                 descriptions.push(`[${type} (Analysis Failed)]`);
@@ -404,7 +462,8 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         for (const [_, att] of message.attachments) {
             // Handle Images
             if (att.contentType?.startsWith('image/')) {
-                await processUrl(att.url, "Image Attachment", att.name);
+                const gifLike = isGifMedia(att.url, att.name, att.contentType);
+                await processUrl(att.url, gifLike ? "GIF Attachment" : "Image Attachment", att.name, { isGif: gifLike });
             }
             // Handle Videos (Try to find a thumbnail)
             else if (att.contentType?.startsWith('video/')) {
@@ -422,8 +481,20 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
     if (message.embeds?.length > 0) {
         for (const embed of message.embeds) {
             if (embed.video && message.attachments.size > 0) continue;
+
+            const embedType = String(embed.type || '').toLowerCase();
+            const embedUrl = String(embed.url || '').toLowerCase();
+            const gifLikeEmbed = embedType === 'gifv' || /tenor\.com|giphy\.com/.test(embedUrl);
+
+            if (gifLikeEmbed && embed.video?.url) {
+                await processUrl(embed.video.url, "Embedded GIF", "embed-gifv", { isGif: true });
+                continue;
+            }
+
             const url = embed.image?.url || embed.thumbnail?.url;
-            if (url) await processUrl(url, "Embedded Image", "embed");
+            if (url) {
+                await processUrl(url, gifLikeEmbed ? "Embedded GIF" : "Embedded Image", "embed", { isGif: gifLikeEmbed });
+            }
         }
     }
     
@@ -432,7 +503,7 @@ async function processMediaInMessage(message, shouldAnalyze = true) {
         for (const [_, s] of message.stickers) {
             // Format 1=PNG, 2=APNG, 4=GIF. (Format 3 is Lottie/JSON which AI cannot see).
             if (s.format === 1 || s.format === 2 || s.format === 4) {
-                 await processUrl(s.url, "Sticker", s.name);
+                  await processUrl(s.url, "Sticker", s.name, { isGif: s.format === 4 });
             } else {
                  // Fallback for Lottie stickers
                  descriptions.push(`[Sticker: ${s.name}]`);
