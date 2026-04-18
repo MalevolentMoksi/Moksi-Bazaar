@@ -223,8 +223,8 @@ async function removeUserFromBlacklist(userId) {
 
 // ── MEDIA ANALYSIS (LLAMA VISION) ───────────────────────────────────────────
 
-function generateMediaId(url, contentHash = null, fileName = '', messageId = '') {
-    const uniqueString = `${url}_${messageId}_${fileName}`;
+function generateMediaId(url, contentHash = null, fileName = '') {
+    const uniqueString = `${url}_${fileName}`;
     return crypto.createHash('sha256').update(uniqueString).digest('hex').substring(0, 16);
 }
 
@@ -432,7 +432,7 @@ async function analyzeGifWithOpenRouter(gifUrl, prompt) {
     try {
         const storyboardBuffer = await fs.promises.readFile(storyboard.storyboardPath);
         const storyboardDataUrl = `data:image/jpeg;base64,${storyboardBuffer.toString('base64')}`;
-        const gifPrompt = `${prompt}\n\nThis source is an animated GIF. The attached image is a storyboard made of sampled frames in timeline order (left-to-right, top-to-bottom). Describe both scene content and the likely motion/event progression.`;
+        const gifPrompt = `${prompt}\n\nThis is an animated GIF shown as a storyboard of equally-spaced frames in timeline order (left-to-right, top-to-bottom). Describe both the scene content and what changes across the frames — focus on the event or reaction being shown.`;
         return await analyzeImageWithOpenRouter(storyboardDataUrl, gifPrompt);
     } finally {
         await cleanup(storyboard.inputPath, storyboard.storyboardPath);
@@ -445,19 +445,15 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
     if (activeMedia === false) return [];
 
     const descriptions = [];
-    const messageId = message.id || Date.now().toString();
-
     // Helper to process a URL
     const processUrl = async (url, type, name, mediaMeta = {}) => {
-        const mediaId = generateMediaId(url, null, name, messageId);
+        const mediaId = generateMediaId(url, null, name);
         const cached = await getCachedMediaDescription(mediaId);
-        const needsGifReanalysis = Boolean(mediaMeta.isGif && cached && cached.media_type !== 'gif');
 
-        if (!forceReanalyze && cached && !needsGifReanalysis) {
+        if (!forceReanalyze && cached) {
             descriptions.push(`[${type}: ${cached.description}]`);
         } else if (shouldAnalyze) {
-            // Your preferred concise prompt
-            const prompt = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared — prioritize anything visually striking, emotionally notable, or that would naturally prompt a reaction.";
+            const prompt = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared — prioritize anything visually striking, emotionally notable, or culturally significant. Name any recognizable characters, memes, or public figures. If text is visible in the image, include it.";
 
             const desc = mediaMeta.isGif
                 ? await analyzeGifWithOpenRouter(url, prompt)

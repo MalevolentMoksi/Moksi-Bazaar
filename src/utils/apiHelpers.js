@@ -39,17 +39,18 @@ async function callOpenRouterAPI(model, messages, options = {}) {
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
+        // When caching is enabled, mark the system message as the cache prefix boundary.
+        // OpenRouter requires cache_control on the message object itself, not at body root.
+        const resolvedMessages = cacheControl
+            ? messages.map(msg => msg.role === 'system' ? { ...msg, cache_control: { type: 'ephemeral' } } : msg)
+            : messages;
+
         const body = {
             model,
-            messages,
+            messages: resolvedMessages,
             max_tokens: maxTokens,
             temperature
         };
-        
-        // Add cache control if enabled (for large system prompts)
-        if (cacheControl) {
-            body.cache_control = { type: 'ephemeral' };
-        }
         
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
