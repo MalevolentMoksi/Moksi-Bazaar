@@ -3,7 +3,7 @@
 const fs = require('fs');
 const sharp = require('sharp');
 const { createTempPath, cleanup } = require('./tempFiles');
-const { runFFmpeg, probeFile } = require('./ffmpegUtils');
+const { runFFmpeg, probeFile, mp4OutputOptions } = require('./ffmpegUtils');
 
 function escapeXml(s) {
     return String(s)
@@ -204,15 +204,13 @@ async function renderCaptionVideo(inputPath, text, position = 'bottom') {
     const captionPath = createTempPath('png');
     const outputPath = createTempPath('mp4');
 
-    const sourceBps = parseInt(videoStream.bit_rate || probeData.format?.bit_rate || 0, 10);
-    const maxrateKbps = sourceBps > 0 ? Math.min(Math.round(sourceBps * 1.15 / 1000), 6000) : 0;
-    const bitrateOpts = maxrateKbps > 0
-        ? [`-maxrate ${maxrateKbps}k`, `-bufsize ${maxrateKbps * 2}k`]
-        : [];
-
     try {
         const captionBuf = await svgToPng(svg);
         await fs.promises.writeFile(captionPath, captionBuf);
+        const outputOptions = await mp4OutputOptions(inputPath, {
+            qualityMultiplier: 1.7,
+            maxVideoKbps: 3000,
+        });
 
         const padOffsetY = position === 'top' ? captionHeight : 0;
         const overlayY = position === 'top' ? '0' : 'H-h';
@@ -229,15 +227,8 @@ async function renderCaptionVideo(inputPath, text, position = 'bottom') {
                 .outputOptions([
                     '-map [v]',
                     '-map 0:a?',
-                    '-c:v libx264',
-                    '-preset veryfast',
-                    '-crf 20',
-                    ...bitrateOpts,
-                    '-pix_fmt yuv420p',
-                    '-movflags faststart',
-                    '-c:a aac',
-                    '-b:a 128k',
                     '-shortest',
+                    ...outputOptions,
                 ]);
         });
 
@@ -390,6 +381,10 @@ async function renderMemeVideo(inputPath, topText, bottomText) {
             .composite(overlays)
             .png()
             .toFile(overlayPath);
+        const outputOptions = await mp4OutputOptions(inputPath, {
+            qualityMultiplier: 1.7,
+            maxVideoKbps: 3000,
+        });
 
         await runFFmpeg(inputPath, outputPath, cmd => {
             cmd
@@ -401,14 +396,8 @@ async function renderMemeVideo(inputPath, topText, bottomText) {
                 .outputOptions([
                     '-map [v]',
                     '-map 0:a?',
-                    '-c:v libx264',
-                    '-preset veryfast',
-                    '-crf 20',
-                    '-pix_fmt yuv420p',
-                    '-movflags faststart',
-                    '-c:a aac',
-                    '-b:a 128k',
                     '-shortest',
+                    ...outputOptions,
                 ]);
         });
 

@@ -3,6 +3,7 @@ const fs = require('fs');
 const logger = require('../logger');
 const { downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS } = require('./tempFiles');
 const { mediaFilePayload } = require('./formatHelpers');
+const { ensureMediaSize } = require('./ffmpegUtils');
 
 const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24 MB — Discord bot upload limit is 25 MB
 
@@ -199,6 +200,12 @@ async function handleMediaCommand(interaction, {
         outputPath = await processFn(inputPath, ext, { isImage, isVideo, isGifLike, mediaInfo });
 
         if (!outputPath) throw new Error('Processing produced no output file.');
+
+        const ensuredOutputPath = await ensureMediaSize(outputPath, MAX_FILE_SIZE);
+        if (ensuredOutputPath !== outputPath) {
+            await cleanup(outputPath);
+            outputPath = ensuredOutputPath;
+        }
 
         const stats = fs.statSync(outputPath);
         if (stats.size > MAX_FILE_SIZE) {

@@ -2,7 +2,7 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
 const { toFormat } = require('../../utils/media/imageUtils');
-const { runFFmpeg, videoToGif } = require('../../utils/media/ffmpegUtils');
+const { runFFmpeg, videoToGif, mp4OutputOptions } = require('../../utils/media/ffmpegUtils');
 const { createTempPath } = require('../../utils/media/tempFiles');
 
 const topng = {
@@ -93,17 +93,15 @@ const tomp4 = {
             invalidMediaMessage: 'This command supports videos and GIFs only.',
             processFn: async (inputPath) => {
                 const outputPath = createTempPath('mp4');
+                const outputOptions = await mp4OutputOptions(inputPath, {
+                    qualityMultiplier: 1.7,
+                    maxVideoKbps: 3000,
+                });
                 await runFFmpeg(inputPath, outputPath, cmd => {
                     cmd
                         .outputOptions([
                             '-vf scale=trunc(iw/2)*2:trunc(ih/2)*2', // ensure even dimensions
-                            '-c:v libx264',
-                            '-preset veryfast',
-                            '-crf 20',
-                            '-c:a aac',
-                            '-b:a 128k',
-                            '-movflags faststart',
-                            '-pix_fmt yuv420p',
+                            ...outputOptions,
                         ]);
                 });
                 return outputPath;

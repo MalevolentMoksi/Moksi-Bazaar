@@ -1,7 +1,7 @@
 // src/commands/media/videoEdit.js
 const { SlashCommandBuilder } = require('discord.js');
 const { handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp } = require('../../utils/media/mediaHelpers');
-const { runFFmpeg, hasAudio, atempoChain, loopVideo } = require('../../utils/media/ffmpegUtils');
+const { runFFmpeg, hasAudio, atempoChain, loopVideo, mp4OutputOptions, ensureMediaSize } = require('../../utils/media/ffmpegUtils');
 const { createTempPath } = require('../../utils/media/tempFiles');
 const { isGifInput, mediaFilePayload } = require('../../utils/media/formatHelpers');
 
@@ -18,16 +18,8 @@ function applyGifOutput(cmd) {
         ]);
 }
 
-function applyMp4Output(cmd) {
-    cmd.outputOptions([
-        '-c:v libx264',
-        '-preset veryfast',
-        '-crf 20',
-        '-pix_fmt yuv420p',
-        '-movflags faststart',
-        '-c:a aac',
-        '-b:a 128k',
-    ]);
+function applyMp4Output(cmd, outputOptions) {
+    cmd.outputOptions(outputOptions);
 }
 
 const reverse = {
@@ -47,6 +39,7 @@ const reverse = {
                 const gifInput = await isGifInput(inputPath, ext, context);
                 const outputPath = createTempPath(gifInput ? 'gif' : 'mp4');
                 const audio = !gifInput && await hasAudio(inputPath);
+                const outputOptions = gifInput ? null : await mp4OutputOptions(inputPath);
                 await runFFmpeg(inputPath, outputPath, cmd => {
                     cmd.videoFilters('reverse');
                     if (gifInput) {
@@ -56,7 +49,7 @@ const reverse = {
                     } else {
                         cmd.noAudio();
                     }
-                    if (!gifInput) applyMp4Output(cmd);
+                    if (!gifInput) applyMp4Output(cmd, outputOptions);
                 });
                 return outputPath;
             },
@@ -88,6 +81,9 @@ const speed = {
                 const gifInput = await isGifInput(inputPath, ext, context);
                 const outputPath = createTempPath(gifInput ? 'gif' : 'mp4');
                 const audio = !gifInput && await hasAudio(inputPath);
+                const outputOptions = gifInput
+                    ? null
+                    : await mp4OutputOptions(inputPath, { durationMultiplier: 1 / multiplier });
                 // setpts is inverse of speed: 0.5x speed = PTS*2
                 const pts = (1 / multiplier).toFixed(4);
                 await runFFmpeg(inputPath, outputPath, cmd => {
@@ -95,7 +91,7 @@ const speed = {
                     if (gifInput) applyGifOutput(cmd);
                     else if (audio) cmd.audioFilters(atempoChain(multiplier));
                     else cmd.noAudio();
-                    if (!gifInput) applyMp4Output(cmd);
+                    if (!gifInput) applyMp4Output(cmd, outputOptions);
                 });
                 return outputPath;
             },
@@ -126,11 +122,12 @@ const trim = {
             processFn: async (inputPath, ext, context) => {
                 const gifInput = await isGifInput(inputPath, ext, context);
                 const outputPath = createTempPath(gifInput ? 'gif' : 'mp4');
+                const outputOptions = gifInput ? null : await mp4OutputOptions(inputPath);
                 await runFFmpeg(inputPath, outputPath, cmd => {
                     // Output-side -ss/-to keeps accurate timestamps at the cost of decoding from start
                     cmd.outputOptions([`-ss ${start}`, `-to ${end}`]);
                     if (gifInput) applyGifOutput(cmd);
-                    else applyMp4Output(cmd);
+                    else applyMp4Output(cmd, outputOptions);
                 });
                 return outputPath;
             },
@@ -152,14 +149,9 @@ const mute = {
             invalidMediaMessage: 'This command supports videos only. GIFs do not have audio to remove.',
             processFn: async (inputPath) => {
                 const outputPath = createTempPath('mp4');
+                const outputOptions = await mp4OutputOptions(inputPath, { includeAudio: false });
                 await runFFmpeg(inputPath, outputPath, cmd => {
-                    cmd.noAudio().outputOptions([
-                        '-c:v libx264',
-                        '-preset veryfast',
-                        '-crf 20',
-                        '-pix_fmt yuv420p',
-                        '-movflags faststart',
-                    ]);
+                    cmd.noAudio().outputOptions(outputOptions);
                 });
                 return outputPath;
             },
@@ -248,9 +240,11 @@ const addaudio = {
         const videoPath = await downloadMediaToTemp(videoInfo);
         const audioPath = await downloadToTemp(audioAttachment.url, audioExt);
         const outputPath = createTempPath('mp4');
+        let sendPath = outputPath;
 
         try {
             const videoHasAudio = await hasAudio(videoPath);
+            const outputOptions = await mp4OutputOptions(videoPath, { forceAudio: true });
             await runFFmpeg(videoPath, outputPath, cmd => {
                 cmd
                     .input(audioPath)
@@ -261,27 +255,22 @@ const addaudio = {
                     )
                     .outputOptions([
                         '-map 0:v', '-map [a]',
-                        '-c:v libx264',
-                        '-preset veryfast',
-                        '-crf 20',
-                        '-pix_fmt yuv420p',
-                        '-c:a aac',
-                        '-b:a 128k',
                         '-shortest',
-                        '-movflags faststart',
+                        ...outputOptions,
                     ]);
             });
 
-            const stats = fs.statSync(outputPath);
+            sendPath = await ensureMediaSize(outputPath, 24 * 1024 * 1024);
+            const stats = fs.statSync(sendPath);
             if (stats.size > 24 * 1024 * 1024) {
                 return interaction.editReply('⚠️ The output file is too large to send (24 MB limit).');
             }
-            await interaction.editReply({ files: [mediaFilePayload(outputPath, interaction.commandName)] });
+            await interaction.editReply({ files: [mediaFilePayload(sendPath, interaction.commandName)] });
         } catch (err) {
             try { await interaction.editReply(`❌ Processing failed: ${err.message}`); } catch {}
             throw err;
         } finally {
-            await cleanup(videoPath, audioPath, outputPath);
+            await cleanup(videoPath, audioPath, outputPath, sendPath !== outputPath ? sendPath : null);
         }
     },
 };

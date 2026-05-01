@@ -1,7 +1,7 @@
 // src/utils/media/imageUtils.js
 const sharp = require('sharp');
 const { createTempPath } = require('./tempFiles');
-const { runFFmpeg } = require('./ffmpegUtils');
+const { runFFmpeg, mp4OutputOptions } = require('./ffmpegUtils');
 const { isGifInput, staticImageFormatForExt, applySharpFormat } = require('./formatHelpers');
 
 async function gifFilter(inputPath, filter, outputExt = 'gif') {
@@ -20,18 +20,16 @@ async function gifFilter(inputPath, filter, outputExt = 'gif') {
 
 async function videoFilter(inputPath, filter) {
     const outputPath = createTempPath('mp4');
+    const outputOptions = await mp4OutputOptions(inputPath, {
+        targetBytes: 16 * 1024 * 1024,
+        qualityMultiplier: 1.55,
+        maxVideoKbps: 2200,
+        maxAudioKbps: 80,
+    });
     await runFFmpeg(inputPath, outputPath, cmd => {
         cmd
             .videoFilters(`${filter},scale=ceil(iw/2)*2:ceil(ih/2)*2`)
-            .outputOptions([
-                '-c:v libx264',
-                '-preset veryfast',
-                '-crf 20',
-                '-pix_fmt yuv420p',
-                '-movflags faststart',
-                '-c:a aac',
-                '-b:a 128k',
-            ]);
+            .outputOptions(outputOptions);
     });
     return outputPath;
 }
