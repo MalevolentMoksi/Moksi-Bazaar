@@ -81,7 +81,15 @@ async function loopVideo(inputPath, outputPath, count) {
         await runFFmpeg(listPath, outputPath, cmd => {
             cmd
                 .inputOptions(['-f concat', '-safe 0'])
-                .outputOptions(['-c copy']);
+                .outputOptions([
+                    '-c:v libx264',
+                    '-preset veryfast',
+                    '-crf 20',
+                    '-pix_fmt yuv420p',
+                    '-movflags faststart',
+                    '-c:a aac',
+                    '-b:a 128k',
+                ]);
         });
     } finally {
         try { fs.unlinkSync(listPath); } catch {}

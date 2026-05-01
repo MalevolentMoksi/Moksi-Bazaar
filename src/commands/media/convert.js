@@ -97,6 +97,11 @@ const tomp4 = {
                     cmd
                         .outputOptions([
                             '-vf scale=trunc(iw/2)*2:trunc(ih/2)*2', // ensure even dimensions
+                            '-c:v libx264',
+                            '-preset veryfast',
+                            '-crf 20',
+                            '-c:a aac',
+                            '-b:a 128k',
                             '-movflags faststart',
                             '-pix_fmt yuv420p',
                         ]);

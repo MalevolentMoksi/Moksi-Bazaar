@@ -6,6 +6,7 @@ const {
     renderCaptionVideo,
     renderCaptionGif,
     renderMeme,
+    renderMemeVideo,
     renderMemeGif,
     isGifImage,
 } = require('../../utils/media/captionUtils');
@@ -51,9 +52,9 @@ const caption = {
 const meme = {
     data: new SlashCommandBuilder()
         .setName('meme')
-        .setDescription('Add classic Impact meme text to an image or GIF')
+        .setDescription('Add classic Impact meme text to an image, GIF, or video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image or GIF to meme-ify (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to meme-ify (optional: uses recent media if omitted)').setRequired(false)
         )
         .addStringOption(opt =>
             opt.setName('top').setDescription('Top text').setMaxLength(200)
@@ -68,11 +69,14 @@ const meme = {
             return interaction.reply({ content: 'Please provide at least `top` or `bottom` text.', flags: MessageFlags.Ephemeral });
         }
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
-            processFn: async (inputPath, ext, { isGifLike }) => {
+            allowImage: true, allowVideo: true,
+            processFn: async (inputPath, ext, { isVideo, isGifLike }) => {
                 const gifInput = isGifLike || ext === 'gif' || await isGifImage(inputPath);
                 if (gifInput) {
                     return renderMemeGif(inputPath, topText, bottomText);
+                }
+                if (isVideo) {
+                    return renderMemeVideo(inputPath, topText, bottomText);
                 }
                 return renderMeme(inputPath, topText, bottomText);
             },

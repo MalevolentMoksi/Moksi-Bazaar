@@ -6,16 +6,16 @@ const img = require('../../utils/media/imageUtils');
 const blur = {
     data: new SlashCommandBuilder()
         .setName('blur')
-        .setDescription('Apply a Gaussian blur to an image')
+        .setDescription('Apply a Gaussian blur to an image, GIF, or video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to blur (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to blur (optional: uses recent media if omitted)').setRequired(false)
         )
         .addNumberOption(opt =>
             opt.setName('amount').setDescription('Blur strength (default 5, max 100)').setMinValue(0.3).setMaxValue(100)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.blur(inputPath, interaction.options.getNumber('amount') ?? 5, ext, context),
         });
     },
@@ -24,13 +24,13 @@ const blur = {
 const invert = {
     data: new SlashCommandBuilder()
         .setName('invert')
-        .setDescription('Invert the colors of an image')
+        .setDescription('Invert the colors of an image, GIF, or video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to invert (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to invert (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.invert(inputPath, ext, context),
         });
     },
@@ -39,16 +39,16 @@ const invert = {
 const rotate = {
     data: new SlashCommandBuilder()
         .setName('rotate')
-        .setDescription('Rotate an image')
+        .setDescription('Rotate an image, GIF, or video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to rotate (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to rotate (optional: uses recent media if omitted)').setRequired(false)
         )
         .addIntegerOption(opt =>
             opt.setName('degrees').setDescription('Degrees to rotate clockwise (default 90)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.rotate(inputPath, interaction.options.getInteger('degrees') ?? 90, ext, context),
         });
     },
@@ -57,13 +57,13 @@ const rotate = {
 const flip = {
     data: new SlashCommandBuilder()
         .setName('flip')
-        .setDescription('Flip an image vertically (upside down)')
+        .setDescription('Flip an image, GIF, or video vertically')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to flip (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to flip (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.flip(inputPath, ext, context),
         });
     },
@@ -72,13 +72,13 @@ const flip = {
 const flop = {
     data: new SlashCommandBuilder()
         .setName('flop')
-        .setDescription('Flop an image horizontally (mirror)')
+        .setDescription('Flop an image, GIF, or video horizontally')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to flop (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to flop (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.flop(inputPath, ext, context),
         });
     },
@@ -87,9 +87,9 @@ const flop = {
 const resize = {
     data: new SlashCommandBuilder()
         .setName('resize')
-        .setDescription('Resize an image (preserves aspect ratio, shrinks only)')
+        .setDescription('Resize an image, GIF, or video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to resize (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to resize (optional: uses recent media if omitted)').setRequired(false)
         )
         .addIntegerOption(opt =>
             opt.setName('width').setDescription('Target width in pixels').setMinValue(1).setMaxValue(4096)
@@ -104,7 +104,7 @@ const resize = {
             return interaction.reply({ content: 'Please provide at least one of `width` or `height`.', flags: MessageFlags.Ephemeral });
         }
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.resize(inputPath, width, height, ext, context),
         });
     },
@@ -113,13 +113,13 @@ const resize = {
 const grayscale = {
     data: new SlashCommandBuilder()
         .setName('grayscale')
-        .setDescription('Convert an image to grayscale')
+        .setDescription('Convert an image, GIF, or video to grayscale')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to desaturate (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to desaturate (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.grayscale(inputPath, ext, context),
         });
     },
@@ -128,13 +128,13 @@ const grayscale = {
 const deepfry = {
     data: new SlashCommandBuilder()
         .setName('deepfry')
-        .setDescription('Apply the deep fry effect to an image')
+        .setDescription('Apply the deep fry effect to an image, GIF, or video')
         .addAttachmentOption(opt =>
-            opt.setName('media').setDescription('Image to deep fry (optional: uses recent media if omitted)').setRequired(false)
+            opt.setName('media').setDescription('Image, GIF, or video to deep fry (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
         await handleMediaCommand(interaction, {
-            allowImage: true, allowVideo: false,
+            allowImage: true, allowVideo: true,
             processFn: (inputPath, ext, context) => img.deepfry(inputPath, ext, context),
         });
     },

@@ -124,7 +124,8 @@ async function isGifImage(inputPath) {
 function evenNumber(n, fallback = 2) {
     const safe = Number.isFinite(n) ? Math.floor(n) : fallback;
     if (safe <= 0) return fallback;
-    return safe % 2 === 0 ? safe : safe - 1;
+    const even = safe % 2 === 0 ? safe : safe - 1;
+    return even > 0 ? even : fallback;
 }
 
 // Extract the frame rate (FPS) of an input video/GIF to preserve animation speed
@@ -234,7 +235,8 @@ async function renderCaptionVideo(inputPath, text, position = 'bottom') {
                     ...bitrateOpts,
                     '-pix_fmt yuv420p',
                     '-movflags faststart',
-                    '-c:a copy',
+                    '-c:a aac',
+                    '-b:a 128k',
                     '-shortest',
                 ]);
         });
@@ -343,6 +345,82 @@ async function renderMeme(inputPath, topText, bottomText) {
     return outputPath;
 }
 
+// Overlay top/bottom meme text on a video, preserving it as a video.
+async function renderMemeVideo(inputPath, topText, bottomText) {
+    const probeData = await probeFile(inputPath);
+    const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
+    if (!videoStream?.width || !videoStream?.height) {
+        throw new Error('Could not determine video dimensions.');
+    }
+
+    const MAX_VIDEO_WIDTH = 1920;
+    const vScale = videoStream.width > MAX_VIDEO_WIDTH ? MAX_VIDEO_WIDTH / videoStream.width : 1;
+    const width = evenNumber(vScale < 1 ? videoStream.width * vScale : videoStream.width);
+    const height = evenNumber(vScale < 1 ? videoStream.height * vScale : videoStream.height);
+    const fontSize = Math.max(18, Math.floor(width * 0.07));
+
+    const overlays = [];
+    if (topText) {
+        overlays.push({
+            input: await svgToPng(buildMemeTextSVG(topText, width, height, true, fontSize)),
+            top: 0,
+            left: 0,
+        });
+    }
+    if (bottomText) {
+        overlays.push({
+            input: await svgToPng(buildMemeTextSVG(bottomText, width, height, false, fontSize)),
+            top: 0,
+            left: 0,
+        });
+    }
+
+    const overlayPath = createTempPath('png');
+    const outputPath = createTempPath('mp4');
+
+    try {
+        await sharp({
+            create: {
+                width,
+                height,
+                channels: 4,
+                background: { r: 0, g: 0, b: 0, alpha: 0 },
+            },
+        })
+            .composite(overlays)
+            .png()
+            .toFile(overlayPath);
+
+        await runFFmpeg(inputPath, outputPath, cmd => {
+            cmd
+                .input(overlayPath)
+                .complexFilter([
+                    `[0:v]scale=${width}:${height}:flags=lanczos[scaled]`,
+                    '[scaled][1:v]overlay=0:0:format=auto[v]',
+                ])
+                .outputOptions([
+                    '-map [v]',
+                    '-map 0:a?',
+                    '-c:v libx264',
+                    '-preset veryfast',
+                    '-crf 20',
+                    '-pix_fmt yuv420p',
+                    '-movflags faststart',
+                    '-c:a aac',
+                    '-b:a 128k',
+                    '-shortest',
+                ]);
+        });
+
+        return outputPath;
+    } catch (err) {
+        await cleanup(outputPath);
+        throw err;
+    } finally {
+        await cleanup(overlayPath);
+    }
+}
+
 // Overlay top/bottom meme text on an animated GIF, preserving animation and quality.
 async function renderMemeGif(inputPath, topText, bottomText) {
     const probeData = await probeFile(inputPath);
@@ -431,6 +509,7 @@ module.exports = {
     renderCaptionVideo,
     renderCaptionGif,
     renderMeme,
+    renderMemeVideo,
     renderMemeGif,
     isAnimatedImage,
     isGifImage,

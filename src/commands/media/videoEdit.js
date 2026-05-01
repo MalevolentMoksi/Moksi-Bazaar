@@ -19,7 +19,15 @@ function applyGifOutput(cmd) {
 }
 
 function applyMp4Output(cmd) {
-    cmd.outputOptions(['-pix_fmt yuv420p', '-movflags faststart']);
+    cmd.outputOptions([
+        '-c:v libx264',
+        '-preset veryfast',
+        '-crf 20',
+        '-pix_fmt yuv420p',
+        '-movflags faststart',
+        '-c:a aac',
+        '-b:a 128k',
+    ]);
 }
 
 const reverse = {
@@ -145,7 +153,13 @@ const mute = {
             processFn: async (inputPath) => {
                 const outputPath = createTempPath('mp4');
                 await runFFmpeg(inputPath, outputPath, cmd => {
-                    cmd.noAudio().outputOptions(['-c:v copy']);
+                    cmd.noAudio().outputOptions([
+                        '-c:v libx264',
+                        '-preset veryfast',
+                        '-crf 20',
+                        '-pix_fmt yuv420p',
+                        '-movflags faststart',
+                    ]);
                 });
                 return outputPath;
             },
@@ -247,7 +261,13 @@ const addaudio = {
                     )
                     .outputOptions([
                         '-map 0:v', '-map [a]',
-                        '-c:v copy', '-shortest',
+                        '-c:v libx264',
+                        '-preset veryfast',
+                        '-crf 20',
+                        '-pix_fmt yuv420p',
+                        '-c:a aac',
+                        '-b:a 128k',
+                        '-shortest',
                         '-movflags faststart',
                     ]);
             });
