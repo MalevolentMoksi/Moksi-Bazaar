@@ -62,6 +62,7 @@ async function videoToGif(inputPath, outputPath, fps = 15, scale = 480) {
             ffmpeg(inputPath)
                 .input(palettePath)
                 .complexFilter(`fps=${fps},scale=${scale}:-1:flags=lanczos[x];[x][1:v]paletteuse`)
+                .outputOptions(['-an', '-loop 0'])
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
                 .save(outputPath);

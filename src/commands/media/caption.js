@@ -69,8 +69,8 @@ const meme = {
         }
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: async (inputPath, ext) => {
-                const gifInput = ext === 'gif' || await isGifImage(inputPath);
+            processFn: async (inputPath, ext, { isGifLike }) => {
+                const gifInput = isGifLike || ext === 'gif' || await isGifImage(inputPath);
                 if (gifInput) {
                     return renderMemeGif(inputPath, topText, bottomText);
                 }

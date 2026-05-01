@@ -16,7 +16,7 @@ const blur = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.blur(inputPath, interaction.options.getNumber('amount') ?? 5, ext),
+            processFn: (inputPath, ext, context) => img.blur(inputPath, interaction.options.getNumber('amount') ?? 5, ext, context),
         });
     },
 };
@@ -31,7 +31,7 @@ const invert = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.invert(inputPath, ext),
+            processFn: (inputPath, ext, context) => img.invert(inputPath, ext, context),
         });
     },
 };
@@ -49,7 +49,7 @@ const rotate = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.rotate(inputPath, interaction.options.getInteger('degrees') ?? 90, ext),
+            processFn: (inputPath, ext, context) => img.rotate(inputPath, interaction.options.getInteger('degrees') ?? 90, ext, context),
         });
     },
 };
@@ -64,7 +64,7 @@ const flip = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.flip(inputPath, ext),
+            processFn: (inputPath, ext, context) => img.flip(inputPath, ext, context),
         });
     },
 };
@@ -79,7 +79,7 @@ const flop = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.flop(inputPath, ext),
+            processFn: (inputPath, ext, context) => img.flop(inputPath, ext, context),
         });
     },
 };
@@ -105,7 +105,7 @@ const resize = {
         }
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.resize(inputPath, width, height, ext),
+            processFn: (inputPath, ext, context) => img.resize(inputPath, width, height, ext, context),
         });
     },
 };
@@ -120,7 +120,7 @@ const grayscale = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.grayscale(inputPath, ext),
+            processFn: (inputPath, ext, context) => img.grayscale(inputPath, ext, context),
         });
     },
 };
@@ -135,7 +135,7 @@ const deepfry = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: (inputPath, ext) => img.deepfry(inputPath, ext),
+            processFn: (inputPath, ext, context) => img.deepfry(inputPath, ext, context),
         });
     },
 };

@@ -2,10 +2,7 @@
 const sharp = require('sharp');
 const { createTempPath } = require('./tempFiles');
 const { runFFmpeg } = require('./ffmpegUtils');
-
-function isGifExt(ext) {
-    return String(ext || '').toLowerCase() === 'gif';
-}
+const { isGifInput, staticImageFormatForExt, applySharpFormat } = require('./formatHelpers');
 
 async function gifFilter(inputPath, filter, outputExt = 'gif') {
     const outputPath = createTempPath(outputExt);
@@ -21,12 +18,19 @@ async function gifFilter(inputPath, filter, outputExt = 'gif') {
     return outputPath;
 }
 
+async function writeStaticImage(pipeline, inputExt, formatOverrides = {}) {
+    const formatInfo = staticImageFormatForExt(inputExt);
+    const outputPath = createTempPath(formatInfo.ext);
+    await applySharpFormat(pipeline, formatInfo, formatOverrides).toFile(outputPath);
+    return outputPath;
+}
+
 // Convert an image to the specified format (png, jpeg, webp, gif, avif)
-async function toFormat(inputPath, format, options = {}, inputExt = '') {
+async function toFormat(inputPath, format, options = {}, inputExt = '', mediaContext = {}) {
     const outputExt = format === 'jpeg' ? 'jpg' : format;
     const outputPath = createTempPath(outputExt);
 
-    if (isGifExt(inputExt) && format === 'webp') {
+    if (await isGifInput(inputPath, inputExt, mediaContext) && format === 'webp') {
         await runFFmpeg(inputPath, outputPath, cmd => {
             cmd.outputOptions([
                 '-an',
@@ -43,8 +47,8 @@ async function toFormat(inputPath, format, options = {}, inputExt = '') {
     return outputPath;
 }
 
-async function resize(inputPath, width, height, ext = '') {
-    if (isGifExt(ext)) {
+async function resize(inputPath, width, height, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         if (width && height) {
             return gifFilter(inputPath, `scale=${width}:${height}:force_original_aspect_ratio=decrease`);
         }
@@ -56,91 +60,74 @@ async function resize(inputPath, width, height, ext = '') {
         }
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath, { animated: false })
-        .resize(width || null, height || null, { fit: 'inside', withoutEnlargement: true })
-        .png()
-        .toFile(outputPath);
-    return outputPath;
+    return writeStaticImage(
+        sharp(inputPath, { animated: false })
+            .resize(width || null, height || null, { fit: 'inside', withoutEnlargement: true }),
+        ext
+    );
 }
 
-async function rotate(inputPath, degrees, ext = '') {
-    if (isGifExt(ext)) {
+async function rotate(inputPath, degrees, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         const radians = `${degrees}*PI/180`;
         return gifFilter(inputPath, `rotate=${radians}:ow=rotw(${radians}):oh=roth(${radians}):fillcolor=black`);
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath, { animated: false })
-        .rotate(degrees)
-        .png()
-        .toFile(outputPath);
-    return outputPath;
+    return writeStaticImage(sharp(inputPath, { animated: false }).rotate(degrees), ext);
 }
 
-async function flip(inputPath, ext = '') {
-    if (isGifExt(ext)) {
+async function flip(inputPath, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         return gifFilter(inputPath, 'vflip');
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath, { animated: false }).flip().png().toFile(outputPath);
-    return outputPath;
+    return writeStaticImage(sharp(inputPath, { animated: false }).flip(), ext);
 }
 
-async function flop(inputPath, ext = '') {
-    if (isGifExt(ext)) {
+async function flop(inputPath, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         return gifFilter(inputPath, 'hflip');
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath, { animated: false }).flop().png().toFile(outputPath);
-    return outputPath;
+    return writeStaticImage(sharp(inputPath, { animated: false }).flop(), ext);
 }
 
-async function blur(inputPath, sigma, ext = '') {
-    if (isGifExt(ext)) {
+async function blur(inputPath, sigma, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         return gifFilter(inputPath, `gblur=sigma=${sigma}`);
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath, { animated: false }).blur(sigma).png().toFile(outputPath);
-    return outputPath;
+    return writeStaticImage(sharp(inputPath, { animated: false }).blur(sigma), ext);
 }
 
-async function invert(inputPath, ext = '') {
-    if (isGifExt(ext)) {
+async function invert(inputPath, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         return gifFilter(inputPath, 'negate');
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath, { animated: false }).negate({ alpha: false }).png().toFile(outputPath);
-    return outputPath;
+    return writeStaticImage(sharp(inputPath, { animated: false }).negate({ alpha: false }), ext);
 }
 
-async function grayscale(inputPath, ext = '') {
-    if (isGifExt(ext)) {
+async function grayscale(inputPath, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         return gifFilter(inputPath, 'hue=s=0');
     }
 
-    const outputPath = createTempPath('png');
-    await sharp(inputPath, { animated: false }).grayscale().png().toFile(outputPath);
-    return outputPath;
+    return writeStaticImage(sharp(inputPath, { animated: false }).grayscale(), ext);
 }
 
-async function deepfry(inputPath, ext = '') {
-    if (isGifExt(ext)) {
+async function deepfry(inputPath, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
         return gifFilter(inputPath, 'eq=saturation=4:contrast=1.45:brightness=0.04,unsharp=5:5:1.2:5:5:0,noise=alls=12:allf=t+u');
     }
 
     // Heavy saturation + sharpen + low-quality JPEG encoding = deep fried aesthetic
-    const outputPath = createTempPath('jpg');
-    await sharp(inputPath, { animated: false })
+    const friedBuffer = await sharp(inputPath, { animated: false })
         .modulate({ saturation: 4, brightness: 1.1 })
         .sharpen({ sigma: 2, m1: 1, m2: 5 })
         .jpeg({ quality: 1, chromaSubsampling: '4:2:0' })
-        .toFile(outputPath);
-    return outputPath;
+        .toBuffer();
+    return writeStaticImage(sharp(friedBuffer), ext);
 }
 
 // Get image dimensions

@@ -15,6 +15,7 @@ const topng = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
+            allowGifLikeVideo: false,
             processFn: async (inputPath, ext) => toFormat(inputPath, 'png', {}, ext),
         });
     },
@@ -30,6 +31,7 @@ const tojpg = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
+            allowGifLikeVideo: false,
             processFn: async (inputPath, ext) => toFormat(inputPath, 'jpeg', { quality: 90 }, ext),
         });
     },
@@ -45,7 +47,7 @@ const towebp = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            processFn: async (inputPath, ext) => toFormat(inputPath, 'webp', { quality: 90 }, ext),
+            processFn: async (inputPath, ext, context) => toFormat(inputPath, 'webp', { quality: 90 }, ext, context),
         });
     },
 };
@@ -87,6 +89,8 @@ const tomp4 = {
     async execute(interaction) {
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: true,
+            mediaPredicate: (mediaInfo) => mediaInfo.isVideo || mediaInfo.ext === 'gif' || mediaInfo.isGifLike,
+            invalidMediaMessage: 'This command supports videos and GIFs only.',
             processFn: async (inputPath) => {
                 const outputPath = createTempPath('mp4');
                 await runFFmpeg(inputPath, outputPath, cmd => {

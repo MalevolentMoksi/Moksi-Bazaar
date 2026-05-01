@@ -128,17 +128,23 @@ function evenNumber(n, fallback = 2) {
 }
 
 // Extract the frame rate (FPS) of an input video/GIF to preserve animation speed
+function parseFrameRate(rate, fallback = 15) {
+    if (!rate) return fallback;
+    if (String(rate).includes('/')) {
+        const [num, den] = String(rate).split('/').map(Number);
+        const value = den ? num / den : fallback;
+        return Number.isFinite(value) && value > 0 ? value : fallback;
+    }
+    const value = parseFloat(rate);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 async function getFrameRate(inputPath) {
     try {
         const probeData = await probeFile(inputPath);
         const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
         if (!videoStream) return 15;
-        const rFrameRate = videoStream.r_frame_rate;
-        if (rFrameRate && rFrameRate.includes('/')) {
-            const [num, den] = rFrameRate.split('/').map(Number);
-            return num / den;
-        }
-        return videoStream.avg_frame_rate ? parseFloat(videoStream.avg_frame_rate) : 15;
+        return parseFrameRate(videoStream.avg_frame_rate, parseFrameRate(videoStream.r_frame_rate));
     } catch {
         return 15;
     }

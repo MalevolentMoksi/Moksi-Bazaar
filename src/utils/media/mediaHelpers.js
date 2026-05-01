@@ -2,6 +2,7 @@
 const fs = require('fs');
 const logger = require('../logger');
 const { downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS } = require('./tempFiles');
+const { mediaFilePayload } = require('./formatHelpers');
 
 const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24 MB — Discord bot upload limit is 25 MB
 
@@ -20,16 +21,24 @@ function extFromContentType(ct) {
 function resolveMedia(url, contentType, backupUrl = null, extra = {}) {
     const urlExt = extFromUrl(url);
     const contentTypeExt = extFromContentType(contentType);
-    const ext = (urlExt && urlExt !== 'bin') ? urlExt : contentTypeExt;
+    const ext = contentTypeExt === 'gif'
+        ? 'gif'
+        : (urlExt && urlExt !== 'bin') ? urlExt : contentTypeExt;
     if (!ext) return null;
 
     const isImage = IMAGE_EXTS.has(ext);
     const isVideo = VIDEO_EXTS.has(ext);
-    if (!isImage && !isVideo) return null;
 
     const isGifLike = extra.isGifLike === true || ext === 'gif' || contentTypeExt === 'gif';
+    if (!isImage && !isVideo && !isGifLike) return null;
 
     return { url, backupUrl, ext, isImage, isVideo, isGifLike };
+}
+
+function mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo = allowImage) {
+    return (allowImage && info.isImage)
+        || (allowVideo && info.isVideo)
+        || (allowGifLikeVideo && allowImage && info.isGifLike);
 }
 
 async function downloadMediaToTemp(mediaInfo) {
@@ -56,6 +65,7 @@ async function downloadMediaToTemp(mediaInfo) {
 async function fetchRecentMedia(interaction, {
     allowImage = true,
     allowVideo = true,
+    allowGifLikeVideo = allowImage,
     mediaPredicate = null,
 } = {}) {
     try {
@@ -69,7 +79,7 @@ async function fetchRecentMedia(interaction, {
             for (const att of msg.attachments.values()) {
                 const info = resolveMedia(att.url, att.contentType, att.proxyURL);
                 if (!info) continue;
-                const allowedByType = (allowImage && info.isImage) || (allowVideo && info.isVideo);
+                const allowedByType = mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo);
                 const allowedByPredicate = !mediaPredicate || mediaPredicate(info);
                 if (allowedByType && allowedByPredicate) return info;
             }
@@ -93,11 +103,12 @@ async function fetchRecentMedia(interaction, {
                     }
                 }
 
-                if (allowVideo) {
+                if (allowVideo || (allowGifLikeVideo && allowImage && isGifLikeEmbed)) {
                     const videoSrc = embed.video?.url || embed.video?.proxyURL;
                     if (videoSrc) {
                         const info = resolveMedia(videoSrc, null, embed.video?.proxyURL, { isGifLike: isGifLikeEmbed });
-                        if (info?.isVideo && (!mediaPredicate || mediaPredicate(info))) return info;
+                        const allowedByType = info && mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo);
+                        if (allowedByType && (!mediaPredicate || mediaPredicate(info))) return info;
                     }
                 }
 
@@ -120,11 +131,12 @@ async function fetchRecentMedia(interaction, {
  * - Falls back to the most recent image/video in the channel.
  * - Defers the reply, downloads the file, runs processFn, sends the result.
  *
- * processFn(inputPath, ext, { isImage, isVideo }) → Promise<string outputPath>
+ * processFn(inputPath, ext, { isImage, isVideo, isGifLike }) → Promise<string outputPath>
  */
 async function handleMediaCommand(interaction, {
     allowVideo = false,
     allowImage = true,
+    allowGifLikeVideo = allowImage,
     processFn,
     mediaPredicate = null,
     invalidMediaMessage = null,
@@ -149,7 +161,12 @@ async function handleMediaCommand(interaction, {
 
     // 2. Fall back to recent channel messages
     if (!mediaInfo) {
-        mediaInfo = await fetchRecentMedia(interaction, { allowImage, allowVideo, mediaPredicate });
+        mediaInfo = await fetchRecentMedia(interaction, {
+            allowImage,
+            allowVideo,
+            allowGifLikeVideo,
+            mediaPredicate,
+        });
         usedRecentFallback = Boolean(mediaInfo);
     }
 
@@ -160,10 +177,11 @@ async function handleMediaCommand(interaction, {
         );
     }
 
-    const { url, ext, isImage, isVideo, isGifLike } = mediaInfo;
+    const { ext, isImage, isVideo, isGifLike } = mediaInfo;
 
     // 4. Type guard
-    if (allowImage && !allowVideo && !isImage) {
+    const actsAsImage = isImage || (allowGifLikeVideo && isGifLike);
+    if (allowImage && !allowVideo && !actsAsImage) {
         return interaction.editReply('That file doesn\'t look like an image. Please provide a PNG, JPG, WEBP, or similar.');
     }
     if (!allowImage && allowVideo && !isVideo) {
@@ -178,7 +196,7 @@ async function handleMediaCommand(interaction, {
 
     try {
         inputPath = await downloadMediaToTemp(mediaInfo);
-        outputPath = await processFn(inputPath, ext, { isImage, isVideo, isGifLike });
+        outputPath = await processFn(inputPath, ext, { isImage, isVideo, isGifLike, mediaInfo });
 
         if (!outputPath) throw new Error('Processing produced no output file.');
 
@@ -190,7 +208,7 @@ async function handleMediaCommand(interaction, {
             );
         }
 
-        const replyPayload = { files: [outputPath] };
+        const replyPayload = { files: [mediaFilePayload(outputPath, interaction.commandName)] };
         if (usedRecentFallback) {
             replyPayload.content = ''; // I don't want it to say anything
         }
@@ -231,4 +249,4 @@ async function handleMediaCommand(interaction, {
     }
 }
 
-module.exports = { handleMediaCommand, fetchRecentMedia };
+module.exports = { handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp };
