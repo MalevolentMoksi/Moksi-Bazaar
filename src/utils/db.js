@@ -123,6 +123,15 @@ const init = async () => {
             created_at_utc_ms BIGINT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at_utc_ms);
+        CREATE TABLE IF NOT EXISTS warn_reminders (
+            id                TEXT PRIMARY KEY,
+            channel_id        TEXT NOT NULL,
+            guild_id          TEXT NOT NULL,
+            warned_user       TEXT NOT NULL,
+            due_at_utc_ms     BIGINT NOT NULL,
+            created_at_utc_ms BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_warn_reminders_due ON warn_reminders(due_at_utc_ms);
         CREATE TABLE IF NOT EXISTS sleepy_counts (
             guild_id TEXT NOT NULL,
             user_id TEXT NOT NULL,

@@ -3,7 +3,9 @@
     "allow": [
       "Bash(curl -s https://raw.githubusercontent.com/machineonamission/mediaforge/main/Dockerfile)",
       "Bash(curl -s https://raw.githubusercontent.com/machineonamission/mediaforge/main/pyproject.toml)",
-      "Bash(python3)"
+      "Bash(python3)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\enzom\\\\Documents\\\\Coffre\\\\Moksi's Bazaar\" -Recurse -Force)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

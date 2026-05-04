@@ -3,6 +3,7 @@
 const { init } = require('../../utils/db');
 const { initUptimePresence } = require('../../utils/presence');
 const { startReminderScheduler } = require('../../commands/tools/remind.js');
+const { initWarnReminderScheduler } = require('../../utils/warnReminderScheduler');
 
 module.exports = {
   name: 'clientReady',
@@ -30,6 +31,14 @@ module.exports = {
       console.log('✅ Reminder scheduler started');
     } catch (e) {
       console.error('❌ Failed to start reminder scheduler:', e);
+    }
+
+    // Start warn reminder scheduler
+    try {
+      await initWarnReminderScheduler(client);
+      console.log('✅ Warn reminder scheduler started');
+    } catch (e) {
+      console.error('❌ Failed to start warn reminder scheduler:', e);
     }
   }
 };
