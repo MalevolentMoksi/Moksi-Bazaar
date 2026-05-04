@@ -128,6 +128,8 @@ const init = async () => {
             channel_id        TEXT NOT NULL,
             guild_id          TEXT NOT NULL,
             warned_user       TEXT NOT NULL,
+            warn_ids          TEXT,
+            warn_count        INTEGER NOT NULL DEFAULT 1,
             due_at_utc_ms     BIGINT NOT NULL,
             created_at_utc_ms BIGINT NOT NULL
         );
@@ -150,6 +152,12 @@ const init = async () => {
     // Migration: Add is_context_only column if it doesn't exist
     await pool.query(`
         ALTER TABLE conversation_memories ADD COLUMN IF NOT EXISTS is_context_only BOOLEAN DEFAULT false
+    `);
+
+    // Migration: Add warn_ids and warn_count columns to warn_reminders if they don't exist
+    await pool.query(`
+        ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS warn_ids TEXT;
+        ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS warn_count INTEGER NOT NULL DEFAULT 1;
     `);
 };
 

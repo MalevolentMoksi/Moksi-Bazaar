@@ -1,26 +1,52 @@
 const { pool } = require('./db');
 const { randomUUID } = require('crypto');
 
+const WARN_REMINDER_DAYS = 30;
 const MAX_TIMEOUT_MS = 24 * 24 * 60 * 60 * 1000;
 let schedulerTimer = null;
 let schedulerScheduling = false;
 let clientRef = null;
 
-// ── DB helpers ───────────────────────────────────────────────────────────────
+// ---- DB helpers ----------------------------------------------------------------
 
-async function insertWarnReminder(channelId, guildId, warnedUser, dueAtMs) {
+async function insertWarnReminder(channelId, guildId, warnedUser, dueAtMs, warnId = null) {
     const id = randomUUID();
     await pool.query(
-        `INSERT INTO warn_reminders (id, channel_id, guild_id, warned_user, due_at_utc_ms, created_at_utc_ms)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [id, channelId, guildId, warnedUser, String(dueAtMs), String(Date.now())]
+        `INSERT INTO warn_reminders (id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, created_at_utc_ms)
+         VALUES ($1,$2,$3,$4,$5,1,$6,$7)`,
+        [id, channelId, guildId, warnedUser, warnId || null, String(dueAtMs), String(Date.now())]
     );
     return id;
 }
 
+async function findRecentWarnReminderForUser(warnedUser, windowMs = 60_000) {
+    const cutoff = String(Date.now() - windowMs);
+    const { rows } = await pool.query(
+        `SELECT id, warn_count FROM warn_reminders
+         WHERE warned_user = $1 AND created_at_utc_ms > $2
+         ORDER BY created_at_utc_ms DESC LIMIT 1`,
+        [warnedUser, cutoff]
+    );
+    return rows[0] || null;
+}
+
+async function appendWarnToReminder(id, warnId) {
+    await pool.query(
+        `UPDATE warn_reminders
+         SET warn_count = warn_count + 1,
+             warn_ids = CASE
+                WHEN $2::TEXT IS NULL THEN warn_ids
+                WHEN warn_ids IS NULL THEN $2
+                ELSE warn_ids || ',' || $2
+             END
+         WHERE id = $1`,
+        [id, warnId || null]
+    );
+}
+
 async function fetchNextWarnReminder() {
     const { rows } = await pool.query(`
-        SELECT id, channel_id, guild_id, warned_user, due_at_utc_ms
+        SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms
         FROM warn_reminders ORDER BY due_at_utc_ms ASC LIMIT 1
     `);
     return rows[0] || null;
@@ -28,7 +54,7 @@ async function fetchNextWarnReminder() {
 
 async function refetchWarnReminderById(id) {
     const { rows } = await pool.query(
-        `SELECT id, channel_id, guild_id, warned_user, due_at_utc_ms
+        `SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms
          FROM warn_reminders WHERE id = $1 LIMIT 1`, [id]
     );
     return rows[0] || null;
@@ -38,18 +64,35 @@ async function deleteWarnReminder(id) {
     await pool.query(`DELETE FROM warn_reminders WHERE id = $1`, [id]);
 }
 
-// ── Messaging ────────────────────────────────────────────────────────────────
+async function getAllWarnReminders() {
+    const { rows } = await pool.query(`
+        SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, created_at_utc_ms
+        FROM warn_reminders ORDER BY due_at_utc_ms ASC
+    `);
+    return rows;
+}
+
+// ---- Messaging -----------------------------------------------------------------
+
+function buildReminderText(reminder) {
+    const count = reminder.warn_count || 1;
+    const ids = reminder.warn_ids ? reminder.warn_ids.split(',') : [];
+    const idText = ids.length ? ` (Case${ids.length > 1 ? 's' : ''} ${ids.map(i => `#${i}`).join(', ')})` : '';
+
+    if (count === 1) {
+        return `**Staff reminder:** It has been ${WARN_REMINDER_DAYS} days since **${reminder.warned_user}** was warned${idText}. If the warning is no longer needed, consider removing it with \`?delwarn\`.`;
+    }
+
+    return `**Staff reminder:** **${reminder.warned_user}** received ${count} warnings over the past ${WARN_REMINDER_DAYS} days${idText}. Consider reviewing and removing any that are no longer needed with \`?delwarn\`.`;
+}
 
 async function sendWarnReminderMessage(client, reminder) {
     const channel = await client.channels.fetch(reminder.channel_id).catch(() => null);
     if (!channel) return;
-    await channel.send(
-        `**Staff reminder:** It has been 30 days since **${reminder.warned_user}** was warned. ` +
-        `If the warning is no longer needed, consider removing it with \`?delwarn\`.`
-    );
+    await channel.send(buildReminderText(reminder));
 }
 
-// ── Scheduler (mirrors remind.js exactly) ────────────────────────────────────
+// ---- Scheduler (mirrors remind.js exactly) ------------------------------------
 
 async function scheduleNext(client) {
     if (schedulerScheduling) return;
@@ -77,7 +120,7 @@ async function scheduleNext(client) {
                     await sendWarnReminderMessage(client, again);
                     await deleteWarnReminder(again.id);
                 } else {
-                    console.log('[WARN-REMINDER] Intermediate check — not yet due, re-scheduling');
+                    console.log('[WARN-REMINDER] Intermediate check - not yet due, re-scheduling');
                 }
             } catch (err) {
                 console.error('[WARN-REMINDER] Dispatch error:', err);
@@ -100,4 +143,13 @@ async function initWarnReminderScheduler(client) {
     await scheduleNext(clientRef);
 }
 
-module.exports = { initWarnReminderScheduler, scheduleNext, insertWarnReminder };
+module.exports = {
+    WARN_REMINDER_DAYS,
+    initWarnReminderScheduler,
+    scheduleNext,
+    insertWarnReminder,
+    findRecentWarnReminderForUser,
+    appendWarnToReminder,
+    deleteWarnReminder,
+    getAllWarnReminders,
+};
