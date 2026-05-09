@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Copy lockfile + manifest first for better layer caching
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml .npmrc ./
 
 # Install production dependencies.
 # --no-frozen-lockfile is intentional: pnpm-lock.yaml was generated on Windows,
