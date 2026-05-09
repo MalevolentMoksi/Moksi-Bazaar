@@ -4,6 +4,7 @@ const {
     deleteWarnReminder,
     scheduleNext,
 } = require('../../utils/warnReminderScheduler');
+const { isOwner } = require('../../utils/constants');
 
 const WARN_GUILD_ID = '1271818662839451699';
 
@@ -62,6 +63,10 @@ module.exports = {
         ),
 
     async execute(interaction) {
+        if (!isOwner(interaction.user.id)) {
+            return interaction.reply({ content: 'Only the bot owner can use this command.', flags: MessageFlags.Ephemeral });
+        }
+
         if (interaction.guildId !== WARN_GUILD_ID) {
             return interaction.reply({ content: 'This command is not available here.', flags: MessageFlags.Ephemeral });
         }
