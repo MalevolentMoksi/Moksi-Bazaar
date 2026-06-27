@@ -275,4 +275,138 @@ const addaudio = {
     },
 };
 
-module.exports = [reverse, speed, trim, mute, loop, addaudio];
+// Plays forwards then backwards (a "boomerang"). Concatenates the clip with its reverse.
+const boomerang = {
+    data: new SlashCommandBuilder()
+        .setName('boomerang')
+        .setDescription('Make a video or GIF play forwards, then backwards')
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Video or GIF (optional: uses recent media if omitted)').setRequired(false)
+        ),
+    async execute(interaction) {
+        await handleMediaCommand(interaction, {
+            allowImage: true, allowVideo: true,
+            mediaPredicate: isVideoOrGif,
+            invalidMediaMessage: 'This command supports videos and GIFs only.',
+            processFn: async (inputPath, ext, context) => {
+                const gifInput = await isGifInput(inputPath, ext, context);
+                const outputPath = createTempPath(gifInput ? 'gif' : 'mp4');
+                const audio = !gifInput && await hasAudio(inputPath);
+                const outputOptions = gifInput ? null : await mp4OutputOptions(inputPath);
+                await runFFmpeg(inputPath, outputPath, cmd => {
+                    if (gifInput) {
+                        cmd.complexFilter('[0:v]split=2[v1][v2];[v2]reverse[r];[v1][r]concat=n=2:v=1:a=0[v]')
+                            .outputOptions(['-map [v]']);
+                        applyGifOutput(cmd);
+                    } else if (audio) {
+                        cmd.complexFilter(
+                            '[0:v]split=2[v1][v2];[0:a]asplit=2[a1][a2];[v2]reverse[r];[a2]areverse[ar];[v1][a1][r][ar]concat=n=2:v=1:a=1[v][a]'
+                        ).outputOptions(['-map [v]', '-map [a]', ...outputOptions]);
+                    } else {
+                        cmd.complexFilter('[0:v]split=2[v1][v2];[v2]reverse[r];[v1][r]concat=n=2:v=1:a=0[v]')
+                            .outputOptions(['-map [v]', ...outputOptions]).noAudio();
+                    }
+                });
+                return outputPath;
+            },
+        });
+    },
+};
+
+// Shuffles frames using ffmpeg's `random` filter (cache of N frames).
+const shuffle = {
+    data: new SlashCommandBuilder()
+        .setName('shuffle')
+        .setDescription('Randomly shuffle the frames of a video or GIF')
+        .addIntegerOption(opt =>
+            opt.setName('frames').setDescription('Frames held in the shuffle cache (2–512, default 30)').setMinValue(2).setMaxValue(512)
+        )
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Video or GIF (optional: uses recent media if omitted)').setRequired(false)
+        ),
+    async execute(interaction) {
+        const frames = interaction.options.getInteger('frames') ?? 30;
+        await handleMediaCommand(interaction, {
+            allowImage: true, allowVideo: true,
+            mediaPredicate: isVideoOrGif,
+            invalidMediaMessage: 'This command supports videos and GIFs only.',
+            processFn: async (inputPath, ext, context) => {
+                const gifInput = await isGifInput(inputPath, ext, context);
+                const outputPath = createTempPath(gifInput ? 'gif' : 'mp4');
+                const outputOptions = gifInput ? null : await mp4OutputOptions(inputPath);
+                await runFFmpeg(inputPath, outputPath, cmd => {
+                    cmd.videoFilters(`random=frames=${frames}`);
+                    if (gifInput) applyGifOutput(cmd);
+                    else applyMp4Output(cmd, outputOptions);
+                });
+                return outputPath;
+            },
+        });
+    },
+};
+
+// Changes the frame rate (FPS) of a video or GIF.
+const fps = {
+    data: new SlashCommandBuilder()
+        .setName('fps')
+        .setDescription('Change the frame rate of a video or GIF')
+        .addNumberOption(opt =>
+            opt.setName('fps').setDescription('Target frames per second (1–60)').setRequired(true).setMinValue(1).setMaxValue(60)
+        )
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('Video or GIF (optional: uses recent media if omitted)').setRequired(false)
+        ),
+    async execute(interaction) {
+        const targetFps = interaction.options.getNumber('fps');
+        await handleMediaCommand(interaction, {
+            allowImage: true, allowVideo: true,
+            mediaPredicate: isVideoOrGif,
+            invalidMediaMessage: 'This command supports videos and GIFs only.',
+            processFn: async (inputPath, ext, context) => {
+                const gifInput = await isGifInput(inputPath, ext, context);
+                const outputPath = createTempPath(gifInput ? 'gif' : 'mp4');
+                const outputOptions = gifInput ? null : await mp4OutputOptions(inputPath);
+                await runFFmpeg(inputPath, outputPath, cmd => {
+                    cmd.videoFilters(`fps=${targetFps}`);
+                    if (gifInput) applyGifOutput(cmd);
+                    else applyMp4Output(cmd, outputOptions);
+                });
+                return outputPath;
+            },
+        });
+    },
+};
+
+// Sets how many times a GIF loops (-1 = no loop, 0 = infinite, N = N times).
+const gifloop = {
+    data: new SlashCommandBuilder()
+        .setName('gifloop')
+        .setDescription('Change how many times a GIF loops')
+        .addIntegerOption(opt =>
+            opt.setName('count').setDescription('Loop count (-1 = play once, 0 = forever, N = N loops)').setRequired(true).setMinValue(-1).setMaxValue(100)
+        )
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('GIF to re-loop (optional: uses recent media if omitted)').setRequired(false)
+        ),
+    async execute(interaction) {
+        const count = interaction.options.getInteger('count');
+        await handleMediaCommand(interaction, {
+            allowImage: true, allowVideo: false,
+            // GIF only — re-looping a non-animated input is meaningless.
+            mediaPredicate: (info) => info.ext === 'gif' || info.isGifLike,
+            invalidMediaMessage: 'This command works on GIFs only.',
+            // The loop count is a container flag; don't normalize/re-encode the input.
+            normalizeInput: false,
+            processFn: async (inputPath) => {
+                const outputPath = createTempPath('gif');
+                await runFFmpeg(inputPath, outputPath, cmd => {
+                    // -loop is an output option for the gif muxer.
+                    cmd.outputOptions(['-loop', String(count)]);
+                });
+                return outputPath;
+            },
+        });
+    },
+};
+
+module.exports = [reverse, speed, trim, mute, loop, addaudio, boomerang, shuffle, fps, gifloop];

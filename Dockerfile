@@ -11,12 +11,22 @@ WORKDIR /app
 #   fontconfig                   - required to register our bundled Impact font for SVG/caption rendering
 #   imagemagick                  - required by the /magick command (content-aware / liquid-rescale)
 #   libmagickcore-6.q16-6-extra  - pulls the liblqr delegate so -liquid-rescale is actually enabled
+#   ca-certificates + curl       - to fetch the yt-dlp standalone binary over HTTPS
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fontconfig \
     imagemagick \
     libmagickcore-6.q16-6-extra \
+    ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp (standalone binary; bundles its own Python, so no system Python
+# needed) for the /videodl command. Pinned to the linux build channel which auto-updates.
+RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+        -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp \
+    && /usr/local/bin/yt-dlp --version
 
 # Enable pnpm via corepack (ships with Node 22)
 RUN corepack enable && corepack prepare pnpm@9 --activate

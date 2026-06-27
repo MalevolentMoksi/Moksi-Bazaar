@@ -4,6 +4,7 @@ const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
 const { toFormat } = require('../../utils/media/imageUtils');
 const { runFFmpeg, videoToGif, mp4OutputOptions } = require('../../utils/media/ffmpegUtils');
 const { createTempPath } = require('../../utils/media/tempFiles');
+const { isGifInput } = require('../../utils/media/formatHelpers');
 
 const topng = {
     data: new SlashCommandBuilder()
@@ -110,4 +111,30 @@ const tomp4 = {
     },
 };
 
-module.exports = [topng, tojpg, towebp, togif, tomp4];
+const toapng = {
+    data: new SlashCommandBuilder()
+        .setName('toapng')
+        .setDescription('Convert a GIF or video to an animated PNG (APNG)')
+        .addAttachmentOption(opt =>
+            opt.setName('media').setDescription('GIF or video to convert (optional: uses recent media if omitted)').setRequired(false)
+        ),
+    async execute(interaction) {
+        await handleMediaCommand(interaction, {
+            allowImage: true, allowVideo: true,
+            mediaPredicate: (mediaInfo) => mediaInfo.isVideo || mediaInfo.ext === 'gif' || mediaInfo.isGifLike,
+            invalidMediaMessage: 'This command supports GIFs and videos only.',
+            processFn: async (inputPath) => {
+                const outputPath = createTempPath('png');
+                // -plays 0 = loop forever; even dimensions for safety.
+                await runFFmpeg(inputPath, outputPath, cmd => {
+                    cmd
+                        .videoFilters('scale=ceil(iw/2)*2:ceil(ih/2)*2')
+                        .outputOptions(['-f apng', '-plays 0']);
+                });
+                return outputPath;
+            },
+        });
+    },
+};
+
+module.exports = [topng, tojpg, towebp, togif, tomp4, toapng];
