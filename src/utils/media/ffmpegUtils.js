@@ -6,12 +6,24 @@ const { createTempPath } = require('./tempFiles');
 
 const DEFAULT_TARGET_BYTES = 18 * 1024 * 1024;
 
+// Lower OS priority for media subprocesses so heavy encodes/seam-carving don't
+// starve the Node event loop (and the Discord gateway heartbeat). No-op on
+// Windows; degrades gracefully if `renice` is unavailable. (See run_command.py
+// in MediaForge, which does the same with os.nice(10).)
+const FFMPEG_NICENESS = 10;
+
+// Apply niceness to a fluent-ffmpeg command. Safe to call always.
+function nice(cmd) {
+    try { cmd.renice(FFMPEG_NICENESS); } catch {}
+    return cmd;
+}
+
 // Promisified ffmpeg runner. configureFn receives the fluent-ffmpeg command object.
 function runFFmpeg(input, output, configureFn) {
     return new Promise((resolve, reject) => {
         const cmd = ffmpeg(input);
         configureFn(cmd);
-        cmd
+        nice(cmd)
             .on('end', resolve)
             .on('error', (err) => reject(new Error(`FFmpeg error: ${err.message}`)))
             .save(output);
@@ -127,7 +139,85 @@ async function mp4OutputOptions(inputPath, {
     ];
 }
 
+// Tolerance ladder for size-fitting (mirrors MediaForge's TOLERANCES). Each pass
+// aims a bit lower than the last until the output fits under the limit.
+const SIZE_TOLERANCES = [0.98, 0.92, 0.85, 0.72, 0.55, 0.4, 0.25, 0.12];
+
+// Two-pass H.264 size-capping: compute an exact target bitrate from duration and
+// encode in two passes for the best quality at a given size ceiling. Falls back to
+// the single-pass ladder if duration is unknown. (MediaForge: twopasscapvideo.)
 async function compressMp4ToLimit(inputPath, maxBytes) {
+    let duration = 0;
+    let hasAudioStream = false;
+    try {
+        const probeData = await probeFile(inputPath);
+        duration = getDurationSeconds(probeData);
+        hasAudioStream = Boolean(probeData.streams?.find(s => s.codec_type === 'audio'));
+    } catch {
+        // fall through to single-pass ladder below
+    }
+
+    if (duration > 0) {
+        const audioKbps = hasAudioStream ? 96 : 0;
+        const totalBudgetKbps = (maxBytes * 8 / duration / 1000);
+        let best = null;
+        let bestSize = Number.POSITIVE_INFINITY;
+        for (const tolerance of SIZE_TOLERANCES) {
+            const videoKbps = Math.floor((totalBudgetKbps - audioKbps) * tolerance);
+            if (videoKbps <= 0) continue;
+            const passLog = createTempPath('log').replace(/\.log$/, '');
+            const outputPath = createTempPath('mp4');
+            try {
+                // Pass 1 (analysis, discard output).
+                await new Promise((resolve, reject) => {
+                    nice(ffmpeg(inputPath))
+                        .outputOptions([
+                            '-c:v libx264', '-preset veryfast', `-b:v ${videoKbps}k`,
+                            '-pix_fmt yuv420p', '-pass 1', `-passlogfile ${passLog}`, '-an', '-f mp4', '-y',
+                        ])
+                        .on('end', resolve)
+                        .on('error', err => reject(new Error(`FFmpeg pass1 error: ${err.message}`)))
+                        .save(process.platform === 'win32' ? 'NUL' : '/dev/null');
+                });
+                // Pass 2 (real encode).
+                await new Promise((resolve, reject) => {
+                    const cmd = nice(ffmpeg(inputPath))
+                        .outputOptions([
+                            '-c:v libx264', '-preset veryfast', `-b:v ${videoKbps}k`,
+                            '-pix_fmt yuv420p', '-pass 2', `-passlogfile ${passLog}`, '-movflags +faststart',
+                        ]);
+                    if (hasAudioStream) cmd.outputOptions(['-c:a aac', `-b:a ${audioKbps}k`]);
+                    else cmd.noAudio();
+                    cmd
+                        .on('end', resolve)
+                        .on('error', err => reject(new Error(`FFmpeg pass2 error: ${err.message}`)))
+                        .save(outputPath);
+                });
+
+                const size = fs.statSync(outputPath).size;
+                if (size <= maxBytes) {
+                    if (best) { try { fs.unlinkSync(best); } catch {} }
+                    return outputPath;
+                }
+                if (size < bestSize) {
+                    if (best) { try { fs.unlinkSync(best); } catch {} }
+                    best = outputPath; bestSize = size;
+                } else {
+                    try { fs.unlinkSync(outputPath); } catch {}
+                }
+            } catch {
+                try { fs.unlinkSync(outputPath); } catch {}
+            } finally {
+                // Clean up the two-pass log files (ffmpeg appends -0.log / .mbtree).
+                for (const suffix of ['-0.log', '-0.log.mbtree', '.log', '.log.mbtree']) {
+                    try { fs.unlinkSync(passLog + suffix); } catch {}
+                }
+            }
+        }
+        if (best) return best;
+    }
+
+    // Single-pass fallback ladder (duration unknown or two-pass exhausted).
     const attempts = [
         { targetBytes: Math.floor(maxBytes * 0.92), qualityMultiplier: 0.95, maxVideoKbps: 3500, maxAudioKbps: 80 },
         { targetBytes: Math.floor(maxBytes * 0.78), qualityMultiplier: 0.75, maxVideoKbps: 2600, maxAudioKbps: 64 },
@@ -135,27 +225,19 @@ async function compressMp4ToLimit(inputPath, maxBytes) {
     ];
     let bestPath = null;
     let bestSize = Number.POSITIVE_INFINITY;
-
     for (const attempt of attempts) {
         const outputPath = createTempPath('mp4');
         try {
             const outputOptions = await mp4OutputOptions(inputPath, attempt);
-            await runFFmpeg(inputPath, outputPath, cmd => {
-                cmd.outputOptions(outputOptions);
-            });
+            await runFFmpeg(inputPath, outputPath, cmd => { cmd.outputOptions(outputOptions); });
             const size = fs.statSync(outputPath).size;
             if (size <= maxBytes) {
-                if (bestPath) {
-                    try { fs.unlinkSync(bestPath); } catch {}
-                }
+                if (bestPath) { try { fs.unlinkSync(bestPath); } catch {} }
                 return outputPath;
             }
             if (size < bestSize) {
-                if (bestPath) {
-                    try { fs.unlinkSync(bestPath); } catch {}
-                }
-                bestPath = outputPath;
-                bestSize = size;
+                if (bestPath) { try { fs.unlinkSync(bestPath); } catch {} }
+                bestPath = outputPath; bestSize = size;
             } else {
                 try { fs.unlinkSync(outputPath); } catch {}
             }
@@ -163,8 +245,96 @@ async function compressMp4ToLimit(inputPath, maxBytes) {
             try { fs.unlinkSync(outputPath); } catch {}
         }
     }
-
     return bestPath || inputPath;
+}
+
+// Shrink a static image to fit under maxBytes. File size is roughly proportional
+// to pixel count, so scale by sqrt(maxBytes/size) across the tolerance ladder.
+// (MediaForge: intelligentdownsize.)
+async function compressImageToLimit(inputPath, maxBytes) {
+    const sharp = require('sharp');
+    let meta;
+    try { meta = await sharp(inputPath).metadata(); } catch { return inputPath; }
+    const w = meta.width || 0;
+    const h = meta.height || 0;
+    if (!w || !h) return inputPath;
+    const size = fs.statSync(inputPath).size;
+    const ext = (path.extname(inputPath).slice(1) || 'png').toLowerCase();
+    const fmt = ext === 'jpg' ? 'jpeg' : ext;
+
+    for (const tolerance of SIZE_TOLERANCES) {
+        const ratio = (maxBytes / size) * tolerance;
+        const scale = Math.sqrt(ratio);
+        if (scale >= 1) continue;
+        const newW = Math.max(1, Math.round(w * scale));
+        const newH = Math.max(1, Math.round(h * scale));
+        const outputPath = createTempPath(ext);
+        try {
+            let pipe = sharp(inputPath, { animated: ext === 'gif' || ext === 'webp' }).resize(newW, newH);
+            if (typeof pipe[fmt] === 'function') pipe = pipe[fmt]();
+            await pipe.toFile(outputPath);
+            if (fs.statSync(outputPath).size <= maxBytes) return outputPath;
+            try { fs.unlinkSync(outputPath); } catch {}
+        } catch {
+            try { fs.unlinkSync(outputPath); } catch {}
+        }
+    }
+    return inputPath;
+}
+
+// Shrink an animated GIF to fit under maxBytes by downscaling, re-encoding with
+// the Discord-safe palette. Scales by sqrt(maxBytes/size) across the ladder.
+async function compressGifToLimit(inputPath, maxBytes) {
+    let dims = null;
+    let fps = 15;
+    try {
+        const probeData = await probeFile(inputPath);
+        const v = probeData.streams?.find(s => s.codec_type === 'video');
+        if (v?.width && v?.height) dims = { width: v.width, height: v.height };
+        const rate = v?.avg_frame_rate || v?.r_frame_rate;
+        if (rate && rate.includes('/')) {
+            const [n, d] = rate.split('/').map(Number);
+            if (d) fps = Math.min(50, n / d || 15);
+        }
+    } catch {
+        return inputPath;
+    }
+    if (!dims) return inputPath;
+    const size = fs.statSync(inputPath).size;
+
+    for (const tolerance of SIZE_TOLERANCES) {
+        const ratio = (maxBytes / size) * tolerance;
+        const scale = Math.sqrt(ratio);
+        if (scale >= 1) continue;
+        const newW = Math.max(2, Math.round(dims.width * scale / 2) * 2);
+        const palettePath = createTempPath('png');
+        const outputPath = createTempPath('gif');
+        try {
+            const vf = `fps=${fps},scale=${newW}:-1:flags=lanczos`;
+            await runFFmpeg(inputPath, palettePath, cmd => {
+                cmd.videoFilters(`${vf},${gifPaletteGen()}`);
+            });
+            await new Promise((resolve, reject) => {
+                nice(ffmpeg(inputPath))
+                    .input(palettePath)
+                    .complexFilter(`${vf}[x];[x][1:v]${gifPaletteUse()}`)
+                    .outputOptions(['-an', '-loop 0'])
+                    .on('end', resolve)
+                    .on('error', err => reject(new Error(`FFmpeg GIF resize error: ${err.message}`)))
+                    .save(outputPath);
+            });
+            if (fs.statSync(outputPath).size <= maxBytes) {
+                try { fs.unlinkSync(palettePath); } catch {}
+                return outputPath;
+            }
+            try { fs.unlinkSync(outputPath); } catch {}
+        } catch {
+            try { fs.unlinkSync(outputPath); } catch {}
+        } finally {
+            try { fs.unlinkSync(palettePath); } catch {}
+        }
+    }
+    return inputPath;
 }
 
 async function ensureMediaSize(filePath, maxBytes) {
@@ -172,8 +342,14 @@ async function ensureMediaSize(filePath, maxBytes) {
     if (size <= maxBytes) return filePath;
 
     const ext = path.extname(filePath).toLowerCase();
-    if (ext === '.mp4') {
+    if (ext === '.mp4' || ext === '.mov' || ext === '.webm' || ext === '.mkv') {
         return compressMp4ToLimit(filePath, maxBytes);
+    }
+    if (ext === '.gif') {
+        return compressGifToLimit(filePath, maxBytes);
+    }
+    if (['.png', '.jpg', '.jpeg', '.webp', '.avif', '.bmp', '.tiff'].includes(ext)) {
+        return compressImageToLimit(filePath, maxBytes);
     }
     return filePath;
 }
@@ -192,19 +368,37 @@ function atempoChain(speed) {
     return filters.join(',');
 }
 
-// Create a high-quality GIF from a video using the two-pass palette method
+// ---------------------------------------------------------------------------
+// Discord-safe GIF dithering.
+// Discord re-encodes GIF previews and mangles error-diffusion dithers
+// (sierra2_4a / floyd_steinberg) into noise, while ordered "bayer" dithering
+// survives. MediaForge uses bayer:bayer_scale=3 with stats_mode=single for this
+// exact reason. These constants centralize the palettegen/paletteuse filters so
+// every GIF pipeline (caption, speechbubble, magick, convert) stays consistent.
+//   reserveTransparent: keep a palette slot for transparency (cut-outs/overlays)
+// ---------------------------------------------------------------------------
+function gifPaletteGen({ reserveTransparent = false } = {}) {
+    return `palettegen=stats_mode=single:reserve_transparent=${reserveTransparent ? 1 : 0}`;
+}
+function gifPaletteUse({ reserveTransparent = false } = {}) {
+    // new=1 regenerates the palette per-frame to match stats_mode=single.
+    const alpha = reserveTransparent ? ':alpha_threshold=128' : '';
+    return `paletteuse=dither=bayer:bayer_scale=3:new=1${alpha}`;
+}
+
+// Create a high-quality GIF from a video using the two-pass palette method.
 async function videoToGif(inputPath, outputPath, fps = 15, scale = 480) {
     const palettePath = createTempPath('png');
     try {
         // Pass 1: generate palette
         await runFFmpeg(inputPath, palettePath, cmd => {
-            cmd.videoFilters(`fps=${fps},scale=${scale}:-1:flags=lanczos,palettegen`);
+            cmd.videoFilters(`fps=${fps},scale=${scale}:-1:flags=lanczos,${gifPaletteGen()}`);
         });
         // Pass 2: render GIF using palette
         await new Promise((resolve, reject) => {
-            ffmpeg(inputPath)
+            nice(ffmpeg(inputPath))
                 .input(palettePath)
-                .complexFilter(`fps=${fps},scale=${scale}:-1:flags=lanczos[x];[x][1:v]paletteuse`)
+                .complexFilter(`fps=${fps},scale=${scale}:-1:flags=lanczos[x];[x][1:v]${gifPaletteUse()}`)
                 .outputOptions(['-an', '-loop 0'])
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
@@ -233,6 +427,8 @@ async function loopVideo(inputPath, outputPath, count) {
 }
 
 module.exports = {
+    ffmpeg,
+    nice,
     runFFmpeg,
     probeFile,
     hasAudio,
@@ -241,4 +437,7 @@ module.exports = {
     ensureMediaSize,
     videoToGif,
     loopVideo,
+    gifPaletteGen,
+    gifPaletteUse,
+    FFMPEG_NICENESS,
 };

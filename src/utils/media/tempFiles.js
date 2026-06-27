@@ -98,6 +98,7 @@ function extFromUrl(url) {
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff', 'avif']);
 const VIDEO_EXTS = new Set(['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'm4v']);
-const MEDIA_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS]);
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'wma']);
+const MEDIA_EXTS = new Set([...IMAGE_EXTS, ...VIDEO_EXTS, ...AUDIO_EXTS]);
 
-module.exports = { createTempPath, downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS, MEDIA_EXTS };
+module.exports = { createTempPath, downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS, MEDIA_EXTS };

@@ -3,7 +3,7 @@
 const fs = require('fs');
 const sharp = require('sharp');
 const { createTempPath, cleanup } = require('./tempFiles');
-const { runFFmpeg, probeFile, mp4OutputOptions } = require('./ffmpegUtils');
+const { runFFmpeg, probeFile, mp4OutputOptions, nice, gifPaletteGen, gifPaletteUse } = require('./ffmpegUtils');
 const {
     evenNumber,
     getFrameRate,
@@ -223,22 +223,20 @@ async function renderCaptionGif(inputPath, text, position = 'bottom') {
 
         // Pass 1: Generate palette from the captioned video with FPS applied
         await new Promise((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            ffmpeg(inputPath)
+            nice(require('fluent-ffmpeg')(inputPath))
                 .input(captionPath)
-                .complexFilter(`${captionFilter};[v]fps=${fps},palettegen=max_colors=256:reserve_transparent=0`)
+                .complexFilter(`${captionFilter};[v]fps=${fps},${gifPaletteGen()}`)
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg palette error: ${err.message}`)))
                 .save(palettePath);
         });
 
-        // Pass 2: Render GIF using the palette with Sierra2-4a dithering for color quality
+        // Pass 2: Render GIF using the palette with Discord-safe bayer dithering
         await new Promise((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            ffmpeg(inputPath)
+            nice(require('fluent-ffmpeg')(inputPath))
                 .input(captionPath)
                 .input(palettePath)
-                .complexFilter(`${captionFilter};[v]fps=${fps}[f];[f][2:v]paletteuse=dither=sierra2_4a`)
+                .complexFilter(`${captionFilter};[v]fps=${fps}[f];[f][2:v]${gifPaletteUse()}`)
                 .outputOptions(['-an', '-loop', '0'])
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
@@ -413,22 +411,20 @@ async function renderMemeGif(inputPath, topText, bottomText) {
 
         // Pass 1: Generate palette from the meme-overlay GIF with FPS applied
         await new Promise((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            ffmpeg(inputPath)
+            nice(require('fluent-ffmpeg')(inputPath))
                 .input(overlayPath)
-                .complexFilter(`${memeFilter};[v]fps=${fps},palettegen=max_colors=256:reserve_transparent=0`)
+                .complexFilter(`${memeFilter};[v]fps=${fps},${gifPaletteGen()}`)
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg palette error: ${err.message}`)))
                 .save(palettePath);
         });
 
-        // Pass 2: Render GIF using the palette with Sierra2-4a dithering for color quality
+        // Pass 2: Render GIF using the palette with Discord-safe bayer dithering
         await new Promise((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            ffmpeg(inputPath)
+            nice(require('fluent-ffmpeg')(inputPath))
                 .input(overlayPath)
                 .input(palettePath)
-                .complexFilter(`${memeFilter};[v]fps=${fps}[f];[f][2:v]paletteuse=dither=sierra2_4a`)
+                .complexFilter(`${memeFilter};[v]fps=${fps}[f];[f][2:v]${gifPaletteUse()}`)
                 .outputOptions(['-an', '-loop', '0'])
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))

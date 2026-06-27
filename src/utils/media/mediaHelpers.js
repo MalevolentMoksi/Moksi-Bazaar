@@ -1,9 +1,11 @@
 // src/utils/media/mediaHelpers.js
 const fs = require('fs');
 const logger = require('../logger');
-const { downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS } = require('./tempFiles');
+const { downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS } = require('./tempFiles');
 const { mediaFilePayload } = require('./formatHelpers');
 const { ensureMediaSize } = require('./ffmpegUtils');
+const { mediaSemaphore } = require('./concurrency');
+const { normalizeInput } = require('./inputGuards');
 
 const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24 MB — Discord bot upload limit is 25 MB
 
@@ -15,7 +17,10 @@ function extFromContentType(ct) {
     if (!ct) return '';
     const sub = ct.split('/')[1]?.split(';')[0]?.trim().toLowerCase();
     if (!sub) return '';
-    const aliases = { jpeg: 'jpg', quicktime: 'mov', 'x-msvideo': 'avi', 'x-matroska': 'mkv' };
+    const aliases = {
+        jpeg: 'jpg', quicktime: 'mov', 'x-msvideo': 'avi', 'x-matroska': 'mkv',
+        mpeg: 'mp3', 'x-wav': 'wav', 'x-m4a': 'm4a', 'mp4a-latm': 'm4a',
+    };
     return aliases[sub] || sub;
 }
 
@@ -29,16 +34,18 @@ function resolveMedia(url, contentType, backupUrl = null, extra = {}) {
 
     const isImage = IMAGE_EXTS.has(ext);
     const isVideo = VIDEO_EXTS.has(ext);
+    const isAudio = AUDIO_EXTS.has(ext);
 
     const isGifLike = extra.isGifLike === true || ext === 'gif' || contentTypeExt === 'gif';
-    if (!isImage && !isVideo && !isGifLike) return null;
+    if (!isImage && !isVideo && !isAudio && !isGifLike) return null;
 
-    return { url, backupUrl, ext, isImage, isVideo, isGifLike };
+    return { url, backupUrl, ext, isImage, isVideo, isAudio, isGifLike };
 }
 
-function mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo = allowImage) {
+function mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo = allowImage, allowAudio = false) {
     return (allowImage && info.isImage)
         || (allowVideo && info.isVideo)
+        || (allowAudio && info.isAudio)
         || (allowGifLikeVideo && allowImage && info.isGifLike);
 }
 
@@ -67,6 +74,7 @@ async function fetchRecentMedia(interaction, {
     allowImage = true,
     allowVideo = true,
     allowGifLikeVideo = allowImage,
+    allowAudio = false,
     mediaPredicate = null,
 } = {}) {
     try {
@@ -80,7 +88,7 @@ async function fetchRecentMedia(interaction, {
             for (const att of msg.attachments.values()) {
                 const info = resolveMedia(att.url, att.contentType, att.proxyURL);
                 if (!info) continue;
-                const allowedByType = mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo);
+                const allowedByType = mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo, allowAudio);
                 const allowedByPredicate = !mediaPredicate || mediaPredicate(info);
                 if (allowedByType && allowedByPredicate) return info;
             }
@@ -133,14 +141,23 @@ async function fetchRecentMedia(interaction, {
  * - Defers the reply, downloads the file, runs processFn, sends the result.
  *
  * processFn(inputPath, ext, { isImage, isVideo, isGifLike }) → Promise<string outputPath>
+ *
+ * Options:
+ *   normalizeInput  — cap input resolution/FPS/frame-count before processing (default true).
+ *                     Set false for commands whose own logic must see the raw input
+ *                     (e.g. format converters, info/probe).
+ *   useQueue        — run processFn behind the shared concurrency semaphore (default true).
  */
 async function handleMediaCommand(interaction, {
     allowVideo = false,
     allowImage = true,
     allowGifLikeVideo = allowImage,
+    allowAudio = false,
     processFn,
     mediaPredicate = null,
     invalidMediaMessage = null,
+    normalizeInput: doNormalizeInput = true,
+    useQueue = true,
 }) {
     await interaction.deferReply();
 
@@ -152,7 +169,7 @@ async function handleMediaCommand(interaction, {
         mediaInfo = resolveMedia(attachment.url, attachment.contentType, attachment.proxyURL);
         if (!mediaInfo) {
             return interaction.editReply(
-                'The provided attachment is not a supported image/video format for this command.'
+                'The provided attachment is not a supported media format for this command.'
             );
         }
         if (mediaPredicate && !mediaPredicate(mediaInfo)) {
@@ -166,6 +183,7 @@ async function handleMediaCommand(interaction, {
             allowImage,
             allowVideo,
             allowGifLikeVideo,
+            allowAudio,
             mediaPredicate,
         });
         usedRecentFallback = Boolean(mediaInfo);
@@ -174,18 +192,22 @@ async function handleMediaCommand(interaction, {
     // 3. Nothing found anywhere
     if (!mediaInfo) {
         return interaction.editReply(
-            'No media found. Attach an image/video to the command, or use it in a channel where media was recently posted.'
+            'No media found. Attach a file to the command, or use it in a channel where media was recently posted.'
         );
     }
 
-    const { ext, isImage, isVideo, isGifLike } = mediaInfo;
+    const { ext, isImage, isVideo, isAudio, isGifLike } = mediaInfo;
 
     // 4. Type guard
     const actsAsImage = isImage || (allowGifLikeVideo && isGifLike);
-    if (allowImage && !allowVideo && !actsAsImage) {
+    const onlyAudioAllowed = allowAudio && !allowImage && !allowVideo;
+    if (onlyAudioAllowed && !isAudio) {
+        return interaction.editReply('That file doesn\'t look like audio. Please provide an MP3, WAV, OGG, or similar.');
+    }
+    if (!allowAudio && allowImage && !allowVideo && !actsAsImage) {
         return interaction.editReply('That file doesn\'t look like an image. Please provide a PNG, JPG, WEBP, or similar.');
     }
-    if (!allowImage && allowVideo && !isVideo) {
+    if (!allowAudio && !allowImage && allowVideo && !isVideo) {
         return interaction.editReply('That file doesn\'t look like a video. Please provide an MP4, MOV, WebM, or similar.');
     }
     if (mediaPredicate && !mediaPredicate(mediaInfo)) {
@@ -193,11 +215,42 @@ async function handleMediaCommand(interaction, {
     }
 
     let inputPath = null;
+    let normalizedPath = null;
     let outputPath = null;
 
     try {
         inputPath = await downloadMediaToTemp(mediaInfo);
-        outputPath = await processFn(inputPath, ext, { isImage, isVideo, isGifLike, mediaInfo });
+
+        // Normalize oversized/overlong input before processing (resolution/FPS/frames).
+        // Audio has no resolution/FPS to cap, so it's never normalized.
+        let processInput = inputPath;
+        if (doNormalizeInput && !isAudio) {
+            const norm = await normalizeInput(inputPath, ext, { isVideo, isGifLike });
+            if (norm.replaced && norm.path !== inputPath) {
+                normalizedPath = norm.path;
+                processInput = norm.path;
+            }
+            if (norm.notes?.length) {
+                try {
+                    await interaction.followUp({
+                        content: `ℹ️ Input ${norm.notes.join(', ')} before processing.`,
+                        ephemeral: true,
+                    });
+                } catch {}
+            }
+        }
+
+        // Run the actual work behind the concurrency semaphore. Show a "queued"
+        // hint only if we actually have to wait for a slot.
+        const runWork = () => processFn(processInput, ext, { isImage, isVideo, isAudio, isGifLike, mediaInfo });
+        if (useQueue) {
+            if (mediaSemaphore.active >= mediaSemaphore.max) {
+                try { await interaction.editReply('⏳ Your command is queued — processing will start shortly…'); } catch {}
+            }
+            outputPath = await mediaSemaphore.run(runWork);
+        } else {
+            outputPath = await runWork();
+        }
 
         if (!outputPath) throw new Error('Processing produced no output file.');
 
@@ -252,7 +305,7 @@ async function handleMediaCommand(interaction, {
 
         try { await interaction.editReply(reply); } catch {}
     } finally {
-        await cleanup(inputPath, outputPath);
+        await cleanup(inputPath, normalizedPath, outputPath);
     }
 }
 

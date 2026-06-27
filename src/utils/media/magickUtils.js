@@ -15,7 +15,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const sharp = require('sharp');
 const { createTempPath, cleanup } = require('./tempFiles');
-const { runFFmpeg, mp4OutputOptions } = require('./ffmpegUtils');
+const { runFFmpeg, mp4OutputOptions, nice, gifPaletteGen, gifPaletteUse } = require('./ffmpegUtils');
 const { evenNumber, getFrameRate, probeDimensions } = require('./mediaProbe');
 
 // Guardrails: seam-carving is O(W*H*seams) and genuinely slow.
@@ -55,21 +55,38 @@ async function magickAvailable() {
 
 // Run ImageMagick with array args (no shell -> no injection). Rejects on non-zero
 // exit, surfacing stderr (e.g. "delegate failed" when liblqr is missing).
+// On Linux the process is launched through `nice` so slow seam-carving doesn't
+// starve the Node event loop / Discord gateway heartbeat.
 async function runMagick(args) {
     const bin = await detectMagickBinary();
     if (!bin) {
         throw new Error('ImageMagick is not installed on this host.');
     }
+    const useNice = process.platform !== 'win32';
     return new Promise((resolve, reject) => {
-        const proc = spawn(bin, args);
-        let stderr = '';
-        proc.stderr.on('data', d => { stderr += d.toString(); });
-        proc.on('error', err => reject(new Error(`ImageMagick failed to start: ${err.message}`)));
-        proc.on('close', code => {
-            if (code === 0) return resolve();
-            const detail = stderr.trim().split('\n').slice(-3).join(' ');
-            reject(new Error(`ImageMagick exited ${code}: ${detail || 'unknown error'}`));
-        });
+        function launch(withNice) {
+            const cmd = withNice ? 'nice' : bin;
+            const cmdArgs = withNice ? ['-n', '10', bin, ...args] : args;
+            const proc = spawn(cmd, cmdArgs);
+            let stderr = '';
+            let spawnFailed = false;
+            proc.stderr.on('data', d => { stderr += d.toString(); });
+            proc.on('error', err => {
+                // If `nice` isn't on PATH, retry once invoking the binary directly.
+                if (withNice && err.code === 'ENOENT') {
+                    spawnFailed = true;
+                    return launch(false);
+                }
+                reject(new Error(`ImageMagick failed to start: ${err.message}`));
+            });
+            proc.on('close', code => {
+                if (spawnFailed) return; // a fallback launch is handling it
+                if (code === 0) return resolve();
+                const detail = stderr.trim().split('\n').slice(-3).join(' ');
+                reject(new Error(`ImageMagick exited ${code}: ${detail || 'unknown error'}`));
+            });
+        }
+        launch(useNice);
     });
 }
 
@@ -205,21 +222,19 @@ async function magickGif(inputPath, strength) {
     try {
         // Pass 1: palette from carved frames.
         await new Promise((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            ffmpeg(carvedPattern)
+            nice(require('fluent-ffmpeg')(carvedPattern))
                 .inputOptions([`-framerate ${fps}`])
-                .complexFilter('palettegen=max_colors=256:reserve_transparent=0')
+                .complexFilter(gifPaletteGen())
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg palette error: ${err.message}`)))
                 .save(palettePath);
         });
-        // Pass 2: assemble GIF using the palette.
+        // Pass 2: assemble GIF using the palette (Discord-safe bayer dithering).
         await new Promise((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            ffmpeg(carvedPattern)
+            nice(require('fluent-ffmpeg')(carvedPattern))
                 .inputOptions([`-framerate ${fps}`])
                 .input(palettePath)
-                .complexFilter('[0:v][1:v]paletteuse=dither=sierra2_4a')
+                .complexFilter(`[0:v][1:v]${gifPaletteUse()}`)
                 .outputOptions(['-loop', '0'])
                 .on('end', resolve)
                 .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
@@ -247,8 +262,7 @@ async function magickVideo(inputPath, strength) {
             maxVideoKbps: 2800,
         });
         await new Promise((resolve, reject) => {
-            const ffmpeg = require('fluent-ffmpeg');
-            ffmpeg(carvedPattern)
+            nice(require('fluent-ffmpeg')(carvedPattern))
                 .inputOptions([`-framerate ${fps}`])
                 .input(inputPath)               // for the original audio stream
                 .outputOptions([
