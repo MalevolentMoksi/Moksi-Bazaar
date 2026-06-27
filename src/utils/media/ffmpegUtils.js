@@ -372,18 +372,23 @@ function atempoChain(speed) {
 // Discord-safe GIF dithering.
 // Discord re-encodes GIF previews and mangles error-diffusion dithers
 // (sierra2_4a / floyd_steinberg) into noise, while ordered "bayer" dithering
-// survives. MediaForge uses bayer:bayer_scale=3 with stats_mode=single for this
-// exact reason. These constants centralize the palettegen/paletteuse filters so
-// every GIF pipeline (caption, speechbubble, magick, convert) stays consistent.
+// survives — that's the part that matters for Discord. These helpers centralize
+// the palettegen/paletteuse filters so every GIF pipeline (caption, speechbubble,
+// magick, convert) stays consistent.
+//
+// NOTE: we deliberately use the DEFAULT stats_mode (full), NOT stats_mode=single.
+// stats_mode=single emits one palette PER FRAME, which cannot be written to a
+// single palette PNG in the two-pass (palettegen-to-file -> paletteuse) approach
+// these pipelines use — it errors with "Cannot write more than one file with the
+// same name". A single full-stats palette + bayer dithering is the correct combo.
 //   reserveTransparent: keep a palette slot for transparency (cut-outs/overlays)
 // ---------------------------------------------------------------------------
 function gifPaletteGen({ reserveTransparent = false } = {}) {
-    return `palettegen=stats_mode=single:reserve_transparent=${reserveTransparent ? 1 : 0}`;
+    return `palettegen=reserve_transparent=${reserveTransparent ? 1 : 0}`;
 }
 function gifPaletteUse({ reserveTransparent = false } = {}) {
-    // new=1 regenerates the palette per-frame to match stats_mode=single.
     const alpha = reserveTransparent ? ':alpha_threshold=128' : '';
-    return `paletteuse=dither=bayer:bayer_scale=3:new=1${alpha}`;
+    return `paletteuse=dither=bayer:bayer_scale=3${alpha}`;
 }
 
 // Create a high-quality GIF from a video using the two-pass palette method.
