@@ -4,6 +4,13 @@ const fs = require('fs');
 const sharp = require('sharp');
 const { createTempPath, cleanup } = require('./tempFiles');
 const { runFFmpeg, probeFile, mp4OutputOptions } = require('./ffmpegUtils');
+const {
+    evenNumber,
+    getFrameRate,
+    isAnimatedImage,
+    isGifImage,
+    outputFormatFor,
+} = require('./mediaProbe');
 
 function escapeXml(s) {
     return String(s)
@@ -93,62 +100,6 @@ function buildMemeTextSVG(text, width, imageHeight, isTop, fontSize) {
 
 async function svgToPng(svgString) {
     return sharp(Buffer.from(svgString)).png().toBuffer();
-}
-
-// Returns the output extension and a sharp format applicator matching the source format.
-// JPEG/WebP are re-encoded at quality 92 (high quality, good compression); everything else is PNG.
-function outputFormatFor(format) {
-    if (format === 'jpeg') return { ext: 'jpg', applyFormat: s => s.jpeg({ quality: 92 }) };
-    if (format === 'webp') return { ext: 'webp', applyFormat: s => s.webp({ quality: 92 }) };
-    return { ext: 'png', applyFormat: s => s.png() };
-}
-
-async function isAnimatedImage(inputPath) {
-    try {
-        const meta = await sharp(inputPath, { animated: true }).metadata();
-        return (meta.pages || 1) > 1;
-    } catch {
-        return false;
-    }
-}
-
-async function isGifImage(inputPath) {
-    try {
-        const meta = await sharp(inputPath, { animated: true }).metadata();
-        return meta.format === 'gif';
-    } catch {
-        return false;
-    }
-}
-
-function evenNumber(n, fallback = 2) {
-    const safe = Number.isFinite(n) ? Math.floor(n) : fallback;
-    if (safe <= 0) return fallback;
-    const even = safe % 2 === 0 ? safe : safe - 1;
-    return even > 0 ? even : fallback;
-}
-
-// Extract the frame rate (FPS) of an input video/GIF to preserve animation speed
-function parseFrameRate(rate, fallback = 15) {
-    if (!rate) return fallback;
-    if (String(rate).includes('/')) {
-        const [num, den] = String(rate).split('/').map(Number);
-        const value = den ? num / den : fallback;
-        return Number.isFinite(value) && value > 0 ? value : fallback;
-    }
-    const value = parseFloat(rate);
-    return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-async function getFrameRate(inputPath) {
-    try {
-        const probeData = await probeFile(inputPath);
-        const videoStream = probeData.streams?.find(s => s.codec_type === 'video');
-        if (!videoStream) return 15;
-        return parseFrameRate(videoStream.avg_frame_rate, parseFrameRate(videoStream.r_frame_rate));
-    } catch {
-        return 15;
-    }
 }
 
 // Add a white caption bar above or below an image

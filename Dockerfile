@@ -7,11 +7,15 @@ ENV PATH="$PNPM_HOME:$PATH"
 WORKDIR /app
 
 # Install system dependencies:
-#   ffmpeg      - required by fluent-ffmpeg for video/GIF processing
-#   fontconfig  - required to register our bundled Impact font for SVG/caption rendering
+#   ffmpeg                       - required by fluent-ffmpeg for video/GIF processing
+#   fontconfig                   - required to register our bundled Impact font for SVG/caption rendering
+#   imagemagick                  - required by the /magick command (content-aware / liquid-rescale)
+#   libmagickcore-6.q16-6-extra  - pulls the liblqr delegate so -liquid-rescale is actually enabled
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fontconfig \
+    imagemagick \
+    libmagickcore-6.q16-6-extra \
     && rm -rf /var/lib/apt/lists/*
 
 # Enable pnpm via corepack (ships with Node 22)
