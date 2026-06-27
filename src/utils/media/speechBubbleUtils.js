@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const { createTempPath, cleanup } = require('./tempFiles');
-const { runFFmpeg, mp4OutputOptions } = require('./ffmpegUtils');
+const { runFFmpeg, mp4OutputOptions, gifPaletteGen, gifPaletteUse } = require('./ffmpegUtils');
 const { evenNumber, getFrameRate, probeDimensions, outputFormatFor } = require('./mediaProbe');
 
 const BUBBLE_ASSET = path.join(__dirname, '..', '..', 'assets', 'mediaTemplates', 'speechbubble.png');
@@ -106,12 +106,9 @@ async function renderSpeechBubbleGif(inputPath, position = 'top', color = 'trans
     const outputPath = createTempPath('gif');
 
     // Transparent cut-outs need a reserved transparent palette entry to stay see-through.
-    const paletteGen = color === 'transparent'
-        ? 'palettegen=max_colors=255:reserve_transparent=1'
-        : 'palettegen=max_colors=256:reserve_transparent=0';
-    const paletteUse = color === 'transparent'
-        ? 'paletteuse=dither=sierra2_4a:alpha_threshold=128'
-        : 'paletteuse=dither=sierra2_4a';
+    const reserveTransparent = color === 'transparent';
+    const paletteGen = gifPaletteGen({ reserveTransparent });
+    const paletteUse = gifPaletteUse({ reserveTransparent });
 
     // Scale source to even dims, then apply the bubble -> [bubbled].
     const sourcePrep = `[0:v]scale=${width}:${height}:flags=lanczos[src];${bubbleChain(color)}`;
