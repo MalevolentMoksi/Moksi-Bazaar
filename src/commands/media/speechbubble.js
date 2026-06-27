@@ -6,12 +6,13 @@ const {
     renderSpeechBubbleImage,
     renderSpeechBubbleGif,
     renderSpeechBubbleVideo,
+    DEFAULT_SCALE,
 } = require('../../utils/media/speechBubbleUtils');
 
 const speechbubble = {
     data: new SlashCommandBuilder()
         .setName('speechbubble')
-        .setDescription('Add a MediaForge-style speech bubble to an image, GIF, or video')
+        .setDescription('Add an esmBot-style speech bubble to an image, GIF, or video')
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Image, GIF, or video (optional: uses recent media if omitted)').setRequired(false)
         )
@@ -31,22 +32,35 @@ const speechbubble = {
                     { name: 'White', value: 'white' },
                     { name: 'Black', value: 'black' }
                 )
+        )
+        .addNumberOption(opt =>
+            opt.setName('scale')
+                .setDescription('Bubble height as a fraction of the image (0.01–1.0, default 0.2)')
+                .setMinValue(0.01)
+                .setMaxValue(1.0)
+        )
+        .addBooleanOption(opt =>
+            opt.setName('flip').setDescription('Mirror the bubble horizontally (point the tail the other way)')
         ),
     async execute(interaction) {
-        const position = interaction.options.getString('position') ?? 'top';
-        const color = interaction.options.getString('color') ?? 'transparent';
+        const opts = {
+            position: interaction.options.getString('position') ?? 'top',
+            color: interaction.options.getString('color') ?? 'transparent',
+            scale: interaction.options.getNumber('scale') ?? DEFAULT_SCALE,
+            flip: interaction.options.getBoolean('flip') ?? false,
+        };
         await handleMediaCommand(interaction, {
             allowImage: true,
             allowVideo: true,
             processFn: async (inputPath, ext, { isVideo, isGifLike }) => {
                 const gifInput = isGifLike || ext === 'gif' || await isGifImage(inputPath);
                 if (gifInput) {
-                    return renderSpeechBubbleGif(inputPath, position, color);
+                    return renderSpeechBubbleGif(inputPath, opts);
                 }
                 if (isVideo) {
-                    return renderSpeechBubbleVideo(inputPath, position, color);
+                    return renderSpeechBubbleVideo(inputPath, opts);
                 }
-                return renderSpeechBubbleImage(inputPath, position, color);
+                return renderSpeechBubbleImage(inputPath, opts);
             },
         });
     },
