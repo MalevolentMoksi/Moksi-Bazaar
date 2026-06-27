@@ -179,9 +179,64 @@ async function deepfry(inputPath, ext = '', mediaContext = {}) {
     return writeStaticImage(sharp(friedBuffer), ext);
 }
 
+// Rotate the hue by `degrees` (0-360). Static images via sharp .modulate(); GIF/video
+// via the ffmpeg hue filter. (MediaForge: hue=h={h}.)
+async function hue(inputPath, degrees, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
+        return gifFilter(inputPath, `hue=h=${degrees}`);
+    }
+    if (mediaContext?.isVideo) {
+        return videoFilter(inputPath, `hue=h=${degrees}`);
+    }
+    // sharp modulate hue is in degrees too.
+    return writeStaticImage(sharp(inputPath, { animated: false }).modulate({ hue: degrees }), ext);
+}
+
+// Tint media toward a single { r, g, b } color: desaturate, then map white -> color.
+// (MediaForge: hue=s=0, then lutrgb=r=val*r:g=val*g:b=val*b.)
+async function tint(inputPath, rgb, ext = '', mediaContext = {}) {
+    const { r, g, b } = rgb;
+    if (await isGifInput(inputPath, ext, mediaContext)) {
+        const rf = (r / 255).toFixed(4), gf = (g / 255).toFixed(4), bf = (b / 255).toFixed(4);
+        return gifFilter(inputPath, `hue=s=0,lutrgb=r=val*${rf}:g=val*${gf}:b=val*${bf}`);
+    }
+    if (mediaContext?.isVideo) {
+        const rf = (r / 255).toFixed(4), gf = (g / 255).toFixed(4), bf = (b / 255).toFixed(4);
+        return videoFilter(inputPath, `hue=s=0,lutrgb=r=val*${rf}:g=val*${gf}:b=val*${bf}`);
+    }
+    // sharp: grayscale then tint to the target colour.
+    return writeStaticImage(sharp(inputPath, { animated: false }).grayscale().tint({ r, g, b }), ext);
+}
+
+// jpeg: repeatedly re-compress at low quality to simulate "reposted many times".
+// strength = number of compression passes, quality = JPEG Q each pass.
+async function jpegify(inputPath, strength = 30, quality = 10, ext = '', mediaContext = {}) {
+    if (await isGifInput(inputPath, ext, mediaContext)) {
+        // Per-frame heavy compression isn't worth a frame-explode here; emulate with a
+        // strong qscale on the GIF's frames via ffmpeg mjpeg round-trip is complex, so
+        // apply a single aggressive re-encode that reads as the same artifacting.
+        return gifFilter(inputPath, `noise=alls=${Math.min(60, strength)}:allf=t,eq=saturation=1.3`);
+    }
+    if (mediaContext?.isVideo) {
+        // crank mpeg quantizer for blocky jpeg-ish artifacts
+        const outputPath = createTempPath('mp4');
+        const outputOptions = await mp4OutputOptions(inputPath, { qualityMultiplier: 0.3, maxVideoKbps: 700 });
+        await runFFmpeg(inputPath, outputPath, cmd => {
+            cmd.videoFilters('scale=ceil(iw/2)*2:ceil(ih/2)*2').outputOptions(['-q:v', '31', ...outputOptions]);
+        });
+        return outputPath;
+    }
+    // Static image: round-trip through JPEG `strength` times.
+    let buf = await sharp(inputPath, { animated: false }).jpeg({ quality }).toBuffer();
+    for (let i = 1; i < strength; i++) {
+        buf = await sharp(buf).jpeg({ quality }).toBuffer();
+    }
+    return writeStaticImage(sharp(buf), ext);
+}
+
 // Get image dimensions
 async function getMetadata(inputPath) {
     return sharp(inputPath).metadata();
 }
 
-module.exports = { toFormat, resize, rotate, flip, flop, blur, invert, grayscale, deepfry, getMetadata };
+module.exports = { toFormat, resize, rotate, flip, flop, blur, invert, grayscale, deepfry, hue, tint, jpegify, getMetadata };
