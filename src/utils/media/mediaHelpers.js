@@ -97,17 +97,35 @@ async function fetchRecentMedia(interaction, {
             for (const embed of msg.embeds) {
                 const embedType = String(embed.type || '').toLowerCase();
                 const embedUrl = String(embed.url || '');
-                const isGifLikeEmbed = embedType === 'gifv' || /tenor\.com|giphy\.com/i.test(embedUrl);
+                // "GIF-like" means the embed represents an animated GIF even though
+                // Discord often serves it as a silent MP4 proxy. Detect it broadly:
+                //   - a "gifv" embed type,
+                //   - the embed's own URL is a .gif (klipy, imgur, most GIF hosts), or
+                //   - a known GIF host. This drives whether the video proxy is tagged
+                //     isGifLike so downstream commands output a GIF, not an MP4.
+                const gifHostRe = /tenor\.com|giphy\.com|klipy\.com|gfycat\.com|redgifs\.com/i;
+                const urlIsGif = /\.gif(\?|$)/i.test(embedUrl);
+                const isGifLikeEmbed = embedType === 'gifv' || urlIsGif || gifHostRe.test(embedUrl);
 
                 let staticImageCandidate = null;
                 if (allowImage) {
+                    // Prefer a real .gif URL from the embed's own url/image/thumbnail
+                    // over Discord's MP4 video proxy, so GIFs stay GIFs.
+                    const gifCandidates = [
+                        urlIsGif ? embedUrl : null,
+                        embed.image?.url, embed.image?.proxyURL,
+                        embed.thumbnail?.url, embed.thumbnail?.proxyURL,
+                    ].filter(Boolean);
+                    for (const src of gifCandidates) {
+                        const info = resolveMedia(src, null, src);
+                        if (info?.ext === 'gif' && (!mediaPredicate || mediaPredicate(info))) return info;
+                    }
                     for (const key of ['image', 'thumbnail']) {
                         const src = embed[key]?.url || embed[key]?.proxyURL;
                         if (!src) continue;
                         const info = resolveMedia(src, null, embed[key]?.proxyURL);
                         if (!info?.isImage) continue;
                         if (mediaPredicate && !mediaPredicate(info)) continue;
-                        if (info.ext === 'gif') return info;
                         if (!staticImageCandidate) staticImageCandidate = info;
                     }
                 }
@@ -115,6 +133,8 @@ async function fetchRecentMedia(interaction, {
                 if (allowVideo || (allowGifLikeVideo && allowImage && isGifLikeEmbed)) {
                     const videoSrc = embed.video?.url || embed.video?.proxyURL;
                     if (videoSrc) {
+                        // Tag the proxy as GIF-like when the embed is a GIF, so commands
+                        // (reverse, speed, …) emit a GIF instead of an MP4.
                         const info = resolveMedia(videoSrc, null, embed.video?.proxyURL, { isGifLike: isGifLikeEmbed });
                         const allowedByType = info && mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo);
                         if (allowedByType && (!mediaPredicate || mediaPredicate(info))) return info;
