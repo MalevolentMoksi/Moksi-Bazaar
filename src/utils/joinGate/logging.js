@@ -21,6 +21,7 @@ const CATEGORIES = {
     failure: { channelKey: 'log_failure_channel_id', toggleKey: 'log_failures', label: 'Failures' },
     preview: { channelKey: 'log_preview_channel_id', toggleKey: 'log_previews', label: 'Dry-run previews' },
     config: { channelKey: 'log_config_channel_id', toggleKey: 'log_config', label: 'Config changes' },
+    suspicion: { channelKey: 'suspicion_log_channel_id', toggleKey: 'suspicion_enabled', label: 'Suspicion reports' },
 };
 
 const COLORS = {
@@ -170,6 +171,52 @@ async function logOutcome(guild, settings, entry) {
     return send(guild, settings, category, { embeds: [embed] });
 }
 
+const TIER_STYLE = {
+    watch: { color: 0xf0c419, icon: '👁️', word: 'Worth a look' },
+    suspect: { color: 0xe8732d, icon: '⚠️', word: 'Suspicious' },
+    malicious: { color: 0xd64545, icon: '🚨', word: 'Highly suspicious' },
+};
+
+/**
+ * Reports a scored joiner. The whole point is that the arithmetic is visible,
+ * so staff can judge the call rather than trusting a verdict.
+ */
+async function logSuspicion(guild, settings, { user, result, action, actionOutcome, dryRun }) {
+    const style = TIER_STYLE[result.tier] ?? TIER_STYLE.watch;
+
+    const breakdown = result.signals.length
+        ? result.signals
+            .slice()
+            .sort((a, b) => b.points - a.points)
+            .map(s => `\`${s.points > 0 ? '+' : ''}${String(s.points).padStart(3)}\` **${s.label}**: ${s.detail}`)
+            .join('\n')
+        : '_no signals fired_';
+
+    let outcome;
+    if (dryRun) outcome = '🧪 dry run, no action';
+    else if (action === 'log' || action === 'none') outcome = 'logged only, no action taken';
+    else if (actionOutcome?.ok) outcome = action === 'ban' ? 'temporarily banned' : 'kicked';
+    else outcome = `⚠️ ${action} failed: ${actionOutcome?.error ?? 'unknown error'}`;
+
+    const embed = new EmbedBuilder()
+        .setColor(style.color)
+        .setAuthor({
+            name: `${user.tag ?? user.username} (${user.id})`,
+            iconURL: user.displayAvatarURL?.() ?? undefined,
+        })
+        .setTitle(`${style.icon} ${style.word}: score ${result.score}`)
+        .setDescription(breakdown.slice(0, 4000))
+        .addFields(
+            { name: 'Account created', value: `<t:${toUnix(user.createdTimestamp)}:R>`, inline: true },
+            { name: 'Tier', value: result.tier, inline: true },
+            { name: 'Outcome', value: outcome, inline: true },
+        )
+        .setFooter({ text: 'Scores are advisory. Check the account before acting on it.' })
+        .setTimestamp();
+
+    return send(guild, settings, 'suspicion', { embeds: [embed] });
+}
+
 /** Raid alert. Routed to the failure channel; it is a "look at me" event. */
 async function logBurst(guild, settings, { count, windowSeconds }) {
     const embed = new EmbedBuilder()
@@ -254,4 +301,5 @@ module.exports = {
     logConfigChange,
     logUnban,
     logTest,
+    logSuspicion,
 };

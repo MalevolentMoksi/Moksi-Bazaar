@@ -24,8 +24,9 @@ const logger = require('../logger');
 const {
     DAY_MS, MINUTE_MS, getSettings, thresholdMs, formatDays, incrementStat,
 } = require('./config');
-const { logOutcome, logBurst } = require('./logging');
+const { logOutcome, logBurst, logSuspicion } = require('./logging');
 const { insertPendingUnban, scheduleNext } = require('./unbanScheduler');
+const suspicion = require('./suspicion');
 
 /**
  * Removals are serialised globally rather than per guild. The bottleneck is
@@ -303,6 +304,18 @@ async function removeMember(member, settings, decision, action) {
 
 // ── Burst detection ─────────────────────────────────────────────────────────
 
+/**
+ * Read-only view of the burst window. Members who pass the age gate never
+ * touch noteBurst, but "arrived while a burst was happening" is still a signal
+ * worth feeding the scorer.
+ */
+function isInBurst(guildId, settings) {
+    const windowMs = Number(settings.burst_window_seconds) * 1000;
+    const now = Date.now();
+    const hits = (burstWindows.get(guildId) ?? []).filter(t => now - t < windowMs);
+    return hits.length >= Number(settings.burst_threshold);
+}
+
 function noteBurst(guild, settings) {
     if (!settings.burst_alert_enabled) return false;
 
@@ -433,6 +446,102 @@ async function processGated(member, origin) {
     }
 }
 
+// ── Suspicion scoring ───────────────────────────────────────────────────────
+
+/**
+ * Names worth guarding against impersonation: the server itself, and anyone
+ * holding staff-level permissions. Cached per guild for a short while because
+ * this walks the role cache.
+ */
+const protectedNamesCache = new Map();
+const PROTECTED_TTL_MS = 5 * 60_000;
+
+function collectProtectedNames(guild) {
+    const hit = protectedNamesCache.get(guild.id);
+    if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+    const names = new Set([guild.name]);
+    try {
+        for (const member of guild.members.cache.values()) {
+            if (member.user.bot) continue;
+            const perms = member.permissions;
+            if (perms?.has(PermissionFlagsBits.Administrator) || perms?.has(PermissionFlagsBits.ManageGuild)) {
+                names.add(member.displayName);
+                names.add(member.user.username);
+            }
+        }
+    } catch {
+        // Cache may be cold; the guild name alone is still worth guarding.
+    }
+
+    const value = [...names].filter(Boolean);
+    protectedNamesCache.set(guild.id, { value, expiresAt: Date.now() + PROTECTED_TTL_MS });
+    return value;
+}
+
+/**
+ * Scores a joiner and applies the tier's configured action.
+ *
+ * Runs only for members the age gate ALLOWED. Someone already being removed
+ * for their account age must not also be judged here: that would double-punish
+ * and make the logs contradict each other.
+ */
+async function runSuspicion(member, settings, { inBurst }) {
+    const guild = member.guild;
+
+    const correlation = suspicion.correlateJoin(guild.id, member.user);
+    const result = suspicion.scoreAccount(member.user, {
+        weights: settings.suspicion_weights,
+        keywords: settings.suspicion_keywords ?? suspicion.DEFAULT_SCAM_KEYWORDS,
+        protectedNames: collectProtectedNames(guild),
+        correlation,
+        inBurst,
+        thresholds: {
+            watch: Number(settings.suspicion_watch_at),
+            suspect: Number(settings.suspicion_suspect_at),
+            malicious: Number(settings.suspicion_malicious_at),
+        },
+    });
+
+    if (result.tier === 'clear') return;
+
+    const action = {
+        watch: settings.suspicion_watch_action,
+        suspect: settings.suspicion_suspect_action,
+        malicious: settings.suspicion_malicious_action,
+    }[result.tier] ?? 'log';
+
+    const dryRun = Boolean(settings.dry_run);
+    let actionOutcome = null;
+
+    if (!dryRun && (action === 'kick' || action === 'ban')) {
+        const decision = {
+            action: 'gate',
+            reason: `suspicion score ${result.score} (${result.tier})`,
+            ageMs: Date.now() - Number(member.user.createdTimestamp),
+            thresholdMs: thresholdMs(settings),
+            eligibleAt: Number(member.user.createdTimestamp) + thresholdMs(settings),
+        };
+        const attempts = await peekAttempt(guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
+        const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts);
+        actionOutcome = await removeMember(member, settings, decision, action);
+        actionOutcome.dm = dm.note;
+
+        if (actionOutcome.ok) {
+            await incrementStat(guild.id, action === 'ban' ? 'total_bans' : 'total_kicks');
+        } else if (!actionOutcome.benign) {
+            await incrementStat(guild.id, 'total_failures');
+        }
+    }
+
+    await logSuspicion(guild, settings, { user: member.user, result, action, actionOutcome, dryRun });
+    if (!dryRun) await incrementStat(guild.id, 'total_flagged');
+
+    logger.info('[JOIN-GATE] Suspicion scored', {
+        guildId: guild.id, userId: member.id, score: result.score, tier: result.tier, action, dryRun,
+    });
+}
+
 // ── Entry points ────────────────────────────────────────────────────────────
 
 /**
@@ -456,11 +565,27 @@ async function handleMemberJoin(member) {
 
         if (!settings.enabled) return;
 
+        // Record every joiner, including ones that pass everything: a raid is
+        // only visible as a group, so the correlation window needs the clean
+        // arrivals too.
+        if (settings.suspicion_enabled) {
+            suspicion.recordJoin(member.guild.id, member.user);
+        }
+
         const decision = evaluate(member.user, settings, { guildOwnerId: member.guild.ownerId });
 
         if (decision.action === 'allow') {
             // Someone who got in cleanly has no rejoin history worth keeping.
             clearAttempts(member.guild.id, member.id).catch(() => {});
+
+            if (settings.suspicion_enabled && !member.user.bot) {
+                const inBurst = isInBurst(member.guild.id, settings);
+                await runSuspicion(member, settings, { inBurst }).catch(error =>
+                    logger.error('[JOIN-GATE] Suspicion scoring failed', {
+                        guildId: member.guild.id, userId: member.id, error: error.message,
+                    })
+                );
+            }
             return;
         }
 
@@ -523,12 +648,61 @@ async function sweepGuild(client, guildId) {
     return { scanned: members.size, gated };
 }
 
+/**
+ * Scores every current member WITHOUT acting on anyone, so thresholds can be
+ * tuned against the real community before the scorer is ever armed.
+ *
+ * Correlation signals are deliberately absent: they describe how a joiner
+ * arrived relative to others, which is not reconstructable after the fact.
+ * Backtest numbers are therefore a floor, not a prediction.
+ *
+ * @returns {Promise<{scanned: number, distribution: object, flagged: Array, skipped?: string}>}
+ */
+async function backtestGuild(guild, settings, { limit = 25 } = {}) {
+    let members;
+    try {
+        members = await guild.members.fetch();
+    } catch (error) {
+        return { scanned: 0, distribution: {}, flagged: [], skipped: `member fetch failed: ${error.message}` };
+    }
+
+    const thresholds = {
+        watch: Number(settings.suspicion_watch_at),
+        suspect: Number(settings.suspicion_suspect_at),
+        malicious: Number(settings.suspicion_malicious_at),
+    };
+    const protectedNames = collectProtectedNames(guild);
+    const distribution = { clear: 0, watch: 0, suspect: 0, malicious: 0 };
+    const flagged = [];
+
+    for (const member of members.values()) {
+        if (member.user.bot) continue;
+        const result = suspicion.scoreAccount(member.user, {
+            weights: settings.suspicion_weights,
+            keywords: settings.suspicion_keywords ?? suspicion.DEFAULT_SCAM_KEYWORDS,
+            protectedNames,
+            correlation: null,
+            inBurst: false,
+            thresholds,
+        });
+        distribution[result.tier] = (distribution[result.tier] ?? 0) + 1;
+        if (result.tier !== 'clear') {
+            flagged.push({ id: member.id, tag: displayTag(member.user), score: result.score, tier: result.tier, result });
+        }
+    }
+
+    flagged.sort((a, b) => b.score - a.score);
+    return { scanned: members.size, distribution, flagged: flagged.slice(0, limit), totalFlagged: flagged.length };
+}
+
 module.exports = {
     evaluate,
     evaluateUserId,
     renderDm,
     handleMemberJoin,
     sweepGuild,
+    backtestGuild,
+    collectProtectedNames,
     getAttemptLeaderboard,
     clearAttempts,
     displayTag,

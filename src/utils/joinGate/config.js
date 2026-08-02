@@ -67,10 +67,25 @@ const DEFAULTS = Object.freeze({
     burst_window_seconds: 60,
     sweep_enabled: false,
     sweep_window_hours: 24,
+    // Suspicion scoring. Everything off / log-only until deliberately armed.
+    suspicion_enabled: false,
+    suspicion_watch_at: 40,
+    suspicion_suspect_at: 70,
+    suspicion_malicious_at: 100,
+    suspicion_watch_action: 'log',
+    suspicion_suspect_action: 'log',
+    suspicion_malicious_action: 'log',
+    suspicion_log_channel_id: null,
+    suspicion_weights: {},
+    suspicion_keywords: null,
     total_kicks: 0,
     total_bans: 0,
     total_failures: 0,
+    total_flagged: 0,
 });
+
+/** What a suspicion tier is allowed to do. */
+const TIER_ACTIONS = Object.freeze(['log', 'kick', 'ban', 'none']);
 
 /**
  * Columns the panel is allowed to write. Used as an allow-list when building
@@ -86,9 +101,12 @@ const WRITABLE_COLUMNS = new Set([
     'log_kicks', 'log_failures', 'log_previews', 'log_config',
     'burst_alert_enabled', 'burst_threshold', 'burst_window_seconds',
     'sweep_enabled', 'sweep_window_hours',
+    'suspicion_enabled', 'suspicion_watch_at', 'suspicion_suspect_at', 'suspicion_malicious_at',
+    'suspicion_watch_action', 'suspicion_suspect_action', 'suspicion_malicious_action',
+    'suspicion_log_channel_id', 'suspicion_weights', 'suspicion_keywords',
 ]);
 
-const STAT_COLUMNS = new Set(['total_kicks', 'total_bans', 'total_failures']);
+const STAT_COLUMNS = new Set(['total_kicks', 'total_bans', 'total_failures', 'total_flagged']);
 
 const CACHE_TTL_MS = 30_000;
 /** @type {Map<string, {value: object, expiresAt: number}>} */
@@ -119,6 +137,11 @@ function normalise(row) {
         exempt_user_ids: Array.isArray(row.exempt_user_ids) ? row.exempt_user_ids : [],
         dm_message: row.dm_message ?? DEFAULT_DM_MESSAGE,
         dm_ban_message: row.dm_ban_message ?? DEFAULT_DM_BAN_MESSAGE,
+        // JSONB comes back parsed, but a legacy NULL must not become "no object".
+        suspicion_weights: (row.suspicion_weights && typeof row.suspicion_weights === 'object')
+            ? row.suspicion_weights
+            : {},
+        suspicion_keywords: Array.isArray(row.suspicion_keywords) ? row.suspicion_keywords : null,
     };
 }
 
@@ -243,6 +266,7 @@ module.exports = {
     DEFAULTS,
     DEFAULT_DM_MESSAGE,
     DEFAULT_DM_BAN_MESSAGE,
+    TIER_ACTIONS,
     LIMITS,
     clamp,
     formatDays,

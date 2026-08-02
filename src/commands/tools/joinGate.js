@@ -17,12 +17,16 @@ const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/co
 const logger = require('../../utils/logger');
 const {
     getSettings, updateSettings, resetStats, invalidate,
-    formatDays, daysToMinutes, thresholdMs, clamp, LIMITS,
+    formatDays, daysToMinutes, thresholdMs, clamp, LIMITS, TIER_ACTIONS,
     DEFAULT_DM_MESSAGE, DEFAULT_DM_BAN_MESSAGE,
 } = require('../../utils/joinGate/config');
 const {
-    evaluateUserId, renderDm, sweepGuild, getAttemptLeaderboard, displayTag,
+    evaluateUserId, renderDm, sweepGuild, backtestGuild, collectProtectedNames,
+    getAttemptLeaderboard, displayTag,
 } = require('../../utils/joinGate/enforcement');
+const {
+    scoreAccount, explain, DEFAULT_WEIGHTS, DEFAULT_SCAM_KEYWORDS,
+} = require('../../utils/joinGate/suspicion');
 const { describeRouting, logConfigChange, logTest, CATEGORIES } = require('../../utils/joinGate/logging');
 const { getPendingUnbans, deletePendingUnban, recomputePendingUnbans, scheduleNext } =
     require('../../utils/joinGate/unbanScheduler');
@@ -40,6 +44,7 @@ const SECTIONS = [
     { value: 'rules', label: 'Rules', emoji: '📏', description: 'Age threshold, bots, exempt users' },
     { value: 'messaging', label: 'Messaging', emoji: '✉️', description: 'DM text, invite, preview & test' },
     { value: 'escalation', label: 'Escalation', emoji: '🔨', description: 'Temp-bans for repeat rejoiners' },
+    { value: 'suspicion', label: 'Suspicion', emoji: '🕵️', description: 'Score joiners on more than age' },
     { value: 'logging', label: 'Logging', emoji: '📓', description: 'Where each kind of event is written' },
     { value: 'advanced', label: 'Advanced', emoji: '⚙️', description: 'Burst alerts, downtime catch-up' },
     { value: 'diagnostics', label: 'Diagnostics', emoji: '🩺', description: 'Health check, stats, ID tester' },
@@ -329,6 +334,71 @@ function logCategoryMeta(activeCategory) {
     return { ...CATEGORIES[activeCategory], isDefault: false };
 }
 
+function renderSuspicion(settings) {
+    const actionLabel = a => ({ log: '📝 log only', kick: '👢 kick', ban: '🔨 temp-ban', none: '⚪ ignore' }[a] ?? a);
+    const overrides = Object.entries(settings.suspicion_weights ?? {});
+    const keywords = settings.suspicion_keywords ?? DEFAULT_SCAM_KEYWORDS;
+
+    const embed = new EmbedBuilder()
+        .setTitle('🕵️ Join Gate: Suspicion scoring')
+        .setColor(settings.suspicion_enabled ? EMBED_COLORS.WARNING : EMBED_COLORS.NEUTRAL)
+        .setDescription(
+            'Scores each joiner across profile shape, name heuristics, impersonation and raid '
+            + 'correlation. Trust signals (Nitro, badges, a genuinely old account) **subtract** points, '
+            + 'which is what keeps ordinary newcomers out of the net.\n\n'
+            + 'Runs only on members the age gate already let through, so nobody is judged twice. '
+            + 'Every report shows the full arithmetic.\n\n'
+            + '⚠️ Backtest before raising any tier above **log**.'
+        )
+        .addFields(
+            { name: 'Scoring', value: onOff(settings.suspicion_enabled), inline: true },
+            { name: 'Reports go to', value: channelRef(settings.suspicion_log_channel_id), inline: true },
+            { name: 'Flagged so far', value: `${settings.total_flagged}`, inline: true },
+            {
+                name: 'Tiers',
+                value: `👁️ watch **${settings.suspicion_watch_at}+** → ${actionLabel(settings.suspicion_watch_action)}\n`
+                    + `⚠️ suspect **${settings.suspicion_suspect_at}+** → ${actionLabel(settings.suspicion_suspect_action)}\n`
+                    + `🚨 malicious **${settings.suspicion_malicious_at}+** → ${actionLabel(settings.suspicion_malicious_action)}`,
+                inline: false,
+            },
+            {
+                name: `Weight overrides (${overrides.length})`,
+                value: overrides.length
+                    ? truncate(overrides.map(([k, v]) => `${k}=${v}`).join(', '), 1000)
+                    : '*defaults*',
+                inline: false,
+            },
+            { name: `Scam keywords (${keywords.length})`, value: truncate(keywords.join(', '), 1000), inline: false },
+        );
+
+    const rows = [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('jg_susp_toggle')
+                .setLabel(settings.suspicion_enabled ? 'Disable scoring' : 'Enable scoring')
+                .setStyle(settings.suspicion_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('jg_susp_backtest').setLabel('Backtest on this server').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('jg_susp_test_user').setLabel('Score a user ID').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('jg_susp_thresholds').setLabel('Set thresholds').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_actions').setLabel('Set tier actions').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_weights').setLabel('Tune weights').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_keywords').setLabel('Edit keywords').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ChannelSelectMenuBuilder()
+                .setCustomId('jg_susp_channel')
+                .setPlaceholder('Where should suspicion reports go?')
+                .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+                .setMinValues(1)
+                .setMaxValues(1)
+        ),
+    ];
+
+    return { embed, rows };
+}
+
 function renderLogging(settings, routing, activeCategory) {
     const meta = logCategoryMeta(activeCategory);
     const rows = [];
@@ -504,6 +574,9 @@ async function buildPanel(guild, state) {
             break;
         case 'escalation':
             built = renderEscalation(settings, await getPendingUnbans(guild.id));
+            break;
+        case 'suspicion':
+            built = renderSuspicion(settings);
             break;
         case 'logging':
             built = renderLogging(settings, await describeRouting(guild, settings), state.logCategory);
@@ -912,6 +985,213 @@ module.exports = {
                     await scheduleNext(interaction.client);
                     await refresh(null);
                     return submitted.reply({ content: note, flags: MessageFlags.Ephemeral });
+                }
+
+                // ── Suspicion ───────────────────────────────────────────────
+                if (id === 'jg_susp_toggle') {
+                    return applyChange(i, { suspicion_enabled: !settings.suspicion_enabled },
+                        `Suspicion scoring **${settings.suspicion_enabled ? 'disabled' : 'enabled'}**`);
+                }
+
+                if (id === 'jg_susp_channel') {
+                    return applyChange(i, { suspicion_log_channel_id: i.values[0] },
+                        `Suspicion reports → <#${i.values[0]}>`);
+                }
+
+                if (id === 'jg_susp_thresholds') {
+                    const submitted = await promptModal(i, {
+                        title: 'Suspicion thresholds',
+                        inputs: [
+                            { id: 'watch', label: 'Watch tier at score', value: String(settings.suspicion_watch_at), required: true, maxLength: 4 },
+                            { id: 'suspect', label: 'Suspect tier at score', value: String(settings.suspicion_suspect_at), required: true, maxLength: 4 },
+                            { id: 'malicious', label: 'Malicious tier at score', value: String(settings.suspicion_malicious_at), required: true, maxLength: 4 },
+                        ],
+                    });
+                    if (!submitted) return;
+
+                    const bounds = { min: 1, max: 500 };
+                    const watch = clamp(Number(submitted.fields.getTextInputValue('watch')), bounds);
+                    const suspect = clamp(Number(submitted.fields.getTextInputValue('suspect')), bounds);
+                    const malicious = clamp(Number(submitted.fields.getTextInputValue('malicious')), bounds);
+
+                    if (!(watch <= suspect && suspect <= malicious)) {
+                        return submitted.reply({
+                            content: `⚠️ Thresholds must rise: watch (${watch}) ≤ suspect (${suspect}) ≤ malicious (${malicious}).`,
+                            flags: MessageFlags.Ephemeral,
+                        });
+                    }
+                    return applyChange(submitted, {
+                        suspicion_watch_at: watch,
+                        suspicion_suspect_at: suspect,
+                        suspicion_malicious_at: malicious,
+                    }, `Thresholds set to **${watch} / ${suspect} / ${malicious}**`);
+                }
+
+                if (id === 'jg_susp_actions') {
+                    const submitted = await promptModal(i, {
+                        title: 'Tier actions',
+                        inputs: [
+                            { id: 'watch', label: 'Watch: log / kick / ban / none', value: settings.suspicion_watch_action, required: true, maxLength: 5 },
+                            { id: 'suspect', label: 'Suspect: log / kick / ban / none', value: settings.suspicion_suspect_action, required: true, maxLength: 5 },
+                            { id: 'malicious', label: 'Malicious: log / kick / ban / none', value: settings.suspicion_malicious_action, required: true, maxLength: 5 },
+                        ],
+                    });
+                    if (!submitted) return;
+
+                    const picked = ['watch', 'suspect', 'malicious'].map(t =>
+                        submitted.fields.getTextInputValue(t).trim().toLowerCase());
+                    const bad = picked.filter(a => !TIER_ACTIONS.includes(a));
+                    if (bad.length) {
+                        return submitted.reply({
+                            content: `⚠️ Unknown action(s): ${bad.join(', ')}. Use one of: ${TIER_ACTIONS.join(', ')}.`,
+                            flags: MessageFlags.Ephemeral,
+                        });
+                    }
+
+                    // Banning needs the permission, and it is worth saying so
+                    // out loud rather than discovering it on a live raid.
+                    if (picked.includes('ban')) {
+                        const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+                        if (!me?.permissions.has(PermissionFlagsBits.BanMembers)) {
+                            return submitted.reply({
+                                content: '⚠️ A tier is set to **ban** but the bot lacks **Ban Members** here. Grant it first.',
+                                flags: MessageFlags.Ephemeral,
+                            });
+                        }
+                    }
+
+                    return applyChange(submitted, {
+                        suspicion_watch_action: picked[0],
+                        suspicion_suspect_action: picked[1],
+                        suspicion_malicious_action: picked[2],
+                    }, `Tier actions set to **${picked.join(' / ')}**`);
+                }
+
+                if (id === 'jg_susp_weights') {
+                    const current = Object.entries(settings.suspicion_weights ?? {})
+                        .map(([k, v]) => `${k}=${v}`).join('\n');
+                    const submitted = await promptModal(i, {
+                        title: 'Weight overrides',
+                        inputs: [{
+                            id: 'weights',
+                            label: 'signal=points per line (blank to reset)',
+                            paragraph: true,
+                            value: current,
+                            placeholder: Object.keys(DEFAULT_WEIGHTS).slice(0, 3).map(k => `${k}=${DEFAULT_WEIGHTS[k]}`).join('\n'),
+                            maxLength: 1500,
+                        }],
+                    });
+                    if (!submitted) return;
+
+                    const raw = submitted.fields.getTextInputValue('weights').trim();
+                    const weights = {};
+                    const unknown = [];
+                    for (const line of raw.split('\n').map(l => l.trim()).filter(Boolean)) {
+                        const [key, value] = line.split('=').map(p => p?.trim());
+                        if (!key || !Object.prototype.hasOwnProperty.call(DEFAULT_WEIGHTS, key)) { unknown.push(line); continue; }
+                        const points = Number(value);
+                        if (!Number.isFinite(points)) { unknown.push(line); continue; }
+                        weights[key] = clamp(points, { min: -100, max: 100 });
+                    }
+                    if (unknown.length) {
+                        return submitted.reply({
+                            content: `⚠️ Unrecognised line(s): ${truncate(unknown.join(', '), 400)}\n`
+                                + `Valid signals: ${Object.keys(DEFAULT_WEIGHTS).join(', ')}`,
+                            flags: MessageFlags.Ephemeral,
+                        });
+                    }
+                    return applyChange(submitted, { suspicion_weights: weights },
+                        Object.keys(weights).length
+                            ? `Weight overrides set (${Object.keys(weights).length})`
+                            : 'Weight overrides cleared, back to defaults');
+                }
+
+                if (id === 'jg_susp_keywords') {
+                    const current = (settings.suspicion_keywords ?? DEFAULT_SCAM_KEYWORDS).join(', ');
+                    const submitted = await promptModal(i, {
+                        title: 'Scam keywords',
+                        inputs: [{
+                            id: 'keywords',
+                            label: 'Comma separated (blank restores defaults)',
+                            paragraph: true,
+                            value: current,
+                            maxLength: 1500,
+                        }],
+                    });
+                    if (!submitted) return;
+
+                    const list = submitted.fields.getTextInputValue('keywords')
+                        .split(',').map(k => k.trim()).filter(Boolean);
+                    return applyChange(submitted, { suspicion_keywords: list.length ? list : null },
+                        list.length ? `Scam keyword list set (${list.length})` : 'Scam keywords reset to defaults');
+                }
+
+                if (id === 'jg_susp_backtest') {
+                    await i.deferReply({ flags: MessageFlags.Ephemeral });
+                    const report = await backtestGuild(guild, settings, { limit: 15 });
+                    if (report.skipped) {
+                        return i.editReply({ content: `⚠️ Backtest skipped: ${report.skipped}` });
+                    }
+
+                    const d = report.distribution;
+                    const lines = report.flagged.length
+                        ? report.flagged.map(f => `\`${String(f.score).padStart(3)}\` ${f.tier.padEnd(9)} <@${f.id}>`).join('\n')
+                        : '_nothing above the watch threshold_';
+
+                    return i.editReply({
+                        content: truncate(
+                            `**Backtest on ${report.scanned} member(s)** at ${settings.suspicion_watch_at}/`
+                            + `${settings.suspicion_suspect_at}/${settings.suspicion_malicious_at}\n\n`
+                            + `clear **${d.clear ?? 0}** · watch **${d.watch ?? 0}** · suspect **${d.suspect ?? 0}** · malicious **${d.malicious ?? 0}**\n`
+                            + `${report.totalFlagged} flagged in total, top ${report.flagged.length}:\n\n${lines}\n\n`
+                            + '-# These are existing members who would be flagged today. Raid-correlation '
+                            + 'signals cannot be reconstructed after the fact, so live scores can only be higher.',
+                            1900
+                        ),
+                    });
+                }
+
+                if (id === 'jg_susp_test_user') {
+                    const submitted = await promptModal(i, {
+                        title: 'Score a user ID',
+                        inputs: [{ id: 'uid', label: 'User ID', required: true, maxLength: 25 }],
+                    });
+                    if (!submitted) return;
+
+                    const uid = submitted.fields.getTextInputValue('uid').trim().replace(/^<@!?/, '').replace(/>$/, '');
+                    if (!SNOWFLAKE_RE.test(uid)) {
+                        return submitted.reply({ content: '⚠️ That is not a user ID.', flags: MessageFlags.Ephemeral });
+                    }
+
+                    const member = await guild.members.fetch(uid).catch(() => null);
+                    const user = member?.user ?? await interaction.client.users.fetch(uid).catch(() => null);
+                    if (!user) {
+                        return submitted.reply({
+                            content: '⚠️ Could not fetch that user, so only their account age is knowable. '
+                                + 'Use Diagnostics → Test a user ID for the age rule alone.',
+                            flags: MessageFlags.Ephemeral,
+                        });
+                    }
+
+                    const result = scoreAccount(user, {
+                        weights: settings.suspicion_weights,
+                        keywords: settings.suspicion_keywords ?? DEFAULT_SCAM_KEYWORDS,
+                        protectedNames: collectProtectedNames(guild),
+                        thresholds: {
+                            watch: Number(settings.suspicion_watch_at),
+                            suspect: Number(settings.suspicion_suspect_at),
+                            malicious: Number(settings.suspicion_malicious_at),
+                        },
+                    });
+
+                    return submitted.reply({
+                        content: truncate(
+                            `**${displayTag(user)}** scores **${result.score}** (${result.tier})\n\`\`\`\n${explain(result)}\n\`\`\``
+                            + '\n-# Correlation signals are omitted: they only exist relative to other joiners at the time.',
+                            1900
+                        ),
+                        flags: MessageFlags.Ephemeral,
+                    });
                 }
 
                 // ── Logging ─────────────────────────────────────────────────
