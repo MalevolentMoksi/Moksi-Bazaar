@@ -36,6 +36,108 @@ function cleanBotOwnMessage(content) {
     .trim();
 }
 
+const flatten = text => String(text ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Discord renders `<t:1754003000:F>` as a local date, but the model receives
+ * the raw token and can do nothing with it. Rich embeds (the join-gate log
+ * especially) are full of them, so swap in something readable.
+ */
+function readableTimestamps(text) {
+  return String(text ?? '').replace(/<t:(\d{1,15})(?::[tTdDfFR])?>/g, (whole, secs) => {
+    const ms = Number(secs) * 1000;
+    if (!Number.isFinite(ms)) return whole;
+    const iso = new Date(ms).toISOString();
+    return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+  });
+}
+
+/**
+ * Renders the readable text of a message's embeds.
+ *
+ * Without this the model sees an empty string for any embed-only message: the
+ * bot's own rich output (the join-gate log, for one), other bots' embeds, and
+ * every link preview. `msg.content` is empty in all of those cases.
+ *
+ * Works on both Message and MessageSnapshot, which share the `embeds` shape.
+ */
+function describeEmbeds(msg, charLimit) {
+  const embeds = msg?.embeds;
+  if (!embeds?.length) return '';
+
+  const rendered = [];
+  for (const e of embeds.slice(0, 3)) {
+    const bits = [];
+    if (e.author?.name) bits.push(e.author.name);
+    if (e.title) bits.push(e.title);
+    if (e.description) bits.push(e.description);
+    for (const f of (e.fields ?? []).slice(0, 10)) bits.push(`${f.name}: ${f.value}`);
+    if (e.footer?.text) bits.push(e.footer.text);
+
+    const text = flatten(readableTimestamps(bits.join(' | ')));
+    if (text) rendered.push(text);
+  }
+
+  if (rendered.length === 0) return '';
+  return ` [embed: ${rendered.join(' || ').slice(0, charLimit)}]`;
+}
+
+/**
+ * Renders forwarded message content. Discord puts nothing in `content` for a
+ * forward; the real payload lives in `messageSnapshots`.
+ */
+function describeForwarded(msg, charLimit) {
+  const snapshots = msg?.messageSnapshots;
+  if (!snapshots?.size) return '';
+
+  const rendered = [];
+  for (const snap of snapshots.values()) {
+    const bits = [];
+    if (snap.content) bits.push(flatten(readableTimestamps(snap.content)));
+    const embedText = describeEmbeds(snap, Math.floor(charLimit / 2));
+    if (embedText) bits.push(embedText.trim());
+    if (snap.attachments?.size) bits.push(`${snap.attachments.size} attachment(s)`);
+
+    const text = bits.join(' ').trim();
+    if (text) rendered.push(text);
+  }
+
+  if (rendered.length === 0) return '';
+  return ` [forwarded: ${rendered.join(' | ').slice(0, charLimit)}]`;
+}
+
+/**
+ * Names attachments the media pipeline ignores. It only describes image/* and
+ * video/*, so voice notes, audio and documents were previously invisible.
+ */
+function describeOtherAttachments(msg) {
+  if (!msg?.attachments?.size) return '';
+
+  const others = [...msg.attachments.values()].filter(a => {
+    const ct = String(a.contentType || '').toLowerCase();
+    return !ct.startsWith('image/') && !ct.startsWith('video/');
+  });
+  if (others.length === 0) return '';
+
+  const names = others.slice(0, 4).map(a => {
+    const ct = String(a.contentType || '').toLowerCase();
+    if (ct.startsWith('audio/')) {
+      // Voice notes carry a waveform; plain audio uploads do not.
+      const secs = Number(a.duration);
+      if (a.waveform) return `voice message${Number.isFinite(secs) ? ` (${Math.round(secs)}s)` : ''}`;
+      return `audio file: ${a.name}`;
+    }
+    return `file: ${a.name}`;
+  });
+
+  return ` [${names.join(', ')}]`;
+}
+
+/** Everything readable about a message that is not plain `content`. */
+function describeNonTextPayload(msg, charLimit) {
+  return `${describeEmbeds(msg, charLimit)}${describeForwarded(msg, charLimit)}${describeOtherAttachments(msg)}`;
+}
+
 // Build a compact "reply to X" marker so the AI sees conversational threading
 function buildReplyMarker(msg, messagesMap) {
   if (!msg.reference?.messageId) return '';
@@ -45,9 +147,16 @@ function buildReplyMarker(msg, messagesMap) {
   const refName = refMsg.author?.bot
     ? 'Cooler Moksi'
     : (refMsg.member?.displayName || refMsg.author.username);
-  const raw = cleanBotOwnMessage(refMsg.content) || refMsg.content || '';
-  const snippet = raw.replace(/\n/g, ' ').slice(0, 60);
-  const ellipsis = raw.length > 60 ? '...' : '';
+
+  // Fall back to the embed/forward payload when there is no plain content.
+  // Replying to a rich embed is common and used to quote an empty string.
+  let raw = flatten(cleanBotOwnMessage(refMsg.content) || refMsg.content || '');
+  if (!raw) raw = flatten(describeNonTextPayload(refMsg, 160));
+
+  if (!raw) return ` [replying to ${refName}]`;
+
+  const snippet = raw.slice(0, 160);
+  const ellipsis = raw.length > 160 ? '...' : '';
   return ` [replying to ${refName}: "${snippet}${ellipsis}"]`;
 }
 
@@ -57,13 +166,23 @@ function buildReplyMarker(msg, messagesMap) {
  * Now includes the bot's own replies (labeled "Cooler Moksi") so the AI
  * has short-term memory of what it just said, plus reply-chain markers.
  */
-async function buildConversationContext(messages, botId) {
+async function buildConversationContext(messages, botId, pinnedIds = new Set()) {
   const sorted = Array.from(messages.values())
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
   // Keep only own messages (users + our own bot). Drop other bots' spam.
   const usable = sorted.filter(msg => !msg.author.bot || msg.author.id === botId);
-  const recent = usable.slice(-MEMORY_LIMITS.CONVERSATION_MESSAGES);
+  let recent = usable.slice(-MEMORY_LIMITS.CONVERSATION_MESSAGES);
+
+  // Re-insert pinned messages the trim would otherwise throw away. The message
+  // a user is replying to is deliberately fetched even when it falls outside
+  // the window, and it is always older than everything else, so without this
+  // it lands at the front of the list and is immediately sliced back off.
+  if (pinnedIds.size > 0) {
+    const kept = new Set(recent.map(m => m.id));
+    const rescued = usable.filter(m => pinnedIds.has(m.id) && !kept.has(m.id));
+    if (rescued.length > 0) recent = [...rescued, ...recent];
+  }
 
   if (recent.length === 0) return 'No recent conversation.';
 
@@ -89,16 +208,73 @@ async function buildConversationContext(messages, botId) {
       }
     }
 
+    // Embeds, forwards and non-image attachments apply to the bot's own
+    // messages too: most of its rich output carries no plain content at all.
+    const payload = describeNonTextPayload(msg, MEMORY_LIMITS.MESSAGE_CHAR_LIMIT);
+
     const replyMarker = buildReplyMarker(msg, messages);
 
     let content = isSelf ? cleanBotOwnMessage(msg.content) : msg.content;
-    content = content.replace(/\n/g, ' ').slice(0, 300);
-    if (!content && mediaContent) content = '[media only]';
+    content = flatten(content).slice(0, MEMORY_LIMITS.MESSAGE_CHAR_LIMIT);
+    if (!content && (mediaContent || payload)) content = '[no text]';
 
-    return `${name}${replyMarker}: ${content}${mediaContent}`;
+    return `${name}${replyMarker}: ${content}${payload}${mediaContent}`;
   }));
 
   return lines.join('\n');
+}
+
+// ── EMOJI KEY EXTRACTION ────────────────────────────────────────────────────
+/**
+ * Pulls the trailing emoji key off a reply.
+ *
+ * The previous implementation matched `\b(goat_...|none)\b` anywhere in the
+ * response, so an ordinary sentence containing the word "none" had that word
+ * deleted from it. Worse, because only the first match was consumed, the real
+ * key on the last line then survived and leaked into the message as raw text:
+ * "that's none of your concern" + goat_sleep became
+ * "that's  of your concern goat_sleep".
+ *
+ * So: the last non-empty line is consumed only when the WHOLE line is a key or
+ * "none". As a safety net for the model ignoring the format, a `goat_*` token
+ * at the very end of that line is also stripped; those tokens never occur in
+ * natural prose, so unlike "none" they cannot be a false positive.
+ *
+ * @returns {{replyText: string, emojiKey: string|null}}
+ */
+function extractEmojiKey(rawContent) {
+  const lines = String(rawContent ?? '').split('\n');
+
+  let last = lines.length - 1;
+  while (last >= 0 && lines[last].trim() === '') last--;
+  if (last < 0) return { replyText: '', emojiKey: null };
+
+  const lineText = lines[last].trim();
+  const candidate = lineText.toLowerCase();
+
+  // Case 1: the line is exactly the key (the documented format).
+  if (candidate === 'none') {
+    return { replyText: lines.slice(0, last).join('\n').trim(), emojiKey: null };
+  }
+  if (Object.prototype.hasOwnProperty.call(GOAT_EMOJIS, candidate)) {
+    return { replyText: lines.slice(0, last).join('\n').trim(), emojiKey: candidate };
+  }
+
+  // Case 2: the model appended the key inline. Safe to strip because a
+  // `goat_*` token is never a real word. "none" is deliberately excluded here.
+  const inline = lineText.match(/\b(goat_[a-z_]+)\s*[.!?]*$/i);
+  if (inline) {
+    const key = inline[1].toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(GOAT_EMOJIS, key)) {
+      // Trim whatever separator preceded it. The Unicode punctuation class
+      // covers dashes of every width without naming one literally.
+      const trimmedLine = lineText.slice(0, inline.index).replace(/[\s\p{P}]+$/u, '').trim();
+      const rebuilt = [...lines.slice(0, last), trimmedLine].join('\n').trim();
+      return { replyText: rebuilt, emojiKey: key };
+    }
+  }
+
+  return { replyText: String(rawContent ?? '').trim(), emojiKey: null };
 }
 
 // Turn raw interaction count into a short relationship-age phrase
@@ -175,23 +351,37 @@ module.exports = {
       //     the fetched window, try to pull that referenced message so the
       //     AI has the thread. Mention-triggered calls expose _sourceMessage.
       const sourceMessage = interaction._sourceMessage;
-      if (sourceMessage?.reference?.messageId && !messages.has(sourceMessage.reference.messageId)) {
-        try {
-          const referenced = await interaction.channel.messages.fetch(sourceMessage.reference.messageId);
-          if (referenced) messages.set(referenced.id, referenced);
-        } catch (e) {
-          logger.debug('Could not fetch replied-to message', { error: e.message });
+      const pinnedIds = new Set();
+      if (sourceMessage?.reference?.messageId) {
+        // Pin it whether or not it was already in the window: it is older than
+        // everything else, so the context trim would otherwise discard it.
+        pinnedIds.add(sourceMessage.reference.messageId);
+
+        if (!messages.has(sourceMessage.reference.messageId)) {
+          try {
+            const referenced = await interaction.channel.messages.fetch(sourceMessage.reference.messageId);
+            if (referenced) messages.set(referenced.id, referenced);
+          } catch (e) {
+            logger.debug('Could not fetch replied-to message', { error: e.message });
+          }
         }
       }
 
       // 3. Build conversation context
-      const conversationContext = await buildConversationContext(messages, botId);
+      const conversationContext = await buildConversationContext(messages, botId, pinnedIds);
 
-      // 4. Sentiment Analysis (only if user sent a message)
-      let sentimentAnalysis = { sentiment: 0, originalSentiment: 0, reasoning: 'No message' };
-      if (userRequest && userRequest.trim()) {
-        sentimentAnalysis = await updateUserAttitudeWithAI(userId, userRequest, conversationContext, userContext);
-      }
+      // 4. Sentiment analysis. Started here but deliberately NOT awaited: the
+      //    system prompt uses the attitude level already loaded by
+      //    getUserContext, so nothing below needs this result until after the
+      //    reply comes back. Awaiting it here used to add a whole round-trip
+      //    (up to three sequential model fallbacks) to every single reply.
+      const sentimentPromise = (userRequest && userRequest.trim())
+        ? updateUserAttitudeWithAI(userId, userRequest, conversationContext, userContext)
+            .catch(e => {
+              logger.warn('Sentiment analysis failed', { userId, error: e.message });
+              return { sentiment: 0, originalSentiment: 0, reasoning: 'analysis failed' };
+            })
+        : Promise.resolve({ sentiment: 0, originalSentiment: 0, reasoning: 'No message' });
 
       // 5. Build AI Instructions
       const attitudeInstruction =
@@ -247,18 +437,23 @@ ${memoryText}`;
         : `(${askerName} pinged you without saying anything; react to the chat log above)`;
 
       // 6. API CALL with context caching (system prompt is static, worth caching)
-      const rawContent = await callOpenRouterAPI(
-        'deepseek/deepseek-chat',
-        [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        {
-          maxTokens: 250,       // was 200, avoids mid-sentence cut-offs
-          temperature: 0.85,    // was 1.0, less chaotic, still varied
-          cacheControl: true    // NEW: Enable caching for large system prompt (20% input cost savings on hits)
-        }
-      );
+      //    Runs concurrently with the sentiment pass started above, so the user
+      //    waits for whichever is slower rather than for both in sequence.
+      const [rawContent, sentimentAnalysis] = await Promise.all([
+        callOpenRouterAPI(
+          'deepseek/deepseek-chat',
+          [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          {
+            maxTokens: 250,       // was 200, avoids mid-sentence cut-offs
+            temperature: 0.85,    // was 1.0, less chaotic, still varied
+            cacheControl: true    // Cache the large static system prompt (20% input cost saving on hits)
+          }
+        ),
+        sentimentPromise
+      ]);
 
       clearTimeout(thinkingTimeout);
 
@@ -270,18 +465,10 @@ ${memoryText}`;
         );
       }
 
-      // 7. ROBUST EMOJI PARSING: match a key as a standalone token
-      let replyText = rawContent;
-      let finalEmoji = "";
-
-      const emojiRegex = new RegExp(`\\b(${Object.keys(GOAT_EMOJIS).join('|')}|none)\\b`, 'i');
-      const match = rawContent.match(emojiRegex);
-
-      if (match) {
-        const emojiKey = match[1].toLowerCase();
-        replyText = rawContent.replace(match[0], '').trim();
-        if (GOAT_EMOJIS[emojiKey]) finalEmoji = GOAT_EMOJIS[emojiKey];
-      }
+      // 7. EMOJI PARSING: only ever consume the trailing key line.
+      const { replyText: parsedText, emojiKey } = extractEmojiKey(rawContent);
+      let replyText = parsedText;
+      let finalEmoji = emojiKey ? (GOAT_EMOJIS[emojiKey] || '') : '';
 
       // Fallback: map attitude/sentiment to emojis that actually exist in GOAT_EMOJIS
       if (!finalEmoji) {

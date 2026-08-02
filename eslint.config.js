@@ -1,4 +1,4 @@
-// eslint.config.js — ESLint 9 flat config.
+// eslint.config.js: ESLint 9 flat config.
 //
 // Replaces .eslintrc.json, which ESLint 9 no longer reads. Preserves the
 // original intent: Node environment, ES2021 syntax, eslint:recommended.

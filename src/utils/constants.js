@@ -120,8 +120,12 @@ const GAME_CONFIG = {
 
 // ── MEMORY & CONTEXT LIMITS ─────────────────────────────────────────────────
 const MEMORY_LIMITS = {
-    CONVERSATION_MESSAGES: 12,    // Messages to include in AI context
-    FETCH_LIMIT: 15,              // Messages to fetch from Discord
+    // The bot's own replies occupy the same window as human messages, so in an
+    // active exchange roughly half of these slots are its own voice. These
+    // numbers are sized so the human side of the conversation stays useful.
+    CONVERSATION_MESSAGES: 18,    // Messages to include in AI context
+    FETCH_LIMIT: 25,              // Messages to fetch from Discord
+    MESSAGE_CHAR_LIMIT: 600,      // Per-message truncation inside the chat log
     RECENT_MEMORIES: 4,           // Past conversations to include
     MAX_STORED_MEMORIES: 1000,    // Total memories before cleanup
     CLEANUP_BATCH: 200            // How many to delete during cleanup
