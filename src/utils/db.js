@@ -140,6 +140,67 @@ const init = async () => {
             count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, user_id)
         );
+        -- ── JOIN GATE (account-age auto-kicker) ─────────────────────────────
+        -- One row per guild. A guild with no row is implicitly disabled, so the
+        -- gate is opt-in and can never act on a server it was never set up for.
+        CREATE TABLE IF NOT EXISTS join_gate_settings (
+            guild_id                TEXT PRIMARY KEY,
+            enabled                 BOOLEAN NOT NULL DEFAULT false,
+            dry_run                 BOOLEAN NOT NULL DEFAULT false,
+            min_account_age_minutes INTEGER NOT NULL DEFAULT 20160,
+            gate_bots               BOOLEAN NOT NULL DEFAULT false,
+            exempt_user_ids         TEXT[]  NOT NULL DEFAULT '{}',
+            dm_enabled              BOOLEAN NOT NULL DEFAULT true,
+            dm_message              TEXT,
+            dm_ban_message          TEXT,
+            dm_append_eligible      BOOLEAN NOT NULL DEFAULT true,
+            dm_append_invite        BOOLEAN NOT NULL DEFAULT true,
+            dm_invite_url           TEXT,
+            dm_cooldown_minutes     INTEGER NOT NULL DEFAULT 60,
+            escalate_enabled        BOOLEAN NOT NULL DEFAULT false,
+            escalate_after_attempts INTEGER NOT NULL DEFAULT 3,
+            log_channel_id          TEXT,
+            log_kick_channel_id     TEXT,
+            log_failure_channel_id  TEXT,
+            log_preview_channel_id  TEXT,
+            log_config_channel_id   TEXT,
+            log_kicks               BOOLEAN NOT NULL DEFAULT true,
+            log_failures            BOOLEAN NOT NULL DEFAULT true,
+            log_previews            BOOLEAN NOT NULL DEFAULT true,
+            log_config              BOOLEAN NOT NULL DEFAULT true,
+            burst_alert_enabled     BOOLEAN NOT NULL DEFAULT true,
+            burst_threshold         INTEGER NOT NULL DEFAULT 5,
+            burst_window_seconds    INTEGER NOT NULL DEFAULT 60,
+            sweep_enabled           BOOLEAN NOT NULL DEFAULT false,
+            sweep_window_hours      INTEGER NOT NULL DEFAULT 24,
+            total_kicks             INTEGER NOT NULL DEFAULT 0,
+            total_bans              INTEGER NOT NULL DEFAULT 0,
+            total_failures          INTEGER NOT NULL DEFAULT 0,
+            created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        -- Rejoin tracking. Drives escalation and DM de-duplication.
+        CREATE TABLE IF NOT EXISTS join_gate_attempts (
+            guild_id      TEXT NOT NULL,
+            user_id       TEXT NOT NULL,
+            attempts      INTEGER NOT NULL DEFAULT 0,
+            first_seen_ms BIGINT NOT NULL,
+            last_seen_ms  BIGINT NOT NULL,
+            last_dm_ms    BIGINT,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_join_gate_attempts_seen ON join_gate_attempts(last_seen_ms);
+        -- Temp-bans awaiting automatic lift. Deliberately independent of
+        -- join_gate_settings.enabled: disabling the gate must never strand
+        -- someone in a ban the bot promised to lift.
+        CREATE TABLE IF NOT EXISTS join_gate_pending_unbans (
+            guild_id     TEXT NOT NULL,
+            user_id      TEXT NOT NULL,
+            unban_at_ms  BIGINT NOT NULL,
+            banned_at_ms BIGINT NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_join_gate_unbans_due ON join_gate_pending_unbans(unban_at_ms);
     `);
 
     // Default Settings

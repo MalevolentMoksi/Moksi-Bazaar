@@ -4,6 +4,7 @@ const { init } = require('../../utils/db');
 const { initUptimePresence } = require('../../utils/presence');
 const { startReminderScheduler } = require('../../commands/tools/remind.js');
 const { initWarnReminderScheduler } = require('../../utils/warnReminderScheduler');
+const { initJoinGate } = require('../../utils/joinGate');
 
 module.exports = {
   name: 'clientReady',
@@ -39,6 +40,16 @@ module.exports = {
       console.log('✅ Warn reminder scheduler started');
     } catch (e) {
       console.error('❌ Failed to start warn reminder scheduler:', e);
+    }
+
+    // Start join gate (temp-ban lifter + opt-in catch-up sweep).
+    // initJoinGate swallows its own errors: a broken gate must not take the
+    // bot down, and a pending unban must still be lifted on time.
+    try {
+      await initJoinGate(client);
+      console.log('✅ Join gate initialised');
+    } catch (e) {
+      console.error('❌ Failed to initialise join gate:', e);
     }
   }
 };
