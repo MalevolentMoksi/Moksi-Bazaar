@@ -27,6 +27,8 @@ const {
 const {
     scoreAccount, explain, DEFAULT_WEIGHTS, DEFAULT_SCAM_KEYWORDS,
 } = require('../../utils/joinGate/suspicion');
+const { stats: phishingStats, startAutoRefresh: startPhishingRefresh } = require('../../utils/joinGate/phishing');
+const { syncGuild: syncInvites, canRead: canReadInvites } = require('../../utils/joinGate/invites');
 const { describeRouting, logConfigChange, logTest, CATEGORIES } = require('../../utils/joinGate/logging');
 const { getPendingUnbans, deletePendingUnban, recomputePendingUnbans, scheduleNext } =
     require('../../utils/joinGate/unbanScheduler');
@@ -369,6 +371,26 @@ function renderSuspicion(settings) {
                 inline: false,
             },
             { name: `Scam keywords (${keywords.length})`, value: truncate(keywords.join(', '), 1000), inline: false },
+            {
+                name: 'Watch window (behaviour)',
+                value: settings.watch_enabled
+                    ? `🟢 first **${settings.watch_window_minutes} min** after joining · act at **${settings.watch_action_at}** → ${actionLabel(settings.watch_action)}\n`
+                      + `-# scam-domain list: ${phishingStats().domains || 'not loaded yet'} domains`
+                    : '⚪ Off. Nothing is scored on what people post',
+                inline: false,
+            },
+            {
+                name: 'Invite tracking',
+                value: settings.invite_tracking_enabled
+                    ? '🟢 On. Reports show which invite was used, and flag codes minting joins fast'
+                    : '⚪ Off',
+                inline: true,
+            },
+            {
+                name: 'Tenure grace',
+                value: `members here longer than **${settings.suspicion_tenure_grace_days}d** are damped down`,
+                inline: true,
+            },
         );
 
     const rows = [
@@ -377,14 +399,26 @@ function renderSuspicion(settings) {
                 .setCustomId('jg_susp_toggle')
                 .setLabel(settings.suspicion_enabled ? 'Disable scoring' : 'Enable scoring')
                 .setStyle(settings.suspicion_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('jg_susp_backtest').setLabel('Backtest on this server').setStyle(ButtonStyle.Primary),
-            new ButtonBuilder().setCustomId('jg_susp_test_user').setLabel('Score a user ID').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder()
+                .setCustomId('jg_watch_toggle')
+                .setLabel(settings.watch_enabled ? 'Disable watch window' : 'Enable watch window')
+                .setStyle(settings.watch_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('jg_invite_toggle')
+                .setLabel(settings.invite_tracking_enabled ? 'Disable invite tracking' : 'Enable invite tracking')
+                .setStyle(settings.invite_tracking_enabled ? ButtonStyle.Danger : ButtonStyle.Success)
         ),
         new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('jg_susp_thresholds').setLabel('Set thresholds').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('jg_susp_actions').setLabel('Set tier actions').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_backtest').setLabel('Backtest').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('jg_susp_test_user').setLabel('Score a user ID').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_thresholds').setLabel('Thresholds').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_actions').setLabel('Tier actions').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_watchcfg').setLabel('Watch settings').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('jg_susp_weights').setLabel('Tune weights').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('jg_susp_keywords').setLabel('Edit keywords').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('jg_susp_keywords').setLabel('Edit keywords').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_susp_tenure').setLabel('Tenure grace').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
@@ -993,6 +1027,85 @@ module.exports = {
                         `Suspicion scoring **${settings.suspicion_enabled ? 'disabled' : 'enabled'}**`);
                 }
 
+                if (id === 'jg_watch_toggle') {
+                    const turningOn = !settings.watch_enabled;
+                    // Start pulling the scam-domain list the moment it is
+                    // needed, rather than making the owner restart the bot.
+                    if (turningOn) startPhishingRefresh();
+                    return applyChange(i, { watch_enabled: turningOn },
+                        `Behaviour watch window **${turningOn ? 'enabled' : 'disabled'}**`);
+                }
+
+                if (id === 'jg_invite_toggle') {
+                    const turningOn = !settings.invite_tracking_enabled;
+                    if (turningOn) {
+                        if (!canReadInvites(guild)) {
+                            return i.reply({
+                                content: '⚠️ Invite tracking needs **Manage Server**, which the bot does not have here. '
+                                    + 'Without it, Discord will not show the invite list and joins cannot be attributed.',
+                                flags: MessageFlags.Ephemeral,
+                            });
+                        }
+                        await syncInvites(guild).catch(() => {});
+                    }
+                    return applyChange(i, { invite_tracking_enabled: turningOn },
+                        `Invite tracking **${turningOn ? 'enabled' : 'disabled'}**`);
+                }
+
+                if (id === 'jg_susp_watchcfg') {
+                    const submitted = await promptModal(i, {
+                        title: 'Watch window settings',
+                        inputs: [
+                            { id: 'minutes', label: 'Minutes to watch after joining', value: String(settings.watch_window_minutes), required: true, maxLength: 4 },
+                            { id: 'at', label: 'Behaviour score that triggers an action', value: String(settings.watch_action_at), required: true, maxLength: 4 },
+                            { id: 'action', label: 'Action: log / kick / ban / none', value: settings.watch_action, required: true, maxLength: 5 },
+                        ],
+                    });
+                    if (!submitted) return;
+
+                    const minutes = clamp(Number(submitted.fields.getTextInputValue('minutes')), { min: 1, max: 1440 });
+                    const at = clamp(Number(submitted.fields.getTextInputValue('at')), { min: 1, max: 500 });
+                    const action = submitted.fields.getTextInputValue('action').trim().toLowerCase();
+
+                    if (!TIER_ACTIONS.includes(action)) {
+                        return submitted.reply({
+                            content: `⚠️ Unknown action "${action}". Use one of: ${TIER_ACTIONS.join(', ')}.`,
+                            flags: MessageFlags.Ephemeral,
+                        });
+                    }
+                    if (action === 'ban') {
+                        const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+                        if (!me?.permissions.has(PermissionFlagsBits.BanMembers)) {
+                            return submitted.reply({
+                                content: '⚠️ The watch action is set to **ban** but the bot lacks **Ban Members** here.',
+                                flags: MessageFlags.Ephemeral,
+                            });
+                        }
+                    }
+
+                    return applyChange(submitted, {
+                        watch_window_minutes: minutes, watch_action_at: at, watch_action: action,
+                    }, `Watch window: **${minutes} min**, act at **${at}** → **${action}**`);
+                }
+
+                if (id === 'jg_susp_tenure') {
+                    const submitted = await promptModal(i, {
+                        title: 'Tenure grace',
+                        inputs: [{
+                            id: 'days',
+                            label: 'Days after which members are damped',
+                            value: String(settings.suspicion_tenure_grace_days),
+                            required: true,
+                            maxLength: 5,
+                        }],
+                    });
+                    if (!submitted) return;
+
+                    const days = clamp(Number(submitted.fields.getTextInputValue('days')), { min: 0, max: 3650 });
+                    return applyChange(submitted, { suspicion_tenure_grace_days: days },
+                        `Tenure grace set to **${days} days**`);
+                }
+
                 if (id === 'jg_susp_channel') {
                     return applyChange(i, { suspicion_log_channel_id: i.values[0] },
                         `Suspicion reports → <#${i.values[0]}>`);
@@ -1135,7 +1248,9 @@ module.exports = {
 
                     const d = report.distribution;
                     const lines = report.flagged.length
-                        ? report.flagged.map(f => `\`${String(f.score).padStart(3)}\` ${f.tier.padEnd(9)} <@${f.id}>`).join('\n')
+                        ? report.flagged.map(f =>
+                            `\`${String(f.score).padStart(3)}\` ${f.tier.padEnd(9)} <@${f.id}>`
+                            + (f.tenureScore !== f.score ? ` -# (${f.tenureScore} with tenure)` : '')).join('\n')
                         : '_nothing above the watch threshold_';
 
                     return i.editReply({
@@ -1143,9 +1258,11 @@ module.exports = {
                             `**Backtest on ${report.scanned} member(s)** at ${settings.suspicion_watch_at}/`
                             + `${settings.suspicion_suspect_at}/${settings.suspicion_malicious_at}\n\n`
                             + `clear **${d.clear ?? 0}** · watch **${d.watch ?? 0}** · suspect **${d.suspect ?? 0}** · malicious **${d.malicious ?? 0}**\n`
-                            + `${report.totalFlagged} flagged in total, top ${report.flagged.length}:\n\n${lines}\n\n`
-                            + '-# These are existing members who would be flagged today. Raid-correlation '
-                            + 'signals cannot be reconstructed after the fact, so live scores can only be higher.',
+                            + `${report.totalFlagged} flagged on profile alone, **${report.stillFlaggedWithTenure}** still flagged once `
+                            + `membership tenure is counted. Top ${report.flagged.length}:\n\n${lines}\n\n`
+                            + '-# Scored ignoring tenure, so you can see the raw profile signal; live joins have no tenure '
+                            + 'anyway. Raid-correlation and behaviour signals cannot be reconstructed after the fact, '
+                            + 'so real scores can only be higher.',
                             1900
                         ),
                     });

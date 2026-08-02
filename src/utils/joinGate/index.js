@@ -23,6 +23,10 @@ const enforcement = require('./enforcement');
 const logging = require('./logging');
 const unbanScheduler = require('./unbanScheduler');
 const diagnostics = require('./diagnostics');
+const suspicion = require('./suspicion');
+const phishing = require('./phishing');
+const watchWindow = require('./watch');
+const invites = require('./invites');
 
 /**
  * Boots the pieces that need to run independently of any single join:
@@ -41,6 +45,17 @@ async function initJoinGate(client) {
     try {
         const guildIds = await config.getEnabledGuildIds();
         if (guildIds.length === 0) return;
+
+        // Only pay for these when at least one guild actually uses them.
+        const settingsPerGuild = await Promise.all(guildIds.map(id => config.getSettings(id)));
+
+        if (settingsPerGuild.some(s => s.watch_enabled)) {
+            phishing.startAutoRefresh();
+        }
+        if (settingsPerGuild.some(s => s.invite_tracking_enabled)) {
+            await invites.syncAll(client).catch(e =>
+                logger.warn('[JOIN-GATE] Invite cache priming failed', { error: e.message }));
+        }
 
         if (!client.options.intents.has(GatewayIntentBits.GuildMembers)) {
             logger.error(
@@ -71,4 +86,8 @@ module.exports = {
     logging,
     unbanScheduler,
     diagnostics,
+    suspicion,
+    phishing,
+    watchWindow,
+    invites,
 };

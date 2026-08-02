@@ -193,7 +193,14 @@ const init = async () => {
             ADD COLUMN IF NOT EXISTS suspicion_log_channel_id TEXT,
             ADD COLUMN IF NOT EXISTS suspicion_weights     JSONB NOT NULL DEFAULT '{}'::jsonb,
             ADD COLUMN IF NOT EXISTS suspicion_keywords    TEXT[],
-            ADD COLUMN IF NOT EXISTS total_flagged         INTEGER NOT NULL DEFAULT 0;
+            ADD COLUMN IF NOT EXISTS total_flagged         INTEGER NOT NULL DEFAULT 0,
+            -- Post-join behaviour window and invite attribution. Both opt-in.
+            ADD COLUMN IF NOT EXISTS watch_enabled         BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS watch_window_minutes  INTEGER NOT NULL DEFAULT 10,
+            ADD COLUMN IF NOT EXISTS watch_action_at       INTEGER NOT NULL DEFAULT 100,
+            ADD COLUMN IF NOT EXISTS watch_action          TEXT NOT NULL DEFAULT 'log',
+            ADD COLUMN IF NOT EXISTS invite_tracking_enabled BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS suspicion_tenure_grace_days INTEGER NOT NULL DEFAULT 30;
         -- Rejoin tracking. Drives escalation and DM de-duplication.
         CREATE TABLE IF NOT EXISTS join_gate_attempts (
             guild_id      TEXT NOT NULL,

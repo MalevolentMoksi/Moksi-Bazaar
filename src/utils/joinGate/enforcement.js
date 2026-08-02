@@ -27,6 +27,8 @@ const {
 const { logOutcome, logBurst, logSuspicion } = require('./logging');
 const { insertPendingUnban, scheduleNext } = require('./unbanScheduler');
 const suspicion = require('./suspicion');
+const watch = require('./watch');
+const invites = require('./invites');
 
 /**
  * Removals are serialised globally rather than per guild. The bottleneck is
@@ -486,7 +488,7 @@ function collectProtectedNames(guild) {
  * for their account age must not also be judged here: that would double-punish
  * and make the logs contradict each other.
  */
-async function runSuspicion(member, settings, { inBurst }) {
+async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
     const guild = member.guild;
 
     const correlation = suspicion.correlateJoin(guild.id, member.user);
@@ -496,6 +498,8 @@ async function runSuspicion(member, settings, { inBurst }) {
         protectedNames: collectProtectedNames(guild),
         correlation,
         inBurst,
+        inviteFlood: Boolean(inviteInfo?.flooding),
+        member,
         thresholds: {
             watch: Number(settings.suspicion_watch_at),
             suspect: Number(settings.suspicion_suspect_at),
@@ -503,6 +507,7 @@ async function runSuspicion(member, settings, { inBurst }) {
         },
     });
 
+    if (inviteInfo?.known) result.inviteInfo = inviteInfo;
     if (result.tier === 'clear') return;
 
     const action = {
@@ -572,6 +577,17 @@ async function handleMemberJoin(member) {
             suspicion.recordJoin(member.guild.id, member.user);
         }
 
+        // Start the behaviour window before any removal decision, so a member
+        // who slips past the gate is still observed for their first minutes.
+        if (settings.watch_enabled && !member.user.bot) {
+            watch.watchMember(member.guild.id, member.id);
+        }
+
+        let inviteInfo = null;
+        if (settings.invite_tracking_enabled) {
+            inviteInfo = await invites.resolveJoin(member.guild).catch(() => null);
+        }
+
         const decision = evaluate(member.user, settings, { guildOwnerId: member.guild.ownerId });
 
         if (decision.action === 'allow') {
@@ -580,7 +596,7 @@ async function handleMemberJoin(member) {
 
             if (settings.suspicion_enabled && !member.user.bot) {
                 const inBurst = isInBurst(member.guild.id, settings);
-                await runSuspicion(member, settings, { inBurst }).catch(error =>
+                await runSuspicion(member, settings, { inBurst, inviteInfo }).catch(error =>
                     logger.error('[JOIN-GATE] Suspicion scoring failed', {
                         guildId: member.guild.id, userId: member.id, error: error.message,
                     })
@@ -593,6 +609,90 @@ async function handleMemberJoin(member) {
         enqueue(member, 'join');
     } catch (error) {
         logger.error('[JOIN-GATE] handleMemberJoin crashed', { error: error.message, stack: error.stack });
+    }
+}
+
+/**
+ * Inspects a message from a recently joined member.
+ *
+ * Called for every guild message, so the cheap "is this person even being
+ * watched" check has to come first and has to be synchronous. Only members
+ * inside the watch window cost anything at all; everyone else returns
+ * immediately without a database read.
+ *
+ * Never throws.
+ */
+async function handleWatchedMessage(message) {
+    try {
+        if (!message?.guild || message.author?.bot) return;
+
+        // Cheapest possible gate: an in-memory lookup, no config read.
+        if (watch.watchedCount(message.guild.id) === 0) return;
+
+        let settings;
+        try {
+            settings = await getSettings(message.guild.id);
+        } catch {
+            return; // fail open, same as the join path
+        }
+        if (!settings.enabled || !settings.watch_enabled) return;
+
+        const windowMs = Number(settings.watch_window_minutes) * 60_000;
+        if (!watch.isWatched(message.guild.id, message.author.id, windowMs)) return;
+
+        const { score, signals } = watch.inspectMessage(message.guild.id, message, { windowMs });
+        if (score <= 0) return;
+
+        const member = message.member ?? await message.guild.members.fetch(message.author.id).catch(() => null);
+        if (!member) return;
+
+        const threshold = Number(settings.watch_action_at);
+        const action = score >= threshold ? settings.watch_action : 'log';
+        const dryRun = Boolean(settings.dry_run);
+
+        const result = {
+            score,
+            tier: score >= threshold ? 'malicious' : 'watch',
+            signals,
+            source: 'behaviour',
+        };
+
+        let actionOutcome = null;
+        if (!dryRun && (action === 'kick' || action === 'ban')) {
+            const decision = {
+                action: 'gate',
+                reason: `behaviour score ${score} within the watch window`,
+                ageMs: Date.now() - Number(member.user.createdTimestamp),
+                thresholdMs: thresholdMs(settings),
+                eligibleAt: Number(member.user.createdTimestamp) + thresholdMs(settings),
+            };
+            const attempts = await peekAttempt(message.guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
+            const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts);
+            actionOutcome = await removeMember(member, settings, decision, action);
+            actionOutcome.dm = dm.note;
+
+            if (actionOutcome.ok) {
+                await incrementStat(message.guild.id, action === 'ban' ? 'total_bans' : 'total_kicks');
+            } else if (!actionOutcome.benign) {
+                await incrementStat(message.guild.id, 'total_failures');
+            }
+        }
+
+        // One report per member: stop re-reporting every subsequent message.
+        watch.forget(message.guild.id, member.id);
+
+        await logSuspicion(message.guild, settings, {
+            user: member.user, result, action, actionOutcome, dryRun,
+            channelId: message.channelId,
+        });
+        if (!dryRun) await incrementStat(message.guild.id, 'total_flagged');
+
+        logger.info('[JOIN-GATE] Watch-window flag', {
+            guildId: message.guild.id, userId: member.id, score, action, dryRun,
+            signals: signals.map(s => s.id),
+        });
+    } catch (error) {
+        logger.error('[JOIN-GATE] handleWatchedMessage crashed', { error: error.message, stack: error.stack });
     }
 }
 
@@ -658,7 +758,7 @@ async function sweepGuild(client, guildId) {
  *
  * @returns {Promise<{scanned: number, distribution: object, flagged: Array, skipped?: string}>}
  */
-async function backtestGuild(guild, settings, { limit = 25 } = {}) {
+async function backtestGuild(guild, settings, { limit = 25, applyTenure = false } = {}) {
     let members;
     try {
         members = await guild.members.fetch();
@@ -674,25 +774,50 @@ async function backtestGuild(guild, settings, { limit = 25 } = {}) {
     const protectedNames = collectProtectedNames(guild);
     const distribution = { clear: 0, watch: 0, suspect: 0, malicious: 0 };
     const flagged = [];
+    // Tenure would clear almost everyone here, which is correct in production
+    // but useless for tuning. Score both ways and report both.
+    let stillFlaggedWithTenure = 0;
 
     for (const member of members.values()) {
         if (member.user.bot) continue;
-        const result = suspicion.scoreAccount(member.user, {
+        const common = {
             weights: settings.suspicion_weights,
             keywords: settings.suspicion_keywords ?? suspicion.DEFAULT_SCAM_KEYWORDS,
             protectedNames,
             correlation: null,
             inBurst: false,
             thresholds,
-        });
+        };
+
+        const result = suspicion.scoreAccount(member.user, { ...common, member, applyTenure });
         distribution[result.tier] = (distribution[result.tier] ?? 0) + 1;
+
         if (result.tier !== 'clear') {
-            flagged.push({ id: member.id, tag: displayTag(member.user), score: result.score, tier: result.tier, result });
+            const withTenure = applyTenure
+                ? result
+                : suspicion.scoreAccount(member.user, { ...common, member, applyTenure: true });
+            if (withTenure.tier !== 'clear') stillFlaggedWithTenure++;
+
+            flagged.push({
+                id: member.id,
+                tag: displayTag(member.user),
+                score: result.score,
+                tier: result.tier,
+                tenureScore: withTenure.score,
+                result,
+            });
         }
     }
 
     flagged.sort((a, b) => b.score - a.score);
-    return { scanned: members.size, distribution, flagged: flagged.slice(0, limit), totalFlagged: flagged.length };
+    return {
+        scanned: members.size,
+        distribution,
+        flagged: flagged.slice(0, limit),
+        totalFlagged: flagged.length,
+        stillFlaggedWithTenure,
+        appliedTenure: applyTenure,
+    };
 }
 
 module.exports = {
@@ -700,6 +825,7 @@ module.exports = {
     evaluateUserId,
     renderDm,
     handleMemberJoin,
+    handleWatchedMessage,
     sweepGuild,
     backtestGuild,
     collectProtectedNames,

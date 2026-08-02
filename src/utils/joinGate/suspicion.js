@@ -1,56 +1,85 @@
 // src/utils/joinGate/suspicion.js
 /**
- * Join Gate — suspicion scoring.
+ * Join Gate: suspicion scoring.
  *
  * Account age answers one question: "is this account new?". Plenty of abuse
- * comes from accounts that are old enough to pass that check, and plenty of
- * legitimate people fail it. This scores a joiner across several independent
- * signals instead, and shows its arithmetic.
+ * comes from accounts old enough to pass that check, and plenty of legitimate
+ * people fail it. This scores a joiner across many independent signals
+ * instead, and shows its arithmetic.
  *
- * Three principles, because they are what make this usable rather than another
- * opaque black box:
+ * Design rules this file exists to keep honest:
  *
- *  1. TRUST SIGNALS SUBTRACT. Nitro, badges and a genuinely old account pull
- *     the score DOWN. A purely additive scorer flags every real newcomer,
- *     which is exactly how these systems end up ignored.
- *  2. EVERY DECISION SHOWS ITS WORK. Each signal reports its own points and a
- *     human-readable reason, so a flag can be argued with.
- *  3. SCRIPT IS NOT SUSPICION. The name checks look for mixed scripts WITHIN A
- *     SINGLE WORD, which is the actual homoglyph impersonation trick. A name
- *     written wholly in Cyrillic, Greek, Arabic or CJK is perfectly ordinary
- *     and is never penalised for it.
+ *  1. TRUST IS CAPPED. Nitro, badges and a banner mean "probably not a fully
+ *     automated bot". They do NOT mean "not malicious". Their combined pull is
+ *     clamped, so a paid-for profile can never launder an otherwise damning
+ *     account down to clear.
+ *  2. COMBINATIONS BEAT SUMS. A default avatar is weak evidence. A default
+ *     avatar plus a gibberish username plus a digit suffix is a bulk-registered
+ *     account, and a linear sum badly under-rates that. Combos add on top.
+ *  3. TENURE FORGIVES. Someone who has been in the server for months is not
+ *     who this is for. Long membership damps the score hard.
+ *  4. SCRIPT IS NOT SUSPICION. Name checks look for mixed scripts WITHIN A
+ *     SINGLE WORD, the actual homoglyph trick. A name written wholly in
+ *     Cyrillic, Greek, Arabic or CJK is ordinary and is never penalised.
+ *  5. EVERY DECISION SHOWS ITS WORK.
  *
  * Scoring is pure and side-effect free, so the panel can backtest it against
  * existing members without touching anyone.
  */
 
-const { SnowflakeUtil } = require('discord.js');
+const { SnowflakeUtil, UserFlags } = require('discord.js');
 
 const DAY_MS = 86_400_000;
 
 // ── Tunable weights ─────────────────────────────────────────────────────────
 
-/**
- * Default points per signal. Every one of these can be overridden per guild.
- * Negative numbers are trust signals.
- */
 const DEFAULT_WEIGHTS = Object.freeze({
+    // Discord's own verdict. Near-conclusive on its own.
+    discord_spammer: 85,
+    discord_quarantined: 85,
+    // Profile shape
     default_avatar: 18,
     no_global_name: 6,
+    // Name heuristics
     invisible_chars: 32,
     mixed_script: 30,
     digit_suffix: 12,
-    random_name: 14,
+    gibberish_name: 20,
     symbol_spam: 8,
     scam_keyword: 22,
     impersonation: 30,
+    // Raid correlation
     creation_cluster: 26,
     avatar_collision: 30,
     name_similarity: 20,
     join_burst: 10,
-    nitro_avatar: -22,
-    has_badges: -26,
+    invite_flood: 22,
+    // Combinations
+    bulk_signature: 25,
+    fresh_throwaway: 18,
+    barren_profile: 10,
+    // Trust (negative, and collectively capped by TRUST_CAP)
+    nitro_avatar: -12,
+    has_badges: -18,
+    has_banner: -8,
+    server_booster: -14,
+    server_tag: -8,
+    rich_presence: -8,
 });
+
+/**
+ * Ceilings on how far the profile-trust signals can pull a score down.
+ *
+ * Two limits, because one is not enough. The absolute cap stops a stack of
+ * purchases subtracting 50+ points outright. The proportional cap is the more
+ * important one: trust may cancel at most this fraction of whatever suspicion
+ * was found, so the worse an account looks, the less a subscription can excuse.
+ *
+ * Buying Nitro is evidence of not being a throwaway bot. It is not evidence of
+ * good intent, and it must never be able to clear a genuinely bad profile.
+ */
+const TRUST_CAP = 35;
+const TRUST_MAX_FRACTION = 0.4;
 
 /** Account age contributes on a curve rather than as a cliff. */
 const AGE_BANDS = Object.freeze([
@@ -64,15 +93,27 @@ const AGE_BANDS = Object.freeze([
     { maxDays: Infinity, points: -20, label: 'over 3 years old' },
 ]);
 
+/**
+ * How much being a long-standing member forgives. Applied outside TRUST_CAP:
+ * this is the "stop bothering me about my regulars" dial.
+ */
+const TENURE_BANDS = Object.freeze([
+    { maxDays: 7, points: 0, label: 'joined this week' },
+    { maxDays: 30, points: -10, label: 'member for weeks' },
+    { maxDays: 90, points: -25, label: 'member for months' },
+    { maxDays: 365, points: -40, label: 'member for months' },
+    { maxDays: Infinity, points: -60, label: 'member for over a year' },
+]);
+
 const DEFAULT_SCAM_KEYWORDS = Object.freeze([
     'free nitro', 'nitro free', 'discord nitro', 'steam gift', 'free gift',
-    'airdrop', 'crypto', 'giveaway bot', 'moderator', 'admin', 'support team',
-    'system', 'discord staff', 'onlyfans', 'teen', 'nudes',
+    'airdrop', 'giveaway bot', 'moderator', 'admin', 'support team',
+    'system', 'discord staff', 'onlyfans', 'nudes',
 ]);
 
 const DEFAULT_THRESHOLDS = Object.freeze({ watch: 40, suspect: 70, malicious: 100 });
 
-/** Discord badges. Holding any of them is meaningful evidence of a real account. */
+/** Badges that indicate a real, lived-in account. */
 const TRUST_FLAGS = [
     'Staff', 'Partner', 'Hypesquad', 'BugHunterLevel1', 'BugHunterLevel2',
     'HypeSquadOnlineHouse1', 'HypeSquadOnlineHouse2', 'HypeSquadOnlineHouse3',
@@ -82,16 +123,14 @@ const TRUST_FLAGS = [
 // ── Text analysis ───────────────────────────────────────────────────────────
 
 /**
- * Zero-width, bidi-override and soft-hyphen characters.
- *
- * Built through the RegExp constructor so the escapes stay escapes: writing
- * these as literals puts genuinely invisible bytes into the source, which is
- * unreadable, easy to mangle, and trips no-irregular-whitespace.
+ * Zero-width, bidi-override and soft-hyphen characters. Built through the
+ * RegExp constructor so the escapes stay escapes rather than becoming literal
+ * invisible bytes in the source.
  */
 const INVISIBLE_RE = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\uFEFF\\u00AD]');
 
 /**
- * Scripts that contain visually identical letters. Mixing them inside one word
+ * Scripts containing visually identical letters. Mixing them inside one word
  * is the homoglyph trick (an "admin" whose 'a' is Cyrillic). Using one of them
  * for a whole name is just writing in that language, and is never penalised.
  */
@@ -101,13 +140,13 @@ const CONFUSABLE_SCRIPTS = [
     ['greek', new RegExp('[\\u0370-\\u03FF]')],
 ];
 
-const VOWELS = /[aeiouyAEIOUY]/;
+const CONSONANT_RE = /[bcdfghjklmnpqrstvwxz]/;
+const VOWEL_RE = /[aeiouy]/;
 
 function hasInvisibleChars(name) {
     return INVISIBLE_RE.test(String(name ?? ''));
 }
 
-/** True only when a single token mixes two confusable scripts. */
 function hasMixedScriptToken(name) {
     for (const token of String(name ?? '').split(/[\s_\-.|]+/)) {
         if (token.length < 2) continue;
@@ -121,12 +160,40 @@ function hasDigitSuffix(name) {
     return /\d{4,}$/.test(String(name ?? ''));
 }
 
-/** Consonant soup: long, all letters, almost no vowels. */
+/** Longest run of consecutive consonants, treating y as a vowel. */
+function maxConsonantRun(letters) {
+    let max = 0;
+    let run = 0;
+    for (const ch of letters.toLowerCase()) {
+        if (CONSONANT_RE.test(ch)) { run++; if (run > max) max = run; }
+        else run = 0;
+    }
+    return max;
+}
+
+/**
+ * Gibberish detection for Latin-script names.
+ *
+ * The old version just checked the vowel ratio, which flags real surnames like
+ * "Schwartz". Consonant runs are the far better tell: pronounceable names and
+ * words essentially never string five consonants together, while bulk-generated
+ * usernames such as "jxglybtecdmzfhwc" do it constantly.
+ *
+ * Non-Latin names strip to nothing here and are therefore never flagged.
+ */
 function looksRandom(name) {
-    const stripped = String(name ?? '').replace(/[^A-Za-z]/g, '');
-    if (stripped.length < 8) return false;
-    const vowels = stripped.split('').filter(c => VOWELS.test(c)).length;
-    return vowels / stripped.length < 0.25;
+    const letters = String(name ?? '').replace(/[^A-Za-z]/g, '');
+    if (letters.length < 6) return false;
+
+    const vowels = letters.split('').filter(c => VOWEL_RE.test(c.toLowerCase())).length;
+    const ratio = vowels / letters.length;
+    const run = maxConsonantRun(letters);
+
+    // Five consonants in a row is not a name anyone chose to type.
+    if (run >= 5) return true;
+    // Otherwise demand real length before judging on vowel density, so short
+    // legitimately consonant-heavy names are left alone.
+    return letters.length >= 10 && ratio < 0.18;
 }
 
 function hasSymbolSpam(name) {
@@ -134,10 +201,7 @@ function hasSymbolSpam(name) {
     return symbols.length >= 4;
 }
 
-/**
- * Folds a name down for comparison: lowercase, confusable digits mapped back
- * to letters, everything non-alphanumeric removed. "A_d_m1n!!" -> "admin".
- */
+/** Folds a name for comparison: "A_d_m1n!!" -> "admin". */
 function foldName(name) {
     return String(name ?? '')
         .toLowerCase()
@@ -156,11 +220,6 @@ function matchesScamKeyword(name, keywords) {
     }) || null;
 }
 
-/**
- * Impersonation of a protected name (staff display names, the server name).
- * Requires a fold-equal match or containment of a reasonably long name, so
- * short nicknames do not match half the server.
- */
 function matchesProtectedName(name, protectedNames) {
     const folded = foldName(name);
     if (folded.length < 3) return null;
@@ -180,7 +239,6 @@ const JOIN_WINDOW_MS = 10 * 60_000;
 const CLUSTER_WINDOW_MS = 30 * 60_000;
 const MAX_TRACKED_PER_GUILD = 200;
 
-/** guildId -> recent joiners, for cross-member correlation. */
 const recentJoins = new Map();
 
 function pruneJoins(list, now) {
@@ -189,11 +247,6 @@ function pruneJoins(list, now) {
     return kept.length > MAX_TRACKED_PER_GUILD ? kept.slice(-MAX_TRACKED_PER_GUILD) : kept;
 }
 
-/**
- * Records a joiner so later arrivals can be correlated against them.
- * Called for every join, including ones that pass every check: a raid is only
- * visible as a group.
- */
 function recordJoin(guildId, user, now = Date.now()) {
     const list = pruneJoins(recentJoins.get(guildId) ?? [], now);
     list.push({
@@ -206,16 +259,13 @@ function recordJoin(guildId, user, now = Date.now()) {
     recentJoins.set(guildId, list);
 }
 
-/** Everything the correlation signals need, computed against the live window. */
 function correlateJoin(guildId, user, now = Date.now()) {
     const list = pruneJoins(recentJoins.get(guildId) ?? [], now).filter(e => e.id !== user.id);
     const createdTimestamp = Number(user.createdTimestamp);
     const foldedSelf = foldName(user.username).replace(/\d+/g, '');
 
     const cohort = list.filter(e => Math.abs(e.createdTimestamp - createdTimestamp) <= CLUSTER_WINDOW_MS);
-    const sharedAvatar = user.avatar
-        ? list.filter(e => e.avatar && e.avatar === user.avatar)
-        : [];
+    const sharedAvatar = user.avatar ? list.filter(e => e.avatar && e.avatar === user.avatar) : [];
     const similarNames = list.filter(e => {
         const folded = foldName(e.username).replace(/\d+/g, '');
         if (!folded || !foldedSelf) return false;
@@ -244,22 +294,22 @@ function weightOf(weights, id) {
     return Number.isFinite(Number(override)) ? Number(override) : DEFAULT_WEIGHTS[id];
 }
 
+function hasFlag(user, flagName) {
+    try {
+        if (!UserFlags[flagName]) return false;
+        return Boolean(user.flags?.has?.(UserFlags[flagName]));
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Scores one account.
  *
- * Pure: no API calls, no database, no mutation. `correlation` and
- * `protectedNames` are passed in so the panel can score existing members
- * without any of that context.
+ * Pure. Everything contextual (correlation, protected names, membership, live
+ * presence) is passed in, so the panel can score existing members offline.
  *
- * @param {object} user               discord.js User (or a plain shape in tests)
- * @param {object} options
- * @param {object} [options.weights]        per-guild weight overrides
- * @param {string[]} [options.keywords]     scam keyword list
- * @param {string[]} [options.protectedNames] staff/server names to guard
- * @param {object} [options.correlation]    output of correlateJoin()
- * @param {boolean} [options.inBurst]       gate reported a join burst
- * @param {number} [options.now]
- * @returns {{score: number, tier: string, signals: Array<{id,label,points,detail}>}}
+ * @returns {{score: number, tier: string, signals: Array, trustApplied: number, trustCapped: boolean}}
  */
 function scoreAccount(user, options = {}) {
     const {
@@ -268,91 +318,183 @@ function scoreAccount(user, options = {}) {
         protectedNames = [],
         correlation = null,
         inBurst = false,
+        inviteFlood = false,
+        member = null,
+        applyTenure = true,
         thresholds = DEFAULT_THRESHOLDS,
         now = Date.now(),
     } = options;
 
-    const signals = [];
-    const add = (id, label, points, detail) => {
-        if (!points) return;
-        signals.push({ id, label, points, detail });
-    };
+    const suspicious = [];
+    const trust = [];
 
-    const createdTimestamp = Number(
-        user.createdTimestamp ?? SnowflakeUtil.timestampFrom(user.id)
-    );
+    const add = (bucket, id, label, points, detail) => {
+        if (!points) return;
+        bucket.push({ id, label, points, detail });
+    };
+    const addSus = (id, label, points, detail) => add(suspicious, id, label, points, detail);
+    const addTrust = (id, label, points, detail) => add(trust, id, label, points, detail);
+
+    const createdTimestamp = Number(user.createdTimestamp ?? SnowflakeUtil.timestampFrom(user.id));
     const ageDays = (now - createdTimestamp) / DAY_MS;
     const name = user.username ?? '';
 
-    // 1. Account age, on a curve, negative once the account is genuinely old.
-    const band = AGE_BANDS.find(b => ageDays < b.maxDays) ?? AGE_BANDS[AGE_BANDS.length - 1];
-    add('account_age', 'Account age', band.points, `${ageDays.toFixed(1)}d (${band.label})`);
-
-    // 2. Profile shape.
-    if (!user.avatar) add('default_avatar', 'Default avatar', weightOf(weights, 'default_avatar'), 'never set one');
-    if (!user.globalName) add('no_global_name', 'No display name', weightOf(weights, 'no_global_name'), 'username only');
-    if (typeof user.avatar === 'string' && user.avatar.startsWith('a_')) {
-        add('nitro_avatar', 'Animated avatar', weightOf(weights, 'nitro_avatar'), 'has (or had) Nitro');
+    // 1. Discord's own verdict. If Discord says spammer, that is not a heuristic.
+    if (hasFlag(user, 'Spammer')) {
+        addSus('discord_spammer', 'Flagged by Discord', weightOf(weights, 'discord_spammer'), 'account carries the Spammer flag');
     }
+    if (hasFlag(user, 'Quarantined')) {
+        addSus('discord_quarantined', 'Quarantined by Discord', weightOf(weights, 'discord_quarantined'), 'account is quarantined');
+    }
+
+    // 2. Account age.
+    const band = AGE_BANDS.find(b => ageDays < b.maxDays) ?? AGE_BANDS[AGE_BANDS.length - 1];
+    if (band.points >= 0) {
+        addSus('account_age', 'Account age', band.points, `${ageDays.toFixed(1)}d (${band.label})`);
+    } else {
+        addTrust('account_age', 'Account age', band.points, `${ageDays.toFixed(1)}d (${band.label})`);
+    }
+
+    // 3. Profile shape.
+    const defaultAvatar = !user.avatar;
+    if (defaultAvatar) addSus('default_avatar', 'Default avatar', weightOf(weights, 'default_avatar'), 'never set one');
+    if (!user.globalName) addSus('no_global_name', 'No display name', weightOf(weights, 'no_global_name'), 'username only');
+
+    const animatedAvatar = typeof user.avatar === 'string' && user.avatar.startsWith('a_');
+    if (animatedAvatar) addTrust('nitro_avatar', 'Animated avatar', weightOf(weights, 'nitro_avatar'), 'has (or had) Nitro');
+    if (user.banner) addTrust('has_banner', 'Profile banner', weightOf(weights, 'has_banner'), 'Nitro banner set');
 
     const flagNames = (() => {
         try { return user.flags?.toArray?.() ?? []; } catch { return []; }
     })();
     const badges = flagNames.filter(f => TRUST_FLAGS.includes(f));
     if (badges.length > 0) {
-        add('has_badges', 'Discord badges', weightOf(weights, 'has_badges'), badges.slice(0, 3).join(', '));
+        addTrust('has_badges', 'Discord badges', weightOf(weights, 'has_badges'), badges.slice(0, 3).join(', '));
     }
 
-    // 3. Name heuristics.
+    // Server tag / clan: another thing an automated account rarely bothers with.
+    if (user.primaryGuild?.identityEnabled || user.clan?.identityEnabled) {
+        addTrust('server_tag', 'Server tag', weightOf(weights, 'server_tag'), 'displays a server tag');
+    }
+
+    if (member?.premiumSince || member?.premiumSinceTimestamp) {
+        addTrust('server_booster', 'Server booster', weightOf(weights, 'server_booster'), 'boosting this server');
+    }
+
+    const activity = member?.presence?.activities?.find(a => a.type !== 4); // 4 = Custom Status
+    if (activity) {
+        addTrust('rich_presence', 'Active presence', weightOf(weights, 'rich_presence'), `doing: ${activity.name}`);
+    }
+
+    // 4. Name heuristics.
+    const gibberish = looksRandom(name);
+    const digitSuffix = hasDigitSuffix(name);
+
     if (hasInvisibleChars(name)) {
-        add('invisible_chars', 'Hidden characters', weightOf(weights, 'invisible_chars'), 'zero-width or bidi control chars');
+        addSus('invisible_chars', 'Hidden characters', weightOf(weights, 'invisible_chars'), 'zero-width or bidi control chars');
     }
     if (hasMixedScriptToken(name)) {
-        add('mixed_script', 'Mixed-script name', weightOf(weights, 'mixed_script'), 'one word mixes lookalike alphabets');
+        addSus('mixed_script', 'Mixed-script name', weightOf(weights, 'mixed_script'), 'one word mixes lookalike alphabets');
     }
-    if (hasDigitSuffix(name)) {
-        add('digit_suffix', 'Digit suffix', weightOf(weights, 'digit_suffix'), 'name ends in 4+ digits');
+    if (digitSuffix) {
+        addSus('digit_suffix', 'Digit suffix', weightOf(weights, 'digit_suffix'), 'name ends in 4+ digits');
     }
-    if (looksRandom(name)) {
-        add('random_name', 'Random-looking name', weightOf(weights, 'random_name'), 'almost no vowels');
+    if (gibberish) {
+        addSus('gibberish_name', 'Unpronounceable name', weightOf(weights, 'gibberish_name'), 'consonant runs typical of generated names');
     }
     if (hasSymbolSpam(name)) {
-        add('symbol_spam', 'Symbol-heavy name', weightOf(weights, 'symbol_spam'), '4+ decorative symbols');
+        addSus('symbol_spam', 'Symbol-heavy name', weightOf(weights, 'symbol_spam'), '4+ decorative symbols');
     }
 
     const keywordHit = matchesScamKeyword(name, keywords);
-    if (keywordHit) {
-        add('scam_keyword', 'Scam keyword', weightOf(weights, 'scam_keyword'), `matched "${keywordHit}"`);
-    }
+    if (keywordHit) addSus('scam_keyword', 'Scam keyword', weightOf(weights, 'scam_keyword'), `matched "${keywordHit}"`);
 
     const impersonated = matchesProtectedName(name, protectedNames);
-    if (impersonated) {
-        add('impersonation', 'Possible impersonation', weightOf(weights, 'impersonation'), `resembles "${impersonated}"`);
-    }
+    if (impersonated) addSus('impersonation', 'Possible impersonation', weightOf(weights, 'impersonation'), `resembles "${impersonated}"`);
 
-    // 4. Correlation against other recent joiners.
+    // 5. Correlation with other recent joiners.
     if (correlation) {
         if (correlation.cohortSize >= 2) {
-            add('creation_cluster', 'Created alongside others', weightOf(weights, 'creation_cluster'),
+            addSus('creation_cluster', 'Created alongside others', weightOf(weights, 'creation_cluster'),
                 `${correlation.cohortSize} other joiner(s) made within 30min of this account`);
         }
         if (correlation.sharedAvatarCount >= 1) {
-            add('avatar_collision', 'Shared avatar', weightOf(weights, 'avatar_collision'),
+            addSus('avatar_collision', 'Shared avatar', weightOf(weights, 'avatar_collision'),
                 `identical avatar to ${correlation.sharedAvatarCount} other joiner(s)`);
         }
         if (correlation.similarNameCount >= 1) {
-            add('name_similarity', 'Similar name', weightOf(weights, 'name_similarity'),
+            addSus('name_similarity', 'Similar name', weightOf(weights, 'name_similarity'),
                 `near-identical to ${correlation.similarNameCount} other joiner(s)`);
         }
     }
-    if (inBurst) {
-        add('join_burst', 'Arrived in a burst', weightOf(weights, 'join_burst'), 'joined during a detected burst');
+    if (inBurst) addSus('join_burst', 'Arrived in a burst', weightOf(weights, 'join_burst'), 'joined during a detected burst');
+    if (inviteFlood) addSus('invite_flood', 'Invite flood', weightOf(weights, 'invite_flood'), 'invite code is minting joins rapidly');
+
+    // 6. Combinations. A linear sum badly under-rates a signature that a human
+    //    reads instantly, which is exactly how an obvious throwaway scores 48.
+    const noTrustAtAll = trust.filter(t => t.id !== 'account_age').length === 0;
+
+    if (defaultAvatar && (gibberish || digitSuffix) && noTrustAtAll) {
+        addSus('bulk_signature', 'Bulk-registration signature', weightOf(weights, 'bulk_signature'),
+            'default avatar + generated-looking name + nothing else on the profile');
+    }
+    if (defaultAvatar && ageDays < 7 && noTrustAtAll) {
+        addSus('fresh_throwaway', 'Fresh throwaway', weightOf(weights, 'fresh_throwaway'),
+            'brand new, no avatar, no badges');
+    }
+    // A profile with nothing lived-in about it. On its own this is mild; the
+    // point is that it stacks rather than being cancelled out by one purchase.
+    if (defaultAvatar && !user.globalName && noTrustAtAll) {
+        addSus('barren_profile', 'Nothing on the profile', weightOf(weights, 'barren_profile'),
+            'no avatar, no display name, no badges, no activity');
     }
 
-    const raw = signals.reduce((sum, s) => sum + s.points, 0);
-    const score = Math.max(0, raw);
+    // 7. Membership tenure, applied outside the trust cap.
+    let tenureSignal = null;
+    const joinedTimestamp = Number(member?.joinedTimestamp ?? 0);
+    if (applyTenure && joinedTimestamp > 0) {
+        const tenureDays = (now - joinedTimestamp) / DAY_MS;
+        const tBand = TENURE_BANDS.find(b => tenureDays < b.maxDays) ?? TENURE_BANDS[TENURE_BANDS.length - 1];
+        if (tBand.points) {
+            tenureSignal = {
+                id: 'membership_tenure', label: 'Long-standing member',
+                points: tBand.points, detail: `${tenureDays.toFixed(0)}d in the server (${tBand.label})`,
+            };
+        }
+    }
 
-    return { score, tier: tierFor(score, thresholds), signals };
+    // Cap the profile-trust pull, absolutely and proportionally.
+    const suspicionTotal = suspicious.reduce((sum, s) => sum + s.points, 0);
+    const rawTrust = trust.reduce((sum, s) => sum + s.points, 0);
+    const allowance = Math.min(TRUST_CAP, Math.round(Math.max(0, suspicionTotal) * TRUST_MAX_FRACTION));
+    const cappedTrust = Math.max(rawTrust, -allowance);
+    const trustCapped = rawTrust < -allowance;
+
+    let total = suspicionTotal + cappedTrust;
+    if (tenureSignal) total += tenureSignal.points;
+
+    const score = Math.max(0, Math.round(total));
+
+    // Discord's own verdict is not negotiable. If Discord has flagged the
+    // account, no amount of Nitro or account age argues it back down.
+    const forced = suspicious.some(s => s.id === 'discord_spammer' || s.id === 'discord_quarantined');
+
+    // Present the trust bucket scaled to what was actually applied, so the
+    // breakdown always adds up to the score shown.
+    const scale = rawTrust < 0 ? cappedTrust / rawTrust : 1;
+    const shownTrust = trust.map(s => ({ ...s, points: Math.round(s.points * scale) }));
+
+    const signals = [...suspicious, ...shownTrust];
+    if (tenureSignal) signals.push(tenureSignal);
+
+    return {
+        score,
+        tier: forced ? 'malicious' : tierFor(score, thresholds),
+        signals,
+        trustApplied: cappedTrust,
+        trustCapped,
+        forcedByDiscord: forced,
+    };
 }
 
 function tierFor(score, thresholds = DEFAULT_THRESHOLDS) {
@@ -365,11 +507,13 @@ function tierFor(score, thresholds = DEFAULT_THRESHOLDS) {
 /** Renders the arithmetic for a log embed. */
 function explain(result) {
     if (result.signals.length === 0) return 'no signals fired';
-    return result.signals
+    const lines = result.signals
         .slice()
         .sort((a, b) => b.points - a.points)
-        .map(s => `${s.points > 0 ? '+' : ''}${s.points} ${s.label} (${s.detail})`)
-        .join('\n');
+        .map(s => `${s.points > 0 ? '+' : ''}${s.points} ${s.label} (${s.detail})`);
+    if (result.trustCapped) lines.push('(trust pull capped: a paid profile cannot clear a bad one)');
+    if (result.forcedByDiscord) lines.push('(forced to malicious: Discord itself flagged this account)');
+    return lines.join('\n');
 }
 
 module.exports = {
@@ -378,7 +522,10 @@ module.exports = {
     DEFAULT_SCAM_KEYWORDS,
     DEFAULT_THRESHOLDS,
     AGE_BANDS,
+    TENURE_BANDS,
     TRUST_FLAGS,
+    TRUST_CAP,
+    TRUST_MAX_FRACTION,
     scoreAccount,
     tierFor,
     explain,
@@ -390,6 +537,7 @@ module.exports = {
     hasMixedScriptToken,
     hasDigitSuffix,
     looksRandom,
+    maxConsonantRun,
     hasSymbolSpam,
     foldName,
     matchesScamKeyword,

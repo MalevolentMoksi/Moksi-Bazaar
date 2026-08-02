@@ -47,6 +47,12 @@ function initializeBot() {
       // switched on at Developer Portal → your app → Bot → Privileged Gateway
       // Intents → "Server Members Intent", or login is rejected outright.
       GatewayIntentBits.GuildMembers,
+      // PRIVILEGED. Lets the suspicion scorer see status and activity, which
+      // are evidence of a lived-in account. Same portal toggle, "Presence
+      // Intent". Costs memory: discord.js caches a presence per online member.
+      GatewayIntentBits.GuildPresences,
+      // Needed to diff invite use counts for join attribution.
+      GatewayIntentBits.GuildInvites,
     ],
   });
 

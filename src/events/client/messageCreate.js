@@ -1,5 +1,6 @@
 // src/events/client/messageCreate.js
 const logger = require('../../utils/logger');
+const { handleWatchedMessage } = require('../../utils/joinGate/enforcement');
 
 /** Discord's typing indicator lasts ~10s; refresh just inside that. */
 const TYPING_REFRESH_MS = 8_000;
@@ -11,6 +12,14 @@ module.exports = {
   async execute(message, client) {
     if (message.author.bot) return;
     if (!message.guild) return; // Ignore DMs
+
+    // Join-gate behaviour window. Runs before the mention check because it
+    // applies to every message from a recently joined member, not just ones
+    // aimed at the bot. It short-circuits on an in-memory lookup when nobody
+    // is being watched, so the common case costs almost nothing.
+    handleWatchedMessage(message).catch(error =>
+      logger.error('Join gate watch handler failed', { error: error.message })
+    );
 
     const botId = client.user?.id;
     if (!botId || !message.mentions.users.has(botId)) return;

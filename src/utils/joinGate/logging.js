@@ -181,8 +181,9 @@ const TIER_STYLE = {
  * Reports a scored joiner. The whole point is that the arithmetic is visible,
  * so staff can judge the call rather than trusting a verdict.
  */
-async function logSuspicion(guild, settings, { user, result, action, actionOutcome, dryRun }) {
+async function logSuspicion(guild, settings, { user, result, action, actionOutcome, dryRun, channelId }) {
     const style = TIER_STYLE[result.tier] ?? TIER_STYLE.watch;
+    const isBehaviour = result.source === 'behaviour';
 
     const breakdown = result.signals.length
         ? result.signals
@@ -204,15 +205,32 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
             name: `${user.tag ?? user.username} (${user.id})`,
             iconURL: user.displayAvatarURL?.() ?? undefined,
         })
-        .setTitle(`${style.icon} ${style.word}: score ${result.score}`)
+        .setTitle(`${style.icon} ${isBehaviour ? 'Behaviour flag' : style.word}: score ${result.score}`)
         .setDescription(breakdown.slice(0, 4000))
         .addFields(
             { name: 'Account created', value: `<t:${toUnix(user.createdTimestamp)}:R>`, inline: true },
-            { name: 'Tier', value: result.tier, inline: true },
+            { name: isBehaviour ? 'Source' : 'Tier', value: isBehaviour ? 'first messages after joining' : result.tier, inline: true },
             { name: 'Outcome', value: outcome, inline: true },
         )
-        .setFooter({ text: 'Scores are advisory. Check the account before acting on it.' })
+        .setFooter({
+            text: isBehaviour
+                ? 'Triggered by what they posted, not by how the profile looks.'
+                : 'Scores are advisory. Check the account before acting on it.',
+        })
         .setTimestamp();
+
+    if (channelId) {
+        embed.addFields({ name: 'Where', value: `<#${channelId}>`, inline: true });
+    }
+    if (result.inviteInfo?.known) {
+        const inv = result.inviteInfo;
+        embed.addFields({
+            name: 'Invite used',
+            value: `\`${inv.code}\`${inv.inviterId ? ` from <@${inv.inviterId}>` : ''}`
+                + (inv.usesInWindow > 1 ? ` (${inv.usesInWindow} joins in 5min)` : ''),
+            inline: true,
+        });
+    }
 
     return send(guild, settings, 'suspicion', { embeds: [embed] });
 }

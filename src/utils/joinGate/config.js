@@ -78,6 +78,14 @@ const DEFAULTS = Object.freeze({
     suspicion_log_channel_id: null,
     suspicion_weights: {},
     suspicion_keywords: null,
+    suspicion_tenure_grace_days: 30,
+    // Post-join behaviour window.
+    watch_enabled: false,
+    watch_window_minutes: 10,
+    watch_action_at: 100,
+    watch_action: 'log',
+    // Invite attribution.
+    invite_tracking_enabled: false,
     total_kicks: 0,
     total_bans: 0,
     total_failures: 0,
@@ -104,6 +112,9 @@ const WRITABLE_COLUMNS = new Set([
     'suspicion_enabled', 'suspicion_watch_at', 'suspicion_suspect_at', 'suspicion_malicious_at',
     'suspicion_watch_action', 'suspicion_suspect_action', 'suspicion_malicious_action',
     'suspicion_log_channel_id', 'suspicion_weights', 'suspicion_keywords',
+    'suspicion_tenure_grace_days',
+    'watch_enabled', 'watch_window_minutes', 'watch_action_at', 'watch_action',
+    'invite_tracking_enabled',
 ]);
 
 const STAT_COLUMNS = new Set(['total_kicks', 'total_bans', 'total_failures', 'total_flagged']);

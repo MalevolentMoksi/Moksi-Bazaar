@@ -20,21 +20,26 @@ module.exports = (client) => {
     };
     walk(eventsPath);
 
-    // Register each event
+    // Register each event. A file may export one handler or an array of them,
+    // matching how handleCommands.js already treats command modules.
     for (const filePath of eventFiles) {
-      const event = require(filePath);
-      if (!event.name || !event.execute) {
-        console.warn(`Skipping bad event file: ${filePath}`);
-        continue;
-      }
+      const exported = require(filePath);
+      const handlers = Array.isArray(exported) ? exported : [exported];
 
-      // Ensure both interaction and client are passed to execute
-      if (event.once) {
-        client.once(event.name, async (...args) => await event.execute(...args, client));
-      } else {
-        client.on(event.name, async (...args) => await event.execute(...args, client));
+      for (const event of handlers) {
+        if (!event?.name || !event?.execute) {
+          console.warn(`Skipping bad event export in: ${filePath}`);
+          continue;
+        }
+
+        // Ensure both interaction and client are passed to execute
+        if (event.once) {
+          client.once(event.name, async (...args) => await event.execute(...args, client));
+        } else {
+          client.on(event.name, async (...args) => await event.execute(...args, client));
+        }
+        console.log(`Loaded event ${event.name} from ${path.relative(process.cwd(), filePath)}`);
       }
-      console.log(`Loaded event ${event.name} from ${path.relative(process.cwd(), filePath)}`);
     }
   };
 };
