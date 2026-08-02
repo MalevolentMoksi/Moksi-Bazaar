@@ -504,6 +504,33 @@ function tierFor(score, thresholds = DEFAULT_THRESHOLDS) {
     return 'clear';
 }
 
+/**
+ * One-line reason, for list views where the full arithmetic does not fit.
+ *
+ * Leads with the Discord flag when present, because a forced-malicious verdict
+ * on a low score is otherwise baffling: a 65 sitting above a 79 in a list
+ * sorted by tier looks like a bug until you can see that Discord flagged it.
+ */
+function summarise(result, maxSignals = 3) {
+    if (result.forcedByDiscord) {
+        const which = result.signals.find(s => s.id === 'discord_quarantined')
+            ? 'quarantined by Discord'
+            : 'flagged as a spammer by Discord';
+        return `🚩 ${which}`;
+    }
+    if (!result.signals?.length) return 'no signals';
+
+    return result.signals
+        .filter(s => s.points > 0)
+        .sort((a, b) => b.points - a.points)
+        .slice(0, maxSignals)
+        .map(s => `${s.label.toLowerCase()} +${s.points}`)
+        .join(', ') || 'trust signals only';
+}
+
+/** Ranks tiers so lists can be ordered by severity rather than raw score. */
+const TIER_RANK = { malicious: 3, suspect: 2, watch: 1, clear: 0 };
+
 /** Renders the arithmetic for a log embed. */
 function explain(result) {
     if (result.signals.length === 0) return 'no signals fired';
@@ -529,6 +556,8 @@ module.exports = {
     scoreAccount,
     tierFor,
     explain,
+    summarise,
+    TIER_RANK,
     recordJoin,
     correlateJoin,
     resetCorrelation,

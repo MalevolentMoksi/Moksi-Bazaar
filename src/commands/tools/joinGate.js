@@ -1247,25 +1247,100 @@ module.exports = {
                     }
 
                     const d = report.distribution;
+                    const TIER_ICON = { malicious: '🚨', suspect: '⚠️', watch: '👁️' };
+
+                    // Every entry carries its own reason. A bare score with a
+                    // tier next to it is unactionable, and the forced-malicious
+                    // cases look like outright bugs without it.
                     const lines = report.flagged.length
                         ? report.flagged.map(f =>
-                            `\`${String(f.score).padStart(3)}\` ${f.tier.padEnd(9)} <@${f.id}>`
-                            + (f.tenureScore !== f.score ? ` -# (${f.tenureScore} with tenure)` : '')).join('\n')
+                            `${TIER_ICON[f.tier] ?? ''} \`${String(f.score).padStart(3)}\` <@${f.id}>`
+                            + (f.tenureScore !== f.score ? ` *(${f.tenureScore} w/ tenure)*` : '')
+                            + `\n-# ${truncate(f.reason, 150)}`).join('\n')
                         : '_nothing above the watch threshold_';
 
-                    return i.editReply({
-                        content: truncate(
-                            `**Backtest on ${report.scanned} member(s)** at ${settings.suspicion_watch_at}/`
-                            + `${settings.suspicion_suspect_at}/${settings.suspicion_malicious_at}\n\n`
-                            + `clear **${d.clear ?? 0}** · watch **${d.watch ?? 0}** · suspect **${d.suspect ?? 0}** · malicious **${d.malicious ?? 0}**\n`
-                            + `${report.totalFlagged} flagged on profile alone, **${report.stillFlaggedWithTenure}** still flagged once `
-                            + `membership tenure is counted. Top ${report.flagged.length}:\n\n${lines}\n\n`
-                            + '-# Scored ignoring tenure, so you can see the raw profile signal; live joins have no tenure '
-                            + 'anyway. Raid-correlation and behaviour signals cannot be reconstructed after the fact, '
-                            + 'so real scores can only be higher.',
-                            1900
-                        ),
+                    const embed = new EmbedBuilder()
+                        .setTitle(`🕵️ Backtest: ${report.scanned} member(s)`)
+                        .setColor(report.totalFlagged > 0 ? EMBED_COLORS.WARNING : EMBED_COLORS.SUCCESS)
+                        .setDescription(truncate(
+                            `Thresholds **${settings.suspicion_watch_at} / ${settings.suspicion_suspect_at} / `
+                            + `${settings.suspicion_malicious_at}**\n`
+                            + `clear **${d.clear ?? 0}** · 👁️ watch **${d.watch ?? 0}** · ⚠️ suspect **${d.suspect ?? 0}** `
+                            + `· 🚨 malicious **${d.malicious ?? 0}**\n`
+                            + `**${report.totalFlagged}** flagged on profile alone, **${report.stillFlaggedWithTenure}** still `
+                            + `flagged once membership tenure counts.\n\n${lines}`,
+                            4000
+                        ))
+                        .setFooter({
+                            text: 'Sorted by severity. Scored ignoring tenure so raw profile signal is visible; '
+                                + 'live joins have no tenure anyway. Raid and behaviour signals cannot be '
+                                + 'reconstructed after the fact, so real scores can only be higher.',
+                        });
+
+                    if (report.flagged.some(f => f.forcedByDiscord)) {
+                        embed.addFields({
+                            name: 'Why is a low score marked malicious?',
+                            value: '🚩 entries were flagged by **Discord itself** (Spammer or Quarantined). '
+                                + 'That forces the top tier regardless of the number next to it.',
+                            inline: false,
+                        });
+                    }
+
+                    // Picker for the full arithmetic behind any one entry.
+                    const picker = report.flagged.slice(0, 25).map(f => ({
+                        label: truncate(`${f.score} · ${f.tag}`, 100),
+                        value: f.id,
+                        description: truncate(f.reason, 100),
+                        emoji: TIER_ICON[f.tier],
+                    }));
+
+                    const components = picker.length
+                        ? [new ActionRowBuilder().addComponents(
+                            new StringSelectMenuBuilder()
+                                .setCustomId('jg_backtest_detail')
+                                .setPlaceholder('Show the full breakdown for...')
+                                .addOptions(picker)
+                        )]
+                        : [];
+
+                    const reportMessage = await i.editReply({ embeds: [embed], components });
+                    if (!components.length) return;
+
+                    // The result lives in its own ephemeral message, so it needs
+                    // its own collector; the panel's is bound to a different one.
+                    const detailCollector = reportMessage.createMessageComponentCollector({
+                        filter: sel => sel.user.id === interaction.user.id,
+                        time: 10 * 60_000,
                     });
+
+                    detailCollector.on('collect', async sel => {
+                        try {
+                            const picked = report.flagged.find(f => f.id === sel.values[0]);
+                            if (!picked) {
+                                return sel.reply({ content: '⚠️ That entry is no longer available.', flags: MessageFlags.Ephemeral });
+                            }
+                            const forcedNote = picked.forcedByDiscord
+                                ? '\n\n🚩 **Discord flagged this account itself**, which forces the malicious tier '
+                                  + 'no matter what the arithmetic adds up to.'
+                                : '';
+                            await sel.reply({
+                                content: truncate(
+                                    `**${picked.tag}** scores **${picked.score}** (${picked.tier})\n`
+                                    + `\`\`\`\n${explain(picked.result)}\n\`\`\``
+                                    + (picked.tenureScore !== picked.score
+                                        ? `\nWith membership tenure counted this drops to **${picked.tenureScore}**.`
+                                        : '')
+                                    + forcedNote,
+                                    1900
+                                ),
+                                flags: MessageFlags.Ephemeral,
+                            });
+                        } catch (error) {
+                            logger.error('[JOIN-GATE] Backtest detail failed', { error: error.message });
+                        }
+                    });
+
+                    return;
                 }
 
                 if (id === 'jg_susp_test_user') {

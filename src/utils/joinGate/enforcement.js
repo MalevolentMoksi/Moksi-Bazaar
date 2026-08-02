@@ -804,12 +804,17 @@ async function backtestGuild(guild, settings, { limit = 25, applyTenure = false 
                 score: result.score,
                 tier: result.tier,
                 tenureScore: withTenure.score,
+                reason: suspicion.summarise(result),
+                forcedByDiscord: Boolean(result.forcedByDiscord),
                 result,
             });
         }
     }
 
-    flagged.sort((a, b) => b.score - a.score);
+    // Severity first, then score. Sorting on score alone puts a 79 "suspect"
+    // above a 65 "malicious" and makes the list look self-contradictory.
+    flagged.sort((a, b) =>
+        (suspicion.TIER_RANK[b.tier] - suspicion.TIER_RANK[a.tier]) || (b.score - a.score));
     return {
         scanned: members.size,
         distribution,
