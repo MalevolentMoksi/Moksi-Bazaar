@@ -1,6 +1,11 @@
 // src/events/client/messageCreate.js
 const logger = require('../../utils/logger');
 
+/** Discord's typing indicator lasts ~10s; refresh just inside that. */
+const TYPING_REFRESH_MS = 8_000;
+/** Never leave the indicator running longer than this, whatever happens. */
+const TYPING_MAX_MS = 90_000;
+
 module.exports = {
   name: 'messageCreate',
   async execute(message, client) {
@@ -33,18 +38,40 @@ module.exports = {
       deferred: false,
       replied: false,
       _lastReply: null,
+      _typingTimer: null,
+
+      // Discord clears the typing indicator after ~10s, but a reply can take
+      // considerably longer than that. Refreshing it keeps the bot looking
+      // like someone actually typing rather than like it died.
+      _startTyping() {
+        this._stopTyping();
+        message.channel.sendTyping().catch(() => {});
+        this._typingTimer = setInterval(() => {
+          message.channel.sendTyping().catch(() => {});
+        }, TYPING_REFRESH_MS);
+        this._typingTimer.unref?.();
+        // Hard stop, so a path that never replies cannot leave it running.
+        this._typingDeadline = setTimeout(() => this._stopTyping(), TYPING_MAX_MS);
+        this._typingDeadline.unref?.();
+      },
+      _stopTyping() {
+        if (this._typingTimer) { clearInterval(this._typingTimer); this._typingTimer = null; }
+        if (this._typingDeadline) { clearTimeout(this._typingDeadline); this._typingDeadline = null; }
+      },
+
       async deferReply() {
         this.deferred = true;
-        // Show typing indicator as visual feedback
-        await message.channel.sendTyping().catch(() => {});
+        this._startTyping();
       },
       async reply(resp) {
+        this._stopTyping();
         this.replied = true;
         const msg = await message.channel.send(resp);
         this._lastReply = msg;
         return msg;
       },
       async editReply(resp) {
+        this._stopTyping();
         if (this._lastReply) {
           return this._lastReply.edit(resp);
         }
@@ -52,6 +79,12 @@ module.exports = {
         const msg = await message.channel.send(resp);
         this._lastReply = msg;
         return msg;
+      },
+      // speak.js never calls this any more, but a missing method here used to
+      // throw straight into a silent catch. Keep the shim API-complete.
+      async followUp(resp) {
+        this._stopTyping();
+        return message.channel.send(resp);
       },
       async fetchReply() {
         return this._lastReply;

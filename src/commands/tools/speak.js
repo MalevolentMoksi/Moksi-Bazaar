@@ -1,5 +1,5 @@
 // ENHANCED SPEAK.JS - DeepSeek V3 + Relationship-Aware Context
-const { SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder } = require('discord.js');
 
 const {
   isUserBlacklisted,
@@ -301,13 +301,10 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // Slash commands get Discord's native "is thinking..." state from this;
+    // mention-triggered calls get a live typing indicator from the shim, which
+    // reads as the bot actually typing rather than as a bot posting a status.
     await interaction.deferReply();
-
-    const thinkingTimeout = setTimeout(async () => {
-      try {
-        await interaction.followUp({ content: '_thinking..._', flags: MessageFlags.Ephemeral });
-      } catch (e) { /* Ignore if interaction already completed */ }
-    }, 2000);
 
     try {
       const userId = interaction.user.id;
@@ -318,7 +315,6 @@ module.exports = {
 
       // 1. Checks & Blacklist
       if (await isUserBlacklisted(userId)) {
-        clearTimeout(thinkingTimeout);
         return await sendError(
           interaction,
           'You\'re blocked from using this command. Contact an admin if you believe this is an error.',
@@ -330,7 +326,6 @@ module.exports = {
       const userIsOwner = isOwner(userId);
 
       if (activeSpeak === false && !userIsOwner) {
-        clearTimeout(thinkingTimeout);
         const randomReply = SPEAK_DISABLED_REPLIES[Math.floor(Math.random() * SPEAK_DISABLED_REPLIES.length)];
         return await interaction.editReply(`${randomReply}\n-# _(The bot is in maintenance mode. Try again later.)_`);
       }
@@ -455,7 +450,6 @@ ${memoryText}`;
         sentimentPromise
       ]);
 
-      clearTimeout(thinkingTimeout);
 
       if (!rawContent) {
         logger.error('OpenRouter returned null', { userId, hasRequest: !!userRequest });
@@ -515,7 +509,6 @@ ${memoryText}`;
       await interaction.editReply(finalOutput);
 
     } catch (error) {
-      clearTimeout(thinkingTimeout);
       await handleCommandError(interaction, error, {
         hasRequest: !!interaction.options.getString('request')
       });

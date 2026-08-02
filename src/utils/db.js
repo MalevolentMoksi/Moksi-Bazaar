@@ -179,6 +179,21 @@ const init = async () => {
             created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        -- Suspicion scoring. Off by default, and every tier defaults to
+        -- 'log' so that switching it on can never remove anybody until the
+        -- owner has looked at real scores and decided otherwise.
+        ALTER TABLE join_gate_settings
+            ADD COLUMN IF NOT EXISTS suspicion_enabled     BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS suspicion_watch_at    INTEGER NOT NULL DEFAULT 40,
+            ADD COLUMN IF NOT EXISTS suspicion_suspect_at  INTEGER NOT NULL DEFAULT 70,
+            ADD COLUMN IF NOT EXISTS suspicion_malicious_at INTEGER NOT NULL DEFAULT 100,
+            ADD COLUMN IF NOT EXISTS suspicion_watch_action     TEXT NOT NULL DEFAULT 'log',
+            ADD COLUMN IF NOT EXISTS suspicion_suspect_action   TEXT NOT NULL DEFAULT 'log',
+            ADD COLUMN IF NOT EXISTS suspicion_malicious_action TEXT NOT NULL DEFAULT 'log',
+            ADD COLUMN IF NOT EXISTS suspicion_log_channel_id TEXT,
+            ADD COLUMN IF NOT EXISTS suspicion_weights     JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS suspicion_keywords    TEXT[],
+            ADD COLUMN IF NOT EXISTS total_flagged         INTEGER NOT NULL DEFAULT 0;
         -- Rejoin tracking. Drives escalation and DM de-duplication.
         CREATE TABLE IF NOT EXISTS join_gate_attempts (
             guild_id      TEXT NOT NULL,
@@ -301,8 +316,33 @@ async function removeUserFromBlacklist(userId) {
 
 // ── MEDIA ANALYSIS (LLAMA VISION) ───────────────────────────────────────────
 
+/**
+ * Discord signs CDN links with `?ex=&is=&hm=` and re-signs them on every
+ * message fetch, so the same uploaded image arrives with a different URL each
+ * time. Keying the cache on the full URL therefore never hit for attachments:
+ * every call re-ran a vision model on a picture that was already described.
+ *
+ * The path alone is stable and already unique (it contains the attachment id),
+ * so the query is dropped for Discord's own hosts. Other hosts are left
+ * untouched, because elsewhere query parameters can genuinely select a
+ * different image.
+ */
+const SIGNED_CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
+
+function normalizeMediaUrl(url) {
+    const raw = String(url ?? '');
+    if (!raw.startsWith('http')) return raw; // data: URLs and the like
+    try {
+        const parsed = new URL(raw);
+        if (SIGNED_CDN_HOSTS.has(parsed.hostname)) return `${parsed.origin}${parsed.pathname}`;
+        return raw;
+    } catch {
+        return raw;
+    }
+}
+
 function generateMediaId(url, contentHash = null, fileName = '') {
-    const uniqueString = `${url}_${fileName}`;
+    const uniqueString = `${normalizeMediaUrl(url)}_${fileName}`;
     return crypto.createHash('sha256').update(uniqueString).digest('hex').substring(0, 16);
 }
 
