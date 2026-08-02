@@ -25,7 +25,7 @@ module.exports = {
     if (sub === 'beg') {
       const bal = await getBalance(userId);
       if (bal > 0) {
-        return interaction.reply({ content: `${mention}, nice try—but you still have $${bal}! You can only beg when you’re flat broke.`, flags: MessageFlags.Ephemeral});
+        return interaction.reply({ content: `${mention}, nice try, but you still have $${bal}! You can only beg when you’re flat broke.`, flags: MessageFlags.Ephemeral});
       }
       const amount = Math.floor(Math.random() * 10000) + 1;
       await updateBalance(userId, amount);
@@ -74,7 +74,7 @@ module.exports = {
           board
             .map(({ id, balance }, i) => {
               const rank = rankEmojis[i] || `**${i + 1}.**`;
-              return `${rank} <@${id}> — $${balance.toLocaleString()}`;
+              return `${rank} <@${id}>: $${balance.toLocaleString()}`;
             })
             .join('\n')
         )

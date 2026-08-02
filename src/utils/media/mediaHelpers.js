@@ -7,7 +7,7 @@ const { ensureMediaSize } = require('./ffmpegUtils');
 const { mediaSemaphore } = require('./concurrency');
 const { normalizeInput } = require('./inputGuards');
 
-const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24 MB — Discord bot upload limit is 25 MB
+const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24 MB. Discord bot upload limit is 25 MB
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,7 +145,7 @@ async function fetchRecentMedia(interaction, {
             }
         }
     } catch {
-        // Channel not accessible or rate-limited — silent fallthrough
+        // Channel not accessible or rate-limited, silent fallthrough
     }
     return null;
 }
@@ -163,10 +163,10 @@ async function fetchRecentMedia(interaction, {
  * processFn(inputPath, ext, { isImage, isVideo, isGifLike }) → Promise<string outputPath>
  *
  * Options:
- *   normalizeInput  — cap input resolution/FPS/frame-count before processing (default true).
+ *   normalizeInput: cap input resolution/FPS/frame-count before processing (default true).
  *                     Set false for commands whose own logic must see the raw input
  *                     (e.g. format converters, info/probe).
- *   useQueue        — run processFn behind the shared concurrency semaphore (default true).
+ *   useQueue:       run processFn behind the shared concurrency semaphore (default true).
  */
 async function handleMediaCommand(interaction, {
     allowVideo = false,
@@ -265,7 +265,7 @@ async function handleMediaCommand(interaction, {
         const runWork = () => processFn(processInput, ext, { isImage, isVideo, isAudio, isGifLike, mediaInfo });
         if (useQueue) {
             if (mediaSemaphore.active >= mediaSemaphore.max) {
-                try { await interaction.editReply('⏳ Your command is queued — processing will start shortly…'); } catch {}
+                try { await interaction.editReply('⏳ Your command is queued, processing will start shortly…'); } catch {}
             }
             outputPath = await mediaSemaphore.run(runWork);
         } else {
@@ -283,7 +283,7 @@ async function handleMediaCommand(interaction, {
         const stats = fs.statSync(outputPath);
         if (stats.size > MAX_FILE_SIZE) {
             return interaction.editReply(
-                `⚠️ Output is too large to send (${Math.round(stats.size / 1024 / 1024)} MB — Discord's limit is 25 MB).\n` +
+                `⚠️ Output is too large to send (${Math.round(stats.size / 1024 / 1024)} MB; Discord's limit is 25 MB).\n` +
                 'Try a smaller input, lower resolution, or shorter duration.'
             );
         }

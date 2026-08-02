@@ -1,5 +1,5 @@
 // src/utils/media/captionUtils.js
-// Uses pure SVG rendered via sharp/libvips — no native canvas binary required.
+// Uses pure SVG rendered via sharp/libvips; no native canvas binary required.
 const fs = require('fs');
 const sharp = require('sharp');
 const { createTempPath, cleanup } = require('./tempFiles');

@@ -65,14 +65,14 @@ async function generateRelationshipSummary(relationships) {
     : stats.avgSentiment <= -0.2 ? 'mostly cold'
     : 'mixed';
 
-  const prompt = `Summarize Cooler Moksi's social life in 2 lowercase sentences. Match the tone to the actual data — if it's mostly grim, be grim; if surprisingly warm, let a trace of that through, reluctantly.
-Known users: ${stats.total}. Breakdown — friendly: ${stats.friendly}, familiar: ${stats.familiar}, neutral: ${stats.neutral}, cautious: ${stats.cautious}, hostile: ${stats.hostile}. Overall mood: ${overallMood}.
+  const prompt = `Summarize Cooler Moksi's social life in 2 lowercase sentences. Match the tone to the actual data: if it's mostly grim, be grim; if surprisingly warm, let a trace of that through, reluctantly.
+Known users: ${stats.total}. Breakdown. Friendly: ${stats.friendly}, familiar: ${stats.familiar}, neutral: ${stats.neutral}, cautious: ${stats.cautious}, hostile: ${stats.hostile}. Overall mood: ${overallMood}.
 Favourites: ${favourites.map(u => u.displayName).join(', ') || 'none'}.
 Enemies: ${enemies.map(u => u.displayName).join(', ') || 'none'}.
 No zoomer slang. No standard emojis. If mentioning names, use them naturally in a sentence.`;
 
-  // PRIMARY: MiMo-V2-Flash ($0.09/$0.29/M) — ultra-cheap, fast, excellent for short text
-  // FALLBACK: Gemma 4 31B ($0.13/M) — dense model, reliable fallback
+  // PRIMARY: MiMo-V2-Flash ($0.09/$0.29/M). Ultra-cheap, fast, excellent for short text
+  // FALLBACK: Gemma 4 31B ($0.13/M). Dense model, reliable fallback
   const response = await callOpenRouterAPI(
     'xiaomi/mimo-v2-flash',
     [{ role: 'user', content: prompt }],

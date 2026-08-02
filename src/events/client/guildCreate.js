@@ -9,11 +9,11 @@ module.exports = {
     const token = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
 
     if (!token) {
-      logger.error('No TOKEN in env — cannot register guild commands');
+      logger.error('No TOKEN in env, cannot register guild commands');
       return;
     }
     if (!commandArray || commandArray.length === 0) {
-      logger.warn('commandArray is empty — skipping guild registration', { guildId: guild.id });
+      logger.warn('commandArray is empty, skipping guild registration', { guildId: guild.id });
       return;
     }
 

@@ -1,6 +1,6 @@
 // src/utils/joinGate/diagnostics.js
 /**
- * Join Gate — self-check.
+ * Join Gate: self-check.
  *
  * The failure modes of an auto-kicker are quiet ones: a missing privileged
  * intent means the event never fires, a low role means every kick 403s. Both
@@ -18,13 +18,13 @@ async function checkGuildHealth(guild, settings) {
     const checks = [];
     const add = (level, label, detail) => checks.push({ level, label, detail });
 
-    // 1. Privileged intent — without it guildMemberAdd never fires at all.
+    // 1. Privileged intent. Without it guildMemberAdd never fires at all.
     const hasMembersIntent = guild.client.options.intents.has(GatewayIntentBits.GuildMembers);
     add(
         hasMembersIntent ? 'ok' : 'fail',
         'Server Members Intent',
         hasMembersIntent
-            ? 'Enabled — join events will be received.'
+            ? 'Enabled. Join events will be received.'
             : 'MISSING. The gate can never fire. Enable "Server Members Intent" in the '
               + 'Discord Developer Portal → your app → Bot → Privileged Gateway Intents, then restart.'
     );
@@ -50,7 +50,7 @@ async function checkGuildHealth(guild, settings) {
             canBan ? 'ok' : 'fail',
             'Ban Members',
             canBan
-                ? 'Granted — escalation temp-bans can be applied and lifted.'
+                ? 'Granted. Escalation temp-bans can be applied and lifted.'
                 : 'MISSING, but escalation is on. Repeat offenders will fall back to a failed ban.'
         );
     }
@@ -75,7 +75,7 @@ async function checkGuildHealth(guild, settings) {
 
     // 5. Threshold sanity.
     if (thresholdMs(settings) <= 0) {
-        add('warn', 'Threshold', 'Set to 0 days — the gate will never remove anyone.');
+        add('warn', 'Threshold', 'Set to 0 days, so the gate will never remove anyone.');
     } else {
         add('ok', 'Threshold', `${formatDays(settings.min_account_age_minutes)} days.`);
     }
@@ -87,7 +87,7 @@ async function checkGuildHealth(guild, settings) {
 
     // 7. Dry run is a state people forget they left on.
     if (settings.enabled && settings.dry_run) {
-        add('warn', 'Dry run', 'ACTIVE — the gate is only logging. Nobody is actually being removed.');
+        add('warn', 'Dry run', 'ACTIVE. The gate is only logging. Nobody is actually being removed.');
     }
 
     const ok = !checks.some(c => c.level === 'fail');

@@ -1,11 +1,11 @@
 // src/utils/joinGate/logging.js
 /**
- * Join Gate — log routing.
+ * Join Gate: log routing.
  *
  * Four independent categories, each with its own optional channel and its own
  * on/off switch. A category with no channel of its own falls back to the
  * default log channel, so "kicks and failures in the same place" is just
- * leaving both overrides unset — while "failures to staff, kicks to audit"
+ * leaving both overrides unset, while "failures to staff, kicks to audit"
  * is setting two overrides.
  *
  * Nothing in here is allowed to throw. A broken log channel must never stop
@@ -44,7 +44,7 @@ function toUnix(ms) {
 
 /**
  * Resolves the channel a category should be written to, or null.
- * Only channels inside the same guild are ever considered — a stale ID from
+ * Only channels inside the same guild are ever considered; a stale ID from
  * another server must not become a leak.
  *
  * @returns {Promise<import('discord.js').GuildTextBasedChannel|null>}
@@ -114,7 +114,7 @@ async function logOutcome(guild, settings, entry) {
     } = entry;
 
     // "The member already left" is not a failure worth putting in a staff
-    // channel — it is the gate discovering it had nothing left to do. Route it
+    // channel; it is the gate discovering it had nothing left to do. Route it
     // with the normal outcomes so the failure channel stays meaningful.
     const benign = !result.ok && result.benign;
     const category = dryRun ? 'preview' : (result.ok || benign ? 'kick' : 'failure');
@@ -123,17 +123,17 @@ async function logOutcome(guild, settings, entry) {
     let color;
     if (dryRun) {
         status = result.action === 'ban'
-            ? '🧪 **Dry run** — would temp-ban'
-            : '🧪 **Dry run** — would kick';
+            ? '🧪 **Dry run**: would temp-ban'
+            : '🧪 **Dry run**: would kick';
         color = COLORS.preview;
     } else if (result.ok) {
         status = result.action === 'ban' ? '🔨 **Temporarily banned**' : '👢 **Kicked**';
         color = result.action === 'ban' ? COLORS.ban : COLORS.kick;
     } else if (benign) {
-        status = `➖ **No action taken** — ${result.error}`;
+        status = `➖ **No action taken**: ${result.error}`;
         color = COLORS.preview;
     } else {
-        status = `⚠️ **Failed** — ${result.error ?? 'unknown error'}`;
+        status = `⚠️ **Failed**: ${result.error ?? 'unknown error'}`;
         color = COLORS.failure;
     }
 
@@ -170,7 +170,7 @@ async function logOutcome(guild, settings, entry) {
     return send(guild, settings, category, { embeds: [embed] });
 }
 
-/** Raid alert. Routed to the failure channel — it is an "look at me" event. */
+/** Raid alert. Routed to the failure channel; it is a "look at me" event. */
 async function logBurst(guild, settings, { count, windowSeconds }) {
     const embed = new EmbedBuilder()
         .setColor(COLORS.burst)
@@ -211,7 +211,7 @@ async function logTest(guild, settings, category, actor) {
 
     const embed = new EmbedBuilder()
         .setColor(COLORS.config)
-        .setTitle('🧪 Join gate — routing test')
+        .setTitle('🧪 Join gate: routing test')
         .setDescription(`This is where **${label}** entries will appear.`)
         .addFields({ name: 'Requested by', value: `<@${actor.id}>`, inline: true })
         .setTimestamp();
@@ -236,7 +236,7 @@ async function logUnban(guild, settings, { userId, bannedAtMs, ok, error }) {
         .setTitle(ok ? '🔓 Temp-ban lifted' : '⚠️ Failed to lift temp-ban')
         .setDescription(
             ok
-                ? `<@${userId}> (${userId}) can rejoin — their account is now old enough.`
+                ? `<@${userId}> (${userId}) can rejoin. Their account is now old enough.`
                 : `Could not unban <@${userId}> (${userId}): ${error ?? 'unknown error'}`
         )
         .addFields({ name: 'Banned', value: `<t:${toUnix(bannedAtMs)}:R>`, inline: true })

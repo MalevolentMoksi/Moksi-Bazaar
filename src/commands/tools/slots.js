@@ -37,7 +37,7 @@ function spinOne() {
 }
 
 async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
-  // — Step 3) 3× animation (omitted here for brevity) —
+  // Step 3) 3× animation (omitted here for brevity)
   for (let i = 0; i < 3; i++) {
     const preview = Array(9).fill().map(() => spinOne().emoji);
     const grid =
@@ -50,7 +50,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     await new Promise(r => setTimeout(r, 400));
   }
 
-  // — Step 4) Final spin & compute winnings —
+  // Step 4) Final spin & compute winnings
   const finalGrid = Array(9).fill().map(() => spinOne());
   const emojis    = finalGrid.map(s => s.emoji);
   const displayGrid =
@@ -74,7 +74,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     if (p && p !== 'freespins') lineMultiplier = Math.max(lineMultiplier, p);
   }
 
-  // — Round all wins to integers —
+  // Round all wins to integers
   let lineWin = Math.round(bet * lineMultiplier);
   let freeWin = 0;
   if (freeSpins) {
@@ -98,7 +98,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
   let collected = false;
   let spinLock = false;
 
-  // — Step 6) Build result embed & buttons —
+  // Step 6) Build result embed & buttons
   const resultEmbed = new EmbedBuilder()
     .setTitle('🎰 Slot Results')
     .setColor(lineMultiplier > 1 ? 0x2ECC71 : 0xE74C3C)
@@ -131,7 +131,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
 
   await msg.edit({ embeds: [resultEmbed], components: [row] });
 
-  // — Step 7) Collector for Double/Collect/Play Again —
+  // Step 7) Collector for Double/Collect/Play Again
   const collector = msg.createMessageComponentCollector({
     componentType: ComponentType.Button,
     time: 20000

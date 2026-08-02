@@ -31,7 +31,7 @@ async function generateRelationshipResponse(userContext, targetUser, recentMemor
 Attitude: ${userContext.attitudeLevel}
 Interactions: ${userContext.interactionCount || 0}`;
   if (trend) contextStr += `\nRecent trend: ${trend}`;
-  if (userIsCreator) contextStr += `\nROLE: This is your creator (Moksi) — affectionately annoyed / loyal.`;
+  if (userIsCreator) contextStr += `\nROLE: This is your creator (Moksi): affectionately annoyed / loyal.`;
   if (recentMemories.length > 0) {
     contextStr += `\nRecent exchanges:\n${recentMemories.map(m => `"${m.user_message}" -> "${m.bot_response}"`).join('\n')}`;
   }
@@ -44,7 +44,7 @@ ${contextStr}
 BEHAVIOR FOR THIS ATTITUDE LEVEL: ${attitudeRule}
 
 INSTRUCTIONS:
-- Write 1-2 sentences, lowercase, dry. Speak from feeling — do NOT reference numbers, counts, or internal data.
+- Write 1-2 sentences, lowercase, dry. Speak from feeling; do NOT reference numbers, counts, or internal data.
 - No zoomer slang. No standard emojis.
 - If Interactions is 0 or very low, admit you don't really know them.
 - If a trend is provided: warming → let a trace of softening show, perhaps mild surprise at yourself; cooling → let quiet suspicion or distance show.

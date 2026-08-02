@@ -21,7 +21,7 @@ const uncaptionCmd = {
         const threshold = interaction.options.getInteger('threshold') ?? 10;
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: true,
-            // The whole point is to read the original pixels — don't normalize first.
+            // The whole point is to read the original pixels, so don't normalize first.
             normalizeInput: false,
             processFn: async (inputPath, ext, context) => {
                 const isGif = await isGifInput(inputPath, ext, context);
@@ -48,7 +48,7 @@ function formatDuration(sec) {
     return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${m}:${String(s).padStart(2, '0')}`;
 }
 
-// /info — probe a media file and report its properties as an embed. No file output.
+// /info: probe a media file and report its properties as an embed. No file output.
 const info = {
     data: new SlashCommandBuilder()
         .setName('info')

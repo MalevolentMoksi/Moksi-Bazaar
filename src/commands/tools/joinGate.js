@@ -1,6 +1,6 @@
 // src/commands/tools/joinGate.js
 /**
- * /joingate — owner-only configuration panel for the account-age auto-kicker.
+ * /joingate: owner-only configuration panel for the account-age auto-kicker.
  *
  * Layout: row 0 is always the section picker, rows 1-4 are that section's
  * controls. Everything is ephemeral, every write goes through the config
@@ -48,7 +48,6 @@ const SECTIONS = [
 // ── Small helpers ───────────────────────────────────────────────────────────
 
 const onOff = v => (v ? '🟢 On' : '⚪ Off');
-const yesNo = v => (v ? 'Yes' : 'No');
 const channelRef = id => (id ? `<#${id}>` : '*not set*');
 
 function truncate(text, max) {
@@ -121,7 +120,7 @@ function renderOverview(guild, settings) {
     const armed = settings.enabled && !settings.dry_run && thresholdMs(settings) > 0;
 
     const embed = new EmbedBuilder()
-        .setTitle('🛡️ Join Gate — Overview')
+        .setTitle('🛡️ Join Gate: Overview')
         .setColor(armed ? EMBED_COLORS.SUCCESS : settings.enabled ? EMBED_COLORS.WARNING : EMBED_COLORS.NEUTRAL)
         .setDescription(
             settings.enabled
@@ -178,11 +177,11 @@ function renderRules(settings) {
         : '*nobody*';
 
     const embed = new EmbedBuilder()
-        .setTitle('📏 Join Gate — Rules')
+        .setTitle('📏 Join Gate: Rules')
         .setColor(EMBED_COLORS.INFO)
         .setDescription(
             'Account age is the **only** criterion, plus the explicit allow-list below.\n'
-            + 'Roles are deliberately never consulted — an autorole bot that assigns a role on join '
+            + 'Roles are deliberately never consulted: an autorole bot that assigns a role on join '
             + 'must not be able to accidentally whitelist everyone.'
         )
         .addFields(
@@ -215,10 +214,10 @@ function renderRules(settings) {
 
 function renderMessaging(settings) {
     const embed = new EmbedBuilder()
-        .setTitle('✉️ Join Gate — Messaging')
+        .setTitle('✉️ Join Gate: Messaging')
         .setColor(EMBED_COLORS.INFO)
         .setDescription(
-            'The DM is always sent **before** the removal — afterwards the bot no longer shares a server '
+            'The DM is always sent **before** the removal, because afterwards the bot no longer shares a server '
             + 'with the user and Discord rejects the message.\n\n'
             + 'Placeholders: `{days}` `{server}` `{user}` `{eligible}` `{age}`'
         )
@@ -235,7 +234,7 @@ function renderMessaging(settings) {
             {
                 name: 'Re-DM cooldown',
                 value: Number(settings.dm_cooldown_minutes) === 0
-                    ? 'None — every attempt gets a DM'
+                    ? 'None, every attempt gets a DM'
                     : `${settings.dm_cooldown_minutes} min between DMs to the same user`,
                 inline: true,
             },
@@ -244,7 +243,7 @@ function renderMessaging(settings) {
                 name: 'Temp-ban message',
                 value: settings.escalate_enabled
                     ? truncate(settings.dm_ban_message, 1000)
-                    : '*(escalation is off — unused)*',
+                    : '*(escalation is off, unused)*',
                 inline: false,
             },
         );
@@ -285,11 +284,11 @@ function renderMessaging(settings) {
 function renderEscalation(settings, pending) {
     const list = pending.length
         ? pending.slice(0, 10).map(p =>
-            `<@${p.user_id}> — lifts <t:${Math.floor(Number(p.unban_at_ms) / 1000)}:R>`).join('\n')
+            `<@${p.user_id}>: lifts <t:${Math.floor(Number(p.unban_at_ms) / 1000)}:R>`).join('\n')
         : '*none*';
 
     const embed = new EmbedBuilder()
-        .setTitle('🔨 Join Gate — Escalation')
+        .setTitle('🔨 Join Gate: Escalation')
         .setColor(settings.escalate_enabled ? EMBED_COLORS.WARNING : EMBED_COLORS.NEUTRAL)
         .setDescription(
             'A kicked user can rejoin with the same invite immediately. After enough attempts the gate '
@@ -334,7 +333,7 @@ function renderLogging(settings, routing, activeCategory) {
     const meta = logCategoryMeta(activeCategory);
     const rows = [];
 
-    const lines = Object.entries(routing).map(([key, info]) => {
+    const lines = Object.values(routing).map((info) => {
         const target = info.overrideId
             ? channelRef(info.overrideId)
             : (settings.log_channel_id ? `${channelRef(settings.log_channel_id)} *(default)*` : '*nowhere*');
@@ -343,11 +342,11 @@ function renderLogging(settings, routing, activeCategory) {
     });
 
     const embed = new EmbedBuilder()
-        .setTitle('📓 Join Gate — Logging')
+        .setTitle('📓 Join Gate: Logging')
         .setColor(EMBED_COLORS.INFO)
         .setDescription(
             'Each category can have its own channel. Leave one unset and it falls back to the default '
-            + 'channel — so "kicks and failures together" is just leaving both unset, while "failures to '
+            + 'channel, so "kicks and failures together" is just leaving both unset, while "failures to '
             + 'staff, kicks to the audit log" is setting two overrides.\n\n'
             + lines.join('\n')
         )
@@ -403,11 +402,11 @@ function renderLogging(settings, routing, activeCategory) {
 
 function renderAdvanced(settings) {
     const embed = new EmbedBuilder()
-        .setTitle('⚙️ Join Gate — Advanced')
+        .setTitle('⚙️ Join Gate: Advanced')
         .setColor(EMBED_COLORS.INFO)
         .setDescription(
             'Removals are always processed one at a time with a short gap, so a raid cannot rate-limit the '
-            + 'bot. Under a heavy backlog DMs are skipped to drain faster — that is noted on each log entry.'
+            + 'bot. Under a heavy backlog DMs are skipped to drain faster; that is noted on each log entry.'
         )
         .addFields(
             { name: 'Burst alert', value: onOff(settings.burst_alert_enabled), inline: true },
@@ -458,16 +457,16 @@ async function renderDiagnostics(guild, settings) {
 
     const icon = { ok: '🟢', warn: '🟡', fail: '🔴' };
     const checkLines = health.checks
-        .map(c => `${icon[c.level]} **${c.label}** — ${c.detail}`)
+        .map(c => `${icon[c.level]} **${c.label}**: ${c.detail}`)
         .join('\n');
 
     const attemptLines = attempts.length
         ? attempts.map(a =>
-            `<@${a.user_id}> — ${a.attempts} attempt(s), last <t:${Math.floor(Number(a.last_seen_ms) / 1000)}:R>`).join('\n')
+            `<@${a.user_id}>: ${a.attempts} attempt(s), last <t:${Math.floor(Number(a.last_seen_ms) / 1000)}:R>`).join('\n')
         : '*no repeat joiners recorded*';
 
     const embed = new EmbedBuilder()
-        .setTitle('🩺 Join Gate — Diagnostics')
+        .setTitle('🩺 Join Gate: Diagnostics')
         .setColor(health.ok ? EMBED_COLORS.SUCCESS : EMBED_COLORS.ERROR)
         .setDescription(truncate(checkLines, 4000))
         .addFields(
@@ -538,7 +537,7 @@ module.exports = {
     // Access control is the isOwner() check below, not a Discord permission
     // flag. setDefaultMemberPermissions(Administrator) was tempting, but it
     // would hide the panel from the owner in any server where they are not an
-    // admin — locking the one person who is allowed to use it out of it.
+    // admin, locking the one person who is allowed to use it out of it.
 
     async execute(interaction) {
         if (!isOwner(interaction.user.id)) {
@@ -571,7 +570,7 @@ module.exports = {
          *
          * `respondTo` may be a button/select interaction or a modal submission.
          * A modal submission can only `.update()` when it originated from a
-         * message component, so that is checked rather than assumed — and if
+         * message component, so that is checked rather than assumed. If
          * the update fails for any reason we still edit the panel and
          * acknowledge the interaction, otherwise Discord shows the user a red
          * "interaction failed" on a change that actually saved.
@@ -632,7 +631,7 @@ module.exports = {
                 // ── Simple toggles ──────────────────────────────────────────
                 const TOGGLES = {
                     jg_toggle_enabled: ['enabled', s => (s.enabled ? 'Gate **disabled**' : 'Gate **enabled**')],
-                    jg_toggle_dryrun: ['dry_run', s => (s.dry_run ? 'Dry run **off** — removals are live' : 'Dry run **on** — log only')],
+                    jg_toggle_dryrun: ['dry_run', s => (s.dry_run ? 'Dry run **off**: removals are live' : 'Dry run **on**: log only')],
                     jg_toggle_bots: ['gate_bots', s => (s.gate_bots ? 'Bots are now **exempt**' : 'Bots are now **gated**')],
                     jg_toggle_dm: ['dm_enabled', s => (s.dm_enabled ? 'Removal DM **off**' : 'Removal DM **on**')],
                     jg_toggle_dm_eligible: ['dm_append_eligible', s => `Eligible-time line ${s.dm_append_eligible ? 'removed' : 'appended'}`],
@@ -732,7 +731,7 @@ module.exports = {
                     const dropped = merged.length - next.length;
 
                     await applyChange(submitted, { exempt_user_ids: next },
-                        `${adding ? 'Added' : 'Removed'} **${valid.length}** exempt user(s) — list is now ${next.length}`,
+                        `${adding ? 'Added' : 'Removed'} **${valid.length}** exempt user(s); list is now ${next.length}`,
                         truncate(valid.map(v => `<@${v}>`).join(', '), 1000));
 
                     const notes = [];
@@ -742,7 +741,7 @@ module.exports = {
                     if (dropped > 0) {
                         // Silently dropping exemptions would mean silently gating
                         // people the owner believes are safe. Say it out loud.
-                        notes.push(`⚠️ The list is capped at ${LIMITS.EXEMPT_IDS} entries — **${dropped}** did not fit and were not saved.`);
+                        notes.push(`⚠️ The list is capped at ${LIMITS.EXEMPT_IDS} entries, so **${dropped}** did not fit and were not saved.`);
                     }
                     if (notes.length) {
                         await interaction.followUp({
@@ -765,7 +764,7 @@ module.exports = {
                         title: isBan ? 'Temp-ban DM' : 'Kick DM',
                         inputs: [{
                             id: 'text',
-                            label: 'Message — {days} {server} {user} {eligible}',
+                            label: 'Message ({days} {server} {user} {eligible})',
                             paragraph: true,
                             required: true,
                             value: isBan ? settings.dm_ban_message : settings.dm_message,
@@ -863,7 +862,7 @@ module.exports = {
                         return i.reply({ content: '✅ Test DM sent.', flags: MessageFlags.Ephemeral });
                     } catch (error) {
                         return i.reply({
-                            content: `⚠️ Could not DM you: ${error.message}. (Which is exactly what happens to users with DMs closed — the removal still goes ahead.)`,
+                            content: `⚠️ Could not DM you: ${error.message}. (Which is exactly what happens to users with DMs closed: the removal still goes ahead.)`,
                             flags: MessageFlags.Ephemeral,
                         });
                     }
@@ -940,7 +939,7 @@ module.exports = {
                             PermissionFlagsBits.EmbedLinks,
                         ])) {
                             return i.reply({
-                                content: `⚠️ The bot cannot post in <#${channelId}> — it needs View Channel, Send Messages and Embed Links there.`,
+                                content: `⚠️ The bot cannot post in <#${channelId}>: it needs View Channel, Send Messages and Embed Links there.`,
                                 flags: MessageFlags.Ephemeral,
                             });
                         }
@@ -962,7 +961,7 @@ module.exports = {
                     return i.reply({
                         content: delivered
                             ? `✅ Test entry sent to the **${label}** destination.`
-                            : `⚠️ Nothing was delivered — **${label}** has no reachable channel. `
+                            : `⚠️ Nothing was delivered: **${label}** has no reachable channel. `
                               + 'Either it is switched off, no channel is set (and there is no default), '
                               + 'or the bot cannot post there.',
                         flags: MessageFlags.Ephemeral,
@@ -1001,7 +1000,7 @@ module.exports = {
 
                     const hours = clamp(Number(submitted.fields.getTextInputValue('hours')), LIMITS.SWEEP_WINDOW_HOURS);
                     return applyChange(submitted, { sweep_window_hours: hours },
-                        `Catch-up sweep window set to **${hours}h** — only members who joined that recently are re-checked`);
+                        `Catch-up sweep window set to **${hours}h**; only members who joined that recently are re-checked`);
                 }
 
                 if (id === 'jg_run_sweep') {
@@ -1011,7 +1010,7 @@ module.exports = {
                         content: result.skipped
                             ? `⚠️ Sweep skipped: ${result.skipped}`
                             : `✅ Scanned ${result.scanned} member(s); **${result.gated}** matched and were queued`
-                              + `${settings.dry_run ? ' *(dry run — nothing will actually be removed)*' : ''}.`,
+                              + `${settings.dry_run ? ' *(dry run, nothing will actually be removed)*' : ''}.`,
                     });
                 }
 
@@ -1031,12 +1030,12 @@ module.exports = {
                     const decision = evaluateUserId(uid, settings, { guildOwnerId: guild.ownerId });
                     const created = Math.floor((Date.now() - decision.ageMs) / 1000);
                     const verdict = decision.action === 'gate'
-                        ? `🔴 **Would be removed** — ${decision.reason}`
-                        : `🟢 **Would be allowed** — ${decision.reason}`;
+                        ? `🔴 **Would be removed**: ${decision.reason}`
+                        : `🟢 **Would be allowed**: ${decision.reason}`;
 
                     return submitted.reply({
                         content: `${verdict}\nCreated <t:${created}:F>\nEligible <t:${Math.floor(decision.eligibleAt / 1000)}:F> (<t:${Math.floor(decision.eligibleAt / 1000)}:R>)`
-                            + '\n\n*Evaluated from the account snowflake — this checks the age rule only, not whether the bot could actually remove them.*',
+                            + '\n\n*Evaluated from the account snowflake. This checks the age rule only, not whether the bot could actually remove them.*',
                         flags: MessageFlags.Ephemeral,
                     });
                 }
@@ -1047,7 +1046,7 @@ module.exports = {
                     return;
                 }
 
-                // Unknown component — acknowledge so the client does not hang.
+                // Unknown component: acknowledge so the client does not hang.
                 if (!i.replied && !i.deferred) await i.deferUpdate().catch(() => {});
             } catch (error) {
                 logger.error('[JOIN-GATE] Panel interaction failed', {
@@ -1065,7 +1064,7 @@ module.exports = {
             await interaction.editReply({
                 embeds: last?.embeds ?? [],
                 components: [],
-                content: '*Panel timed out — run `/joingate` again to make more changes.*',
+                content: '*Panel timed out. Run `/joingate` again to make more changes.*',
             }).catch(() => {});
         });
     },

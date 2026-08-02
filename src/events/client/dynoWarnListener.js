@@ -11,7 +11,7 @@ const WARN_GUILD_ID = '1271818662839451699';
 const WARN_MS       = WARN_REMINDER_DAYS * 24 * 60 * 60 * 1000;
 
 // Matches bold or bold+italic formatting: **user has been warned.** or ***user has been warned.***
-// Does not anchor on the emoji — Dyno uses a custom guild emoji (<:dynoSuccess:ID>), not a Unicode one
+// Does not anchor on the emoji: Dyno uses a custom guild emoji (<:dynoSuccess:ID>), not a Unicode one
 const WARN_DESC_RE = /\*{2,3}(.+?) has been warned\.(?:[^*]*?Case #(\d+))?\*{2,3}/;
 const CASE_RE      = /Case #(\d+)/;
 

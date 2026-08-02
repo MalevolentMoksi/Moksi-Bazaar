@@ -1,6 +1,6 @@
 // src/utils/joinGate/index.js
 /**
- * Join Gate — account-age auto-kicker.
+ * Join Gate: account-age auto-kicker.
  *
  * Removes NEW members whose Discord account is younger than a per-server
  * threshold. Kicks are rejoinable by design; repeat rejoiners can optionally be
@@ -8,7 +8,7 @@
  *
  * Requires the privileged "Server Members Intent" (Developer Portal) and the
  * `GuildMembers` gateway intent in bot.js. Without it `guildMemberAdd` never
- * fires and the gate silently does nothing — /joingate → Diagnostics says so.
+ * fires and the gate silently does nothing. /joingate → Diagnostics says so.
  *
  * Entry points:
  *   - events/client/guildMemberAdd.js  → handleMemberJoin()
@@ -28,7 +28,7 @@ const diagnostics = require('./diagnostics');
  * Boots the pieces that need to run independently of any single join:
  * the temp-ban lifter, and the opt-in catch-up sweep.
  *
- * Never throws — a broken gate must not stop the bot from starting.
+ * Never throws: a broken gate must not stop the bot from starting.
  */
 async function initJoinGate(client) {
     try {
@@ -44,7 +44,7 @@ async function initJoinGate(client) {
 
         if (!client.options.intents.has(GatewayIntentBits.GuildMembers)) {
             logger.error(
-                '[JOIN-GATE] The gate is enabled but the GuildMembers intent is missing — '
+                '[JOIN-GATE] The gate is enabled but the GuildMembers intent is missing, so '
                 + 'guildMemberAdd will never fire. Enable "Server Members Intent" in the Developer Portal.',
                 { guilds: guildIds.length }
             );

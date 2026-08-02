@@ -392,7 +392,7 @@ const gifloop = {
         const count = interaction.options.getInteger('count');
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: false,
-            // GIF only — re-looping a non-animated input is meaningless.
+            // GIF only: re-looping a non-animated input is meaningless.
             mediaPredicate: (info) => info.ext === 'gif' || info.isGifLike,
             invalidMediaMessage: 'This command works on GIFs only.',
             // The loop count is a container flag; don't normalize/re-encode the input.

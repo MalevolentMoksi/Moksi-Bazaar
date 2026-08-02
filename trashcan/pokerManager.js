@@ -22,7 +22,7 @@ const games   = new Map();      // channelId -> gameState object
 function joinGame(channelId, userId) {
   // ── Step 7a: block mid-game joins ───────────────────────────────
   if (games.has(channelId)) {
-    throw new Error('❗ A game is already in progress — you cannot join now.');
+    throw new Error('❗ A game is already in progress; you cannot join now.');
   }
 
   if (!lobbies.has(channelId)) {

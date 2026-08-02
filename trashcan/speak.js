@@ -71,7 +71,7 @@ module.exports = {
         }).join('\n');
 
         // Build system + user prompt (keep your original prompt logic)
-        let prompt = "You are a helpful assistant that summarizes recent chat messages for TTS output. Keep it short, friendly, and safe. Output only the final text to be spoken — no internal tags or explanations.";
+        let prompt = "You are a helpful assistant that summarizes recent chat messages for TTS output. Keep it short, friendly, and safe. Output only the final text to be spoken, no internal tags or explanations.";
         prompt += "\n\nContext:\n" + recent;
 
         // choose model (keep default from old working file but allow override)
@@ -114,7 +114,7 @@ module.exports = {
             if (!response.ok) {
                 const errText = await response.text().catch(() => '<no-text>');
                 console.error('Groq API responded with non-OK status', response.status, errText);
-                await interaction.editReply('Model error — check logs.');
+                await interaction.editReply('Model error: check logs.');
                 return;
             }
 
@@ -173,7 +173,7 @@ module.exports = {
 
             if (!mainResponse || mainResponse === '*Nothing returned.*') {
                 console.error('No usable output from model, raw reply:', rawGroqReply.substring(0, 800));
-                await interaction.editReply('Model returned nothing usable — check the logs.');
+                await interaction.editReply('Model returned nothing usable: check the logs.');
                 return;
             }
 
@@ -191,7 +191,7 @@ module.exports = {
 
             // Temporary debug pause: keep process alive briefly in case Railway dies too quickly while debugging
             if (process.env.DEBUG_KEEP_ALIVE === 'true') {
-                console.log('Debug pause enabled — keeping process alive for 2 minutes');
+                console.log('Debug pause enabled, keeping process alive for 2 minutes');
                 setTimeout(() => {
                     console.log('Debug pause ended.');
                 }, 2 * 60 * 1000);

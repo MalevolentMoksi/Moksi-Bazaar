@@ -1,6 +1,6 @@
 // src/utils/joinGate/config.js
 /**
- * Join Gate — per-guild configuration store.
+ * Join Gate: per-guild configuration store.
  *
  * A guild with no row is implicitly disabled. Reads go through a short-lived
  * cache because `guildMemberAdd` can fire dozens of times per second during a
@@ -23,7 +23,7 @@ const DEFAULT_DM_MESSAGE =
 const DEFAULT_DM_BAN_MESSAGE =
     'Your account was made too recently ({days} day limit) to join this server, and you have tried to rejoin ' +
     'several times. Access has been temporarily blocked instead of kicking you again. ' +
-    'The block lifts automatically as soon as your account is old enough — you do not need to ask anyone. ' +
+    'The block lifts automatically as soon as your account is old enough; you do not need to ask anyone. ' +
     'We are sorry for the inconvenience.';
 
 /** Hard bounds. Anything the panel accepts is clamped into these. */
@@ -143,7 +143,7 @@ function thresholdMs(settings) {
 /**
  * Reads a guild's configuration.
  *
- * Throws on database failure — callers on the join path must treat that as
+ * Throws on database failure. Callers on the join path must treat that as
  * "do nothing" rather than "no config, therefore kick".
  *
  * @param {string} guildId

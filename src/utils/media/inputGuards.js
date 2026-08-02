@@ -2,7 +2,7 @@
 // Normalize input media BEFORE processing so oversized/overlong inputs don't blow
 // up encode time or memory. Caps resolution, FPS, and total frame count for
 // videos/GIFs (mirrors MediaForge's ensuresize + ensureduration). Static images
-// are only resolution-capped. Returns { path, notes[] } — notes describe any
+// are only resolution-capped. Returns { path, notes[] }; notes describe any
 // change so the command can tell the user.
 const fs = require('fs');
 const sharp = require('sharp');
@@ -136,7 +136,7 @@ async function normalizeVideoInput(inputPath, { isGif }) {
     }
 }
 
-// Top-level: normalize based on media kind. Never throws — worst case returns input.
+// Top-level: normalize based on media kind. Never throws; worst case returns input.
 async function normalizeInput(inputPath, ext, { isVideo, isGifLike } = {}) {
     try {
         if (isGifLike || (ext || '').toLowerCase() === 'gif') {

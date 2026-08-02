@@ -12,13 +12,13 @@ const {
 const magick = {
     data: new SlashCommandBuilder()
         .setName('magick')
-        .setDescription("Apply ImageMagick's content-aware (liquid) scale — the classic warped \"magik\" effect")
+        .setDescription("Apply ImageMagick's content-aware (liquid) scale: the classic warped \"magik\" effect")
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Image, GIF, or video (optional: uses recent media if omitted)').setRequired(false)
         )
         .addIntegerOption(opt =>
             opt.setName('strength')
-                .setDescription('Output is this % of original size — smaller = stronger warp (default 50)')
+                .setDescription('Output is this % of original size; smaller = stronger warp (default 50)')
                 .setMinValue(1)
                 .setMaxValue(99)
         ),

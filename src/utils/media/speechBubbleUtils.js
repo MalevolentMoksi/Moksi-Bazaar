@@ -1,16 +1,16 @@
 // src/utils/media/speechBubbleUtils.js
 // esmBot-style speech bubble. Unlike MediaForge's full-image stretch, the bubble
 // is a band sized to `scale` of the image height (default 0.2) placed at the top
-// or bottom, scaled to the image width — looking like a real speech bubble rather
+// or bottom, scaled to the image width, looking like a real speech bubble rather
 // than a giant outline across the whole frame. Supports:
 //   position: top | bottom     (esmBot gravity 2 / 8; bottom also vertically flips)
 //   color:    transparent | white | black
-//   scale:    0.01–1.0          (esmBot yscale — band height as a fraction of image height)
-//   flip:     mirror horizontally (esmBot flipX — points the tail the other way)
+//   scale:    0.01–1.0          (esmBot yscale: band height as a fraction of image height)
+//   flip:     mirror horizontally (esmBot flipX: points the tail the other way)
 //
 // Assets (esmBot's, grayscale+alpha, 1090×290):
-//   speech.png           — luminance encodes the bubble interior (alpha cut-out mode)
-//   speechbubble_esm.png — white-filled bubble for the solid white/black modes
+//   speech.png:           luminance encodes the bubble interior (alpha cut-out mode)
+//   speechbubble_esm.png: white-filled bubble for the solid white/black modes
 //
 // The core builder produces a FULL-CANVAS RGBA overlay (positioned band on a
 // transparent canvas). White/black overlays are composited over the source;

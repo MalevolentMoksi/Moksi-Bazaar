@@ -320,7 +320,7 @@ async function getCachedMediaDescription(mediaId) {
 }
 
 // PRIMARY: Gemini 3.1 Flash-Lite (2.5X faster TTFT, 45% faster output, $0.25/$1.50/1M, replaces deprecated Gemini 2.0)
-// FALLBACK: Qwen 2.5 VL 7B ($0.12/$0.36/1M) — excellent for text/memes, proven reliable
+// FALLBACK: Qwen 2.5 VL 7B ($0.12/$0.36/1M). Excellent for text/memes, proven reliable
 // RETRY: Exponential backoff (100ms, 200ms, 400ms) for transient failures
 async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image in a concise way, focusing on the main subject.", attempt = 1) {
     if (!OPENROUTER_API_KEY) return null;
@@ -358,7 +358,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-            // HTTP error — try fallback
+            // HTTP error, try fallback
             logger.warn('[MEDIA] Gemini HTTP error, attempting fallback', { status: response.status, attempt });
             return await analyzeImageFallback(imageUrl, prompt);
         }
@@ -370,7 +370,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             return result;
         }
         
-        // Empty response — try fallback
+        // Empty response, try fallback
         logger.warn('[MEDIA] Gemini returned empty response, trying fallback');
         return await analyzeImageFallback(imageUrl, prompt);
     } catch (e) {
@@ -384,7 +384,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             return await analyzeImageWithOpenRouter(imageUrl, prompt, attempt + 1);
         }
         
-        // Failed after retries — fall through to fallback
+        // Failed after retries, fall through to fallback
         logger.error('[MEDIA] Gemini failed after retries, trying fallback', { error: e.message });
         return await analyzeImageFallback(imageUrl, prompt);
     }
@@ -510,7 +510,7 @@ async function analyzeGifWithOpenRouter(gifUrl, prompt) {
     try {
         const storyboardBuffer = await fs.promises.readFile(storyboard.storyboardPath);
         const storyboardDataUrl = `data:image/jpeg;base64,${storyboardBuffer.toString('base64')}`;
-        const gifPrompt = `${prompt}\n\nThis is an animated GIF shown as a storyboard of equally-spaced frames in timeline order (left-to-right, top-to-bottom). Describe both the scene content and what changes across the frames — focus on the event or reaction being shown.`;
+        const gifPrompt = `${prompt}\n\nThis is an animated GIF shown as a storyboard of equally-spaced frames in timeline order (left-to-right, top-to-bottom). Describe both the scene content and what changes across the frames. Focus on the event or reaction being shown.`;
         return await analyzeImageWithOpenRouter(storyboardDataUrl, gifPrompt);
     } finally {
         await cleanup(storyboard.inputPath, storyboard.storyboardPath);
@@ -531,7 +531,7 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         if (!forceReanalyze && cached) {
             descriptions.push(`[${type}: ${cached.description}]`);
         } else if (shouldAnalyze) {
-            const prompt = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared — prioritize anything visually striking, emotionally notable, or culturally significant. Name any recognizable characters, memes, or public figures. If text is visible in the image, include it.";
+            const prompt = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared. Prioritize anything visually striking, emotionally notable, or culturally significant. Name any recognizable characters, memes, or public figures. If text is visible in the image, include it.";
 
             const desc = mediaMeta.isGif
                 ? await analyzeGifWithOpenRouter(url, prompt)
@@ -626,14 +626,14 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
 }
 
 // ── SENTIMENT & RELATIONSHIP ────────────────────────────────────────────────
-// PRIMARY: MiMo-V2-Flash ($0.09/$0.29/M) — cost-efficient JSON scoring
-// FALLBACK 1: Groq Llama 3.3 8B ($0.05/$0.08/M) — lightweight dense model
-// FALLBACK 2: DeepSeek V3 ($0.32/$0.89/M) — full reasoning fallback (safe but expensive)
+// PRIMARY: MiMo-V2-Flash ($0.09/$0.29/M). Cost-efficient JSON scoring
+// FALLBACK 1: Groq Llama 3.3 8B ($0.05/$0.08/M). Lightweight dense model
+// FALLBACK 2: DeepSeek V3 ($0.32/$0.89/M). Full reasoning fallback (safe but expensive)
 async function analyzeMessageSentiment(userMessage, conversationContext) {
     if (!OPENROUTER_API_KEY) return { sentiment: 0, reasoning: 'No API' };
 
     const contextSlice = conversationContext.slice(-800).replace(/^[^\n]*\n/, '');
-    const prompt = `Analyze the sentiment of the last message as directed specifically at the bot — not the user's general mood or topic.
+    const prompt = `Analyze the sentiment of the last message as directed specifically at the bot, not the user's general mood or topic.
 CONTEXT:
 ${contextSlice}
 MESSAGE: "${userMessage}"

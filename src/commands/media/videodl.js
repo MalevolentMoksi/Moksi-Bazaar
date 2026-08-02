@@ -23,7 +23,7 @@ function looksLikeUrl(s) {
 const videodl = {
     data: new SlashCommandBuilder()
         .setName('videodl')
-        .setDescription('Download a video (or its audio) from a URL — YouTube, Twitter, TikTok, etc.')
+        .setDescription('Download a video (or its audio) from a URL: YouTube, Twitter, TikTok, etc.')
         .addStringOption(opt =>
             opt.setName('url').setDescription('The video URL to download').setRequired(true)
         )
@@ -53,7 +53,7 @@ const videodl = {
         let sendPath = null;
         try {
             if (mediaSemaphore.active >= mediaSemaphore.max) {
-                try { await interaction.editReply('⏳ Your download is queued — it will start shortly…'); } catch {}
+                try { await interaction.editReply('⏳ Your download is queued, it will start shortly…'); } catch {}
             }
             downloadedPath = await mediaSemaphore.run(() => download(url, mode, { maxBytes: MAX_FILE_SIZE }));
 
@@ -61,7 +61,7 @@ const videodl = {
             const stats = fs.statSync(sendPath);
             if (stats.size > MAX_FILE_SIZE) {
                 return interaction.editReply(
-                    `⚠️ The download is too large to send (${Math.round(stats.size / 1024 / 1024)} MB — Discord's limit is 25 MB). ` +
+                    `⚠️ The download is too large to send (${Math.round(stats.size / 1024 / 1024)} MB; Discord's limit is 25 MB). ` +
                     'Try the audio-only format, or a shorter clip.'
                 );
             }

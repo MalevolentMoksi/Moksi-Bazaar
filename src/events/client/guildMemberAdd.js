@@ -1,6 +1,6 @@
 // src/events/client/guildMemberAdd.js
 /**
- * Fires only for members joining right now — this is what keeps the join gate
+ * Fires only for members joining right now. This is what keeps the join gate
  * from ever touching people who were already in the server.
  *
  * Requires the GuildMembers gateway intent (bot.js) and the "Server Members

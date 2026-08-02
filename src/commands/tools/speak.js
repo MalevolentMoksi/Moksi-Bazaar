@@ -67,7 +67,7 @@ async function buildConversationContext(messages, botId) {
 
   if (recent.length === 0) return 'No recent conversation.';
 
-  // Only analyze media on the newest *user* message — stops 5-10s re-analysis
+  // Only analyze media on the newest *user* message, which stops 5-10s re-analysis
   // of old images every call.
   const newestUserMsg = [...recent].reverse().find(m => m.author.id !== botId);
   const newestUserMsgId = newestUserMsg?.id;
@@ -110,7 +110,7 @@ function describeRelationship(userContext) {
   if (n < 5)  return `You've barely talked with them (${n} exchanges).`;
   if (n < 20) return `You've talked with them a handful of times (${n} exchanges).`;
   if (n < 60) return `You've talked with them plenty (${n} exchanges).`;
-  return `You've talked with them a lot (${n} exchanges) — they're a regular.`;
+  return `You've talked with them a lot (${n} exchanges); they're a regular.`;
 }
 
 // ── MAIN COMMAND ────────────────────────────────────────────────────────────
@@ -209,13 +209,13 @@ module.exports = {
         .join(', ');
 
       const userRoleContext = userIsOwner
-        ? "CREATOR (Moksi) — you respect him, though you tease him."
+        ? "CREATOR (Moksi): you respect him, though you tease him."
         : "Chatter (not your creator).";
 
       const systemPrompt = `You are Cooler Moksi.
 
 IDENTITY:
-- A cynical goat AI. Tone: dry, deadpan, slightly sarcastic. Match the energy of the conversation — if something heavy happened, be blunt about it; if it's trivial, stay flat. Hostility must come from the relationship data below, not from nowhere.
+- A cynical goat AI. Tone: dry, deadpan, slightly sarcastic. Match the energy of the conversation: if something heavy happened, be blunt about it; if it's trivial, stay flat. Hostility must come from the relationship data below, not from nowhere.
 - Speak lowercase, naturally, without heavy punctuation.
 - STRICTLY FORBIDDEN: zoomer slang like "fr fr", "no cap", "fam", "based", "bet". You are not a teenager. Speak like a tired adult.
 - Keep it short: 1-2 sentences. If the honest answer is one word, use one word. Don't pad.
@@ -230,13 +230,13 @@ CURRENT USER:
 
 REACTION EMOJI:
 - Do NOT use standard emojis (😂, 💀, etc.) in your reply text.
-- After your reply text, on a new line by itself, write exactly ONE key from this list — nothing else on that line. Write "none" if nothing fits.
+- After your reply text, on a new line by itself, write exactly ONE key from this list, nothing else on that line. Write "none" if nothing fits.
    Available: ${emojiHints}
 Example output format:
 yeah that's pretty fair
 goat_meditate
 
-CHAT LOG (most recent last; "Cooler Moksi" entries are your own prior replies; [media] tags describe what was shared — treat them as if you saw it):
+CHAT LOG (most recent last; "Cooler Moksi" entries are your own prior replies; [media] tags describe what was shared, treat them as if you saw it):
 ${conversationContext}
 
 STORED MEMORY (past exchanges with this user, oldest first):
@@ -244,7 +244,7 @@ ${memoryText}`;
 
       const userPrompt = userRequest
         ? `${askerName}: ${userRequest}`
-        : `(${askerName} pinged you without saying anything — react to the chat log above)`;
+        : `(${askerName} pinged you without saying anything; react to the chat log above)`;
 
       // 6. API CALL with context caching (system prompt is static, worth caching)
       const rawContent = await callOpenRouterAPI(
@@ -254,8 +254,8 @@ ${memoryText}`;
           { role: 'user', content: userPrompt }
         ],
         {
-          maxTokens: 250,       // was 200 — avoids mid-sentence cut-offs
-          temperature: 0.85,    // was 1.0 — less chaotic, still varied
+          maxTokens: 250,       // was 200, avoids mid-sentence cut-offs
+          temperature: 0.85,    // was 1.0, less chaotic, still varied
           cacheControl: true    // NEW: Enable caching for large system prompt (20% input cost savings on hits)
         }
       );
@@ -270,7 +270,7 @@ ${memoryText}`;
         );
       }
 
-      // 7. ROBUST EMOJI PARSING — match a key as a standalone token
+      // 7. ROBUST EMOJI PARSING: match a key as a standalone token
       let replyText = rawContent;
       let finalEmoji = "";
 
@@ -283,7 +283,7 @@ ${memoryText}`;
         if (GOAT_EMOJIS[emojiKey]) finalEmoji = GOAT_EMOJIS[emojiKey];
       }
 
-      // Fallback — map attitude/sentiment to emojis that actually exist in GOAT_EMOJIS
+      // Fallback: map attitude/sentiment to emojis that actually exist in GOAT_EMOJIS
       if (!finalEmoji) {
         const lvl = userContext.attitudeLevel;
         if (lvl === 'hostile') {

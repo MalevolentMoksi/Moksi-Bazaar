@@ -178,21 +178,21 @@ function attachCollector(msg, userId, mention) {
     let payout = 0;
     let result;
     if (playerTotal > 21) {
-      result = `Bust — you lose $${bet}.`;
+      result = `Bust: you lose $${bet}.`;
     } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
       payout = bet * 2;
       result = `You win $${payout}!`;
     } else if (playerTotal === dealerTotal) {
       payout = bet;
-      result = `Push — $${bet} returned.`;
+      result = `Push: $${bet} returned.`;
     } else {
-      result = `Dealer wins — you lose $${bet}.`;
+      result = `Dealer wins: you lose $${bet}.`;
     }
 
     bal += payout;
     await updateBalance(userId, bal);
     games.delete(userId);
-    // STOP the main collector—this hand is done
+    // STOP the main collector; this hand is done
     collector.stop();
 
     actionRow.components.forEach(b => b.setDisabled(true));

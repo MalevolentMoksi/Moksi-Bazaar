@@ -372,14 +372,14 @@ function atempoChain(speed) {
 // Discord-safe GIF dithering.
 // Discord re-encodes GIF previews and mangles error-diffusion dithers
 // (sierra2_4a / floyd_steinberg) into noise, while ordered "bayer" dithering
-// survives — that's the part that matters for Discord. These helpers centralize
+// survives, and that's the part that matters for Discord. These helpers centralize
 // the palettegen/paletteuse filters so every GIF pipeline (caption, speechbubble,
 // magick, convert) stays consistent.
 //
 // NOTE: we deliberately use the DEFAULT stats_mode (full), NOT stats_mode=single.
 // stats_mode=single emits one palette PER FRAME, which cannot be written to a
 // single palette PNG in the two-pass (palettegen-to-file -> paletteuse) approach
-// these pipelines use — it errors with "Cannot write more than one file with the
+// these pipelines use: it errors with "Cannot write more than one file with the
 // same name". A single full-stats palette + bayer dithering is the correct combo.
 //   reserveTransparent: keep a palette slot for transparency (cut-outs/overlays)
 // ---------------------------------------------------------------------------

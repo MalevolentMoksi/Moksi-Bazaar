@@ -1,10 +1,10 @@
 // src/utils/joinGate/unbanScheduler.js
 /**
- * Join Gate — automatic lifting of escalation temp-bans.
+ * Join Gate: automatic lifting of escalation temp-bans.
  *
  * The gate promises, in writing, that a temp-ban lifts the moment the account
  * is old enough. That promise has to survive a redeploy, a threshold change,
- * and the gate being switched off afterwards — so pending unbans live in the
+ * and the gate being switched off afterwards, so pending unbans live in the
  * database and this scheduler runs unconditionally, never consulting
  * `join_gate_settings.enabled`.
  *
@@ -77,7 +77,7 @@ async function getPendingUnbans(guildId) {
  * Re-derives every pending unban against a new threshold.
  *
  * Only ever shortens a ban. Raising the threshold must not silently extend a
- * punishment someone was already told the end date of — that would make the
+ * punishment someone was already told the end date of; that would make the
  * DM a lie after the fact.
  *
  * The account creation time comes straight out of the snowflake, so this needs
@@ -122,7 +122,7 @@ async function recomputePendingUnbans(guildId, newThresholdMs) {
 async function dispatchUnban(client, row) {
     const guild = await client.guilds.fetch(row.guild_id).catch(() => null);
     if (!guild) {
-        // Bot is no longer in the guild — the row can never be actioned.
+        // Bot is no longer in the guild, so the row can never be actioned.
         logger.warn('[JOIN-GATE] Dropping pending unban for unreachable guild', { guildId: row.guild_id });
         await deletePendingUnban(row.guild_id, row.user_id);
         return;
@@ -134,7 +134,7 @@ async function dispatchUnban(client, row) {
         await guild.bans.remove(row.user_id, 'Join gate: account is now old enough');
         ok = true;
     } catch (err) {
-        // 10026 Unknown Ban — already lifted elsewhere. Nothing to report.
+        // 10026 Unknown Ban: already lifted elsewhere. Nothing to report.
         if (err?.code === 10026) {
             ok = true;
         } else {

@@ -94,7 +94,7 @@ module.exports = {
 
             player.on(AudioPlayerStatus.Idle, () => {
                 console.log('[GoatVC-Test] Bleat finished!');
-                // Intentionally do nothing here—bot stays in VC
+                // Intentionally do nothing here; bot stays in VC
             });
 
             const resource = createAudioResource(audioPath);
@@ -280,7 +280,7 @@ module.exports = {
                     });
 
                     player.on(AudioPlayerStatus.Playing, () => {
-                        // Bleat started—no further action needed here
+                        // Bleat started, no further action needed here
                     });
 
                     const resource = createAudioResource(audioPath);

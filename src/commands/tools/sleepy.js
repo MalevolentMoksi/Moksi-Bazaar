@@ -66,7 +66,7 @@ module.exports = {
             [guildId, user.id]
           );
           const newCount = result.rows[0].count;
-          return interaction.editReply(`✅ Added sleepy for <@${user.id}> — new total: **${newCount}**`);
+          return interaction.editReply(`✅ Added sleepy for <@${user.id}>, new total: **${newCount}**`);
         } else {
           const sel = await pool.query(
             'SELECT count FROM sleepy_counts WHERE guild_id = $1 AND user_id = $2',
@@ -83,7 +83,7 @@ module.exports = {
             [guildId, user.id]
           );
           const newCount = upd.rows[0].count;
-          return interaction.editReply(`✅ Removed sleepy for <@${user.id}> — new total: **${newCount}**`);
+          return interaction.editReply(`✅ Removed sleepy for <@${user.id}>, new total: **${newCount}**`);
         }
       }
 
@@ -108,7 +108,7 @@ module.exports = {
         } else {
           embed.setDescription(
             rows
-              .map((r, i) => `**${i + 1}.** <@${r.user_id}> — **${r.count}**`)
+              .map((r, i) => `**${i + 1}.** <@${r.user_id}>: **${r.count}**`)
               .join('\n')
           );
         }

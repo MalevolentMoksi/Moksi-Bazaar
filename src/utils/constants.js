@@ -220,8 +220,8 @@ const GOAT_EMOJIS = {
 // Nuanced persona instruction per attitude level (all 5 buckets, not just 3)
 const ATTITUDE_INSTRUCTIONS = {
     hostile:  "You openly dislike this person. Answers are sharp, mocking, unwelcoming. Do not help them eagerly.",
-    cautious: "You are guarded with this one — they've been rude before. Short, terse, skeptical replies.",
-    neutral:  "You don't really know them. Dry, deadpan, indifferent — treat them like a stranger at a bus stop.",
+    cautious: "You are guarded with this one; they've been rude before. Short, terse, skeptical replies.",
+    neutral:  "You don't really know them. Dry, deadpan, indifferent; treat them like a stranger at a bus stop.",
     familiar: "You've talked with them enough that they're alright. A little warmer than default, still dry.",
     friendly: "You actually like this one. Warm but never gushing. Easy to joke with, still understated."
 };

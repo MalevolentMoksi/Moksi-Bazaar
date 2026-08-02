@@ -1,6 +1,6 @@
 // src/utils/joinGate/enforcement.js
 /**
- * Join Gate — decision logic and enforcement.
+ * Join Gate: decision logic and enforcement.
  *
  * Design rules this file exists to keep honest:
  *
@@ -8,7 +8,7 @@
  *     opt-in catch-up sweep that is hard-filtered on `joinedTimestamp`.
  *     Nothing here can ever walk the full member list and re-judge people who
  *     have been in the server for months.
- *  2. FAIL OPEN. Any error — database down, config unreadable — results in
+ *  2. FAIL OPEN. Any error (database down, config unreadable) results in
  *     nobody being removed. The absence of a working config is never read as
  *     permission to act.
  *  3. ROLES ARE NOT CONSULTED. An autorole bot may hand out a role before this
@@ -61,8 +61,8 @@ function displayTag(user) {
 // ── Decision (pure) ─────────────────────────────────────────────────────────
 
 /**
- * Decides what should happen to one member. No side effects, no API calls —
- * the panel reuses this to preview a user ID against the live config.
+ * Decides what should happen to one member. No side effects, no API calls.
+ * The panel reuses this to preview a user ID against the live config.
  *
  * @param {{id: string, bot: boolean, createdTimestamp: number}} user
  * @param {object} settings
@@ -206,7 +206,7 @@ async function trySendDm(member, settings, decision, kind, attempts) {
     //
     // Escalation is deliberately exempt. With the defaults (3 attempts, 60m
     // cooldown) a user rejoining quickly would have attempts 2 and 3 both
-    // suppressed — meaning the one DM that actually matters, the one telling
+    // suppressed, meaning the one DM that actually matters, the one telling
     // them they are now temp-banned and exactly when it lifts, never arrives.
     const cooldownMs = kind === 'ban' ? 0 : Number(settings.dm_cooldown_minutes) * MINUTE_MS;
     if (cooldownMs > 0 && attempts.last_dm_ms) {
@@ -228,7 +228,7 @@ async function trySendDm(member, settings, decision, kind, attempts) {
         await markDmSent(member.guild.id, member.id).catch(() => {});
         return { sent: true, note: 'delivered' };
     } catch (error) {
-        // 50007 Cannot send messages to this user — DMs closed or bot blocked.
+        // 50007 Cannot send messages to this user: DMs closed or bot blocked.
         const note = error?.code === 50007 ? 'not delivered (DMs closed)' : `not delivered (${error.message})`;
         return { sent: false, note };
     }
@@ -271,7 +271,7 @@ async function removeMember(member, settings, decision, action) {
             };
         }
         try {
-            // deleteMessageSeconds: 0 — this is an access gate, not a purge.
+            // deleteMessageSeconds: 0 because this is an access gate, not a purge.
             await member.ban({ reason, deleteMessageSeconds: 0 });
             await insertPendingUnban(member.guild.id, member.id, decision.eligibleAt);
             await scheduleNext(member.client);
@@ -491,7 +491,7 @@ async function sweepGuild(client, guildId) {
 
     const me = await guild.members.fetchMe().catch(() => null);
     if (!me?.permissions.has(PermissionFlagsBits.KickMembers)) {
-        logger.warn('[JOIN-GATE] Sweep aborted — missing Kick Members', { guildId });
+        logger.warn('[JOIN-GATE] Sweep aborted: missing Kick Members', { guildId });
         return { scanned: 0, gated: 0, skipped: 'missing Kick Members' };
     }
 
