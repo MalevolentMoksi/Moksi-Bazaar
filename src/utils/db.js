@@ -876,15 +876,43 @@ async function getSentimentHistory(userId, limit = 10) {
 async function getRecentMemories(userId, limit = 5, options = {}) {
     const { excludeContext = false } = options;
 
+    // timestamp and channel_id ride along so the caller can date each memory
+    // and drop ones already visible in the live chat log.
     const query = excludeContext
-        ? `SELECT user_message, bot_response FROM conversation_memories
+        ? `SELECT user_message, bot_response, timestamp, channel_id FROM conversation_memories
            WHERE user_id = $1 AND is_context_only = false
            ORDER BY timestamp DESC LIMIT $2`
-        : `SELECT user_message, bot_response FROM conversation_memories
+        : `SELECT user_message, bot_response, timestamp, channel_id FROM conversation_memories
            WHERE user_id = $1 ORDER BY timestamp DESC LIMIT $2`;
 
     const { rows } = await pool.query(query, [userId, limit]);
     return rows.reverse();
+}
+
+/**
+ * Attitude and interaction counts for a set of users in one round-trip.
+ * Users with no row are simply absent from the result: strangers.
+ *
+ * @param {string[]} userIds
+ * @returns {Promise<Map<string, {attitudeLevel: string, interactionCount: number}>>}
+ */
+async function getUserContextsBulk(userIds) {
+    const out = new Map();
+    const ids = [...new Set(userIds)].filter(Boolean);
+    if (ids.length === 0) return out;
+
+    const { rows } = await pool.query(
+        `SELECT user_id, attitude_level, interaction_count
+         FROM user_preferences WHERE user_id = ANY($1)`,
+        [ids]
+    );
+    for (const row of rows) {
+        out.set(row.user_id, {
+            attitudeLevel: row.attitude_level || 'neutral',
+            interactionCount: row.interaction_count || 0,
+        });
+    }
+    return out;
 }
 
 async function updateUserPreferences(userId, interaction) {
@@ -1066,6 +1094,7 @@ module.exports = {
     removeUserFromBlacklist,
     getSettingState,
     getUserContext,
+    getUserContextsBulk,
     updateUserPreferences,
     updateUserAttitudeWithAI,
     // Media & Cache

@@ -5,6 +5,7 @@ const {
   isUserBlacklisted,
   getSettingState,
   getUserContext,
+  getUserContextsBulk,
   updateUserPreferences,
   updateUserAttitudeWithAI,
   storeConversationMemory,
@@ -165,6 +166,11 @@ function buildReplyMarker(msg, messagesMap) {
  * Builds conversation context from recent messages.
  * Now includes the bot's own replies (labeled "Cooler Moksi") so the AI
  * has short-term memory of what it just said, plus reply-chain markers.
+ *
+ * Returns the rendered log plus who was in it, so the caller can look up the
+ * bot's relationship with everyone present rather than just the asker.
+ *
+ * @returns {Promise<{text: string, participants: Map<string, string>, oldestTimestamp: number}>}
  */
 async function buildConversationContext(messages, botId, pinnedIds = new Set()) {
   const sorted = Array.from(messages.values())
@@ -184,7 +190,17 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set()) 
     if (rescued.length > 0) recent = [...rescued, ...recent];
   }
 
-  if (recent.length === 0) return 'No recent conversation.';
+  if (recent.length === 0) {
+    return { text: 'No recent conversation.', participants: new Map(), oldestTimestamp: Date.now() };
+  }
+
+  // Everyone (human) who appears in the window, so the caller can pull the
+  // bot's relationship with the whole room in one query.
+  const participants = new Map();
+  for (const msg of recent) {
+    if (msg.author.bot) continue;
+    participants.set(msg.author.id, msg.member?.displayName || msg.author.username);
+  }
 
   // Only analyze media on the newest *user* message, which stops 5-10s re-analysis
   // of old images every call.
@@ -221,7 +237,56 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set()) 
     return `${name}${replyMarker}: ${content}${payload}${mediaContent}`;
   }));
 
-  return lines.join('\n');
+  return {
+    text: lines.join('\n'),
+    participants,
+    oldestTimestamp: recent[0]?.createdTimestamp ?? Date.now(),
+  };
+}
+
+// ── PROMPT HELPERS ──────────────────────────────────────────────────────────
+
+/** "today", "yesterday", "5d ago", "3w ago", "2mo ago". */
+function ageOf(timestampMs, now = Date.now()) {
+  const days = Math.floor((now - Number(timestampMs)) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 14) return `${days}d ago`;
+  if (days < 60) return `${Math.floor(days / 7)}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+/**
+ * Formats stored memories, dated, and with anything already visible in the
+ * live chat log filtered out. The most recent memory is usually the exchange
+ * that JUST happened in this channel; repeating it wastes tokens and teaches
+ * the model to parrot its own last reply.
+ */
+function formatMemories(memories, { channelId, oldestVisibleTs, limit }) {
+  const kept = memories.filter(m =>
+    !(m.channel_id === channelId && Number(m.timestamp) >= oldestVisibleTs));
+
+  if (kept.length === 0) return '(no prior meaningful exchanges stored)';
+
+  return kept.slice(-limit)
+    .map(m => `- (${ageOf(m.timestamp)}) They said: "${m.user_message}" | You replied: "${m.bot_response}"`)
+    .join('\n');
+}
+
+/**
+ * One compact line per other person in the room the bot actually knows.
+ * The asker is excluded: they already get the full CURRENT USER block.
+ */
+function formatParticipants(participants, contexts, askerId) {
+  const lines = [];
+  for (const [userId, name] of participants) {
+    if (userId === askerId) continue;
+    const ctx = contexts.get(userId);
+    if (!ctx || !ctx.interactionCount) continue; // strangers add nothing but tokens
+    lines.push(`- ${name}: attitude ${ctx.attitudeLevel}, ${ctx.interactionCount} past exchanges`);
+    if (lines.length >= 6) break; // enough texture; the room is rarely bigger
+  }
+  return lines.length ? lines.join('\n') : null;
 }
 
 // ── EMOJI KEY EXTRACTION ────────────────────────────────────────────────────
@@ -311,7 +376,10 @@ module.exports = {
       const channelId = interaction.channel.id;
       const botId = interaction.client?.user?.id;
       const userRequest = interaction.options.getString('request');
-      const askerName = interaction.member?.displayName || interaction.user.username;
+      // Flattened: a display name is user-controlled text that lands inside
+      // the prompt, and a newline in it would let it impersonate other
+      // speakers in the chat log.
+      const askerName = flatten(interaction.member?.displayName || interaction.user.username) || 'someone';
 
       // 1. Checks & Blacklist
       if (await isUserBlacklisted(userId)) {
@@ -335,7 +403,9 @@ module.exports = {
       const [messages, userContext, recentMemories] = await Promise.all([
         interaction.channel.messages.fetch({ limit: MEMORY_LIMITS.FETCH_LIMIT }),
         getUserContext(userId),
-        getRecentMemories(userId, MEMORY_LIMITS.RECENT_MEMORIES, { excludeContext: true })
+        // A couple extra rows, because the ones duplicating the live chat log
+        // are filtered out again before the prompt is built.
+        getRecentMemories(userId, MEMORY_LIMITS.RECENT_MEMORIES + 2, { excludeContext: true })
       ]);
 
       updateUserPreferences(userId, interaction).catch(e =>
@@ -362,8 +432,18 @@ module.exports = {
         }
       }
 
-      // 3. Build conversation context
-      const conversationContext = await buildConversationContext(messages, botId, pinnedIds);
+      // 3. Build conversation context, then pull the bot's relationship with
+      //    everyone else in the room in a single batched query.
+      const { text: conversationContext, participants, oldestTimestamp } =
+        await buildConversationContext(messages, botId, pinnedIds);
+
+      const otherIds = [...participants.keys()].filter(id => id !== userId);
+      const participantContexts = otherIds.length
+        ? await getUserContextsBulk(otherIds).catch(e => {
+            logger.warn('Bulk participant lookup failed', { error: e.message });
+            return new Map();
+          })
+        : new Map();
 
       // 4. Sentiment analysis. Started here but deliberately NOT awaited: the
       //    system prompt uses the attitude level already loaded by
@@ -384,9 +464,23 @@ module.exports = {
 
       const relationshipContext = describeRelationship(userContext);
 
-      const memoryText = recentMemories.length > 0
-        ? recentMemories.map(m => `- They said: "${m.user_message}" | You replied: "${m.bot_response}"`).join('\n')
-        : '(no prior meaningful exchanges stored)';
+      const memoryText = formatMemories(recentMemories, {
+        channelId,
+        oldestVisibleTs: oldestTimestamp,
+        limit: MEMORY_LIMITS.RECENT_MEMORIES,
+      });
+
+      const othersText = formatParticipants(participants, participantContexts, userId);
+
+      // Time and place. Europe/Paris because that is where this community
+      // lives; "it's 3am" jokes only land in the room's own timezone.
+      const situation = new Intl.DateTimeFormat('en-GB', {
+        weekday: 'long', day: 'numeric', month: 'long',
+        hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris',
+      }).format(new Date());
+      const placeText = interaction.guild
+        ? `#${interaction.channel?.name ?? 'unknown'} in the server "${interaction.guild.name}"`
+        : 'a direct message';
 
       // Emoji list with semantic hints so the AI picks meaningfully.
       const emojiHints = Object.keys(GOAT_EMOJIS)
@@ -397,6 +491,10 @@ module.exports = {
         ? "CREATOR (Moksi): you respect him, though you tease him."
         : "Chatter (not your creator).";
 
+      // Static text first, dynamic text after: OpenRouter's prompt cache works
+      // on prefix matching, so anything above the first per-call byte is the
+      // only part that ever hits. With CURRENT USER before REACTION EMOJI the
+      // cacheable prefix ended one paragraph in.
       const systemPrompt = `You are Cooler Moksi.
 
 IDENTITY:
@@ -405,13 +503,7 @@ IDENTITY:
 - STRICTLY FORBIDDEN: zoomer slang like "fr fr", "no cap", "fam", "based", "bet". You are not a teenager. Speak like a tired adult.
 - Keep it short: 1-2 sentences. If the honest answer is one word, use one word. Don't pad.
 - When something in the chat log or memory is actually relevant, refer to it naturally. Don't fake memory if you have nothing.
-
-CURRENT USER:
-- Name: ${askerName}
-- Role: ${userRoleContext}
-- Relationship: ${relationshipContext}
-- Current attitude toward them: ${userContext.attitudeLevel}
-- How to behave: ${attitudeInstruction}
+- You know the time, the channel, and who is in the room. Use that only when it actually adds something; do not announce it.
 
 REACTION EMOJI:
 - Do NOT use standard emojis (😂, 💀, etc.) in your reply text.
@@ -421,10 +513,24 @@ Example output format:
 yeah that's pretty fair
 goat_meditate
 
+SITUATION:
+- It is ${situation} (local time for this community).
+- You are speaking in ${placeText}.
+
+CURRENT USER:
+- Name: ${askerName}
+- Role: ${userRoleContext}
+- Relationship: ${relationshipContext}
+- Current attitude toward them: ${userContext.attitudeLevel}
+- How to behave: ${attitudeInstruction}
+${othersText ? `
+OTHERS IN THE CONVERSATION (people from the chat log you already know):
+${othersText}
+` : ''}
 CHAT LOG (most recent last; "Cooler Moksi" entries are your own prior replies; [media] tags describe what was shared, treat them as if you saw it):
 ${conversationContext}
 
-STORED MEMORY (past exchanges with this user, oldest first):
+STORED MEMORY (past exchanges with this user, oldest first, each dated):
 ${memoryText}`;
 
       const userPrompt = userRequest

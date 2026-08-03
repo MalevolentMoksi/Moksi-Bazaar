@@ -22,7 +22,19 @@ module.exports = {
     );
 
     const botId = client.user?.id;
-    if (!botId || !message.mentions.users.has(botId)) return;
+    if (!botId) return;
+
+    // Two triggers: a direct @mention, or using Discord's reply function on
+    // one of the bot's own messages. The reply path matters because replying
+    // with the ping toggled off adds nothing to `mentions`, so people who
+    // continued a conversation the natural way used to get silence.
+    let triggered = message.mentions.users.has(botId);
+    if (!triggered && message.reference?.messageId) {
+      const referenced = message.channel.messages.cache.get(message.reference.messageId)
+        ?? await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+      triggered = referenced?.author?.id === botId;
+    }
+    if (!triggered) return;
 
     // Extract the rest of the message after the mention as the "request"
     const mentionRegex = new RegExp(`<@!?${botId}>\\s*`, 'gi');
