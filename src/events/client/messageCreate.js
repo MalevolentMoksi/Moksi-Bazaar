@@ -72,12 +72,27 @@ module.exports = {
         this.deferred = true;
         this._startTyping();
       },
+      /**
+       * Sends as a native Discord reply to the triggering message, so the
+       * client renders its own "replying to" header instead of the bot
+       * hand-building a quote block.
+       *
+       * failIfNotExists keeps this safe when the original was deleted between
+       * the mention and the answer: Discord downgrades it to a normal message
+       * rather than rejecting the send.
+       */
+      async _send(resp) {
+        const payload = typeof resp === 'string' ? { content: resp } : { ...resp };
+        payload.failIfNotExists = false;
+        const msg = await message.reply(payload);
+        this._lastReply = msg;
+        return msg;
+      },
+
       async reply(resp) {
         this._stopTyping();
         this.replied = true;
-        const msg = await message.channel.send(resp);
-        this._lastReply = msg;
-        return msg;
+        return this._send(resp);
       },
       async editReply(resp) {
         this._stopTyping();
@@ -85,9 +100,7 @@ module.exports = {
           return this._lastReply.edit(resp);
         }
         this.replied = true;
-        const msg = await message.channel.send(resp);
-        this._lastReply = msg;
-        return msg;
+        return this._send(resp);
       },
       // speak.js never calls this any more, but a missing method here used to
       // throw straight into a silent catch. Keep the shim API-complete.

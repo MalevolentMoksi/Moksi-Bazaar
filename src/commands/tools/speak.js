@@ -488,7 +488,12 @@ ${memoryText}`;
       let finalOutput = replyText;
       if (finalEmoji) finalOutput += ` ${finalEmoji}`;
 
-      if (userRequest) {
+      // Mention-triggered answers go out as a native Discord reply, so the
+      // client draws its own "replying to" header and the hand-built quote
+      // block is redundant. Slash commands have no message to reference, so
+      // they keep the citation: otherwise the question is only visible behind
+      // Discord's "click to see command" affordance.
+      if (userRequest && !sourceMessage) {
         const formattedRequest = userRequest.split('\n').map(l => `-# *"${l}"*`).join('\n');
         finalOutput = `-# <@${userId}> :\n${formattedRequest}\n\n${finalOutput}`;
       }
