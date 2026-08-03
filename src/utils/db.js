@@ -223,6 +223,21 @@ const init = async () => {
             PRIMARY KEY (guild_id, user_id)
         );
         CREATE INDEX IF NOT EXISTS idx_join_gate_unbans_due ON join_gate_pending_unbans(unban_at_ms);
+        -- ── SPEAK EXTRAS ─────────────────────────────────────────────────────
+        -- Distilled long-term profiles: durable facts and running jokes, kept
+        -- separate from conversation_memories which stores raw exchanges.
+        CREATE TABLE IF NOT EXISTS speak_profiles (
+            user_id             TEXT PRIMARY KEY,
+            profile             TEXT,
+            exchanges_at_distill INTEGER NOT NULL DEFAULT 0,
+            updated_at_ms       BIGINT NOT NULL DEFAULT 0
+        );
+        -- Structured config the boolean-only settings table cannot hold
+        -- (interjection rules, delivery options).
+        CREATE TABLE IF NOT EXISTS speak_config (
+            key   TEXT PRIMARY KEY,
+            value JSONB NOT NULL
+        );
     `);
 
     // Default Settings
@@ -915,6 +930,69 @@ async function getUserContextsBulk(userIds) {
     return out;
 }
 
+// ── SPEAK CONFIG & PROFILES ─────────────────────────────────────────────────
+
+/**
+ * speak_config reads go through a short cache because the interjection gate
+ * consults them on every guild message.
+ */
+const SPEAK_CONFIG_TTL_MS = 30_000;
+const speakConfigCache = new Map(); // key -> {value, expiresAt}
+
+async function getSpeakConfigValue(key, fallback = null) {
+    const hit = speakConfigCache.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+    const { rows } = await pool.query('SELECT value FROM speak_config WHERE key = $1', [key]);
+    const value = rows.length ? rows[0].value : fallback;
+    speakConfigCache.set(key, { value, expiresAt: Date.now() + SPEAK_CONFIG_TTL_MS });
+    return value;
+}
+
+async function setSpeakConfigValue(key, value) {
+    await pool.query(
+        `INSERT INTO speak_config (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [key, JSON.stringify(value)]
+    );
+    speakConfigCache.set(key, { value, expiresAt: Date.now() + SPEAK_CONFIG_TTL_MS });
+}
+
+function invalidateSpeakConfig(key) {
+    if (key) speakConfigCache.delete(key);
+    else speakConfigCache.clear();
+}
+
+async function getSpeakProfile(userId) {
+    const { rows } = await pool.query(
+        'SELECT profile, exchanges_at_distill, updated_at_ms FROM speak_profiles WHERE user_id = $1',
+        [userId]
+    );
+    return rows[0] ?? null;
+}
+
+async function saveSpeakProfile(userId, profile, exchangesAtDistill) {
+    await pool.query(
+        `INSERT INTO speak_profiles (user_id, profile, exchanges_at_distill, updated_at_ms)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id) DO UPDATE SET
+            profile = EXCLUDED.profile,
+            exchanges_at_distill = EXCLUDED.exchanges_at_distill,
+            updated_at_ms = EXCLUDED.updated_at_ms`,
+        [userId, profile, exchangesAtDistill, String(Date.now())]
+    );
+}
+
+async function deleteSpeakProfile(userId) {
+    const { rowCount } = await pool.query('DELETE FROM speak_profiles WHERE user_id = $1', [userId]);
+    return rowCount > 0;
+}
+
+async function countSpeakProfiles() {
+    const { rows } = await pool.query('SELECT COUNT(*) AS n FROM speak_profiles');
+    return Number(rows[0]?.n) || 0;
+}
+
 async function updateUserPreferences(userId, interaction) {
     const displayName = interaction.member?.displayName || interaction.user?.username || null;
 
@@ -1096,6 +1174,14 @@ module.exports = {
     getUserContext,
     getUserContextsBulk,
     updateUserPreferences,
+    // Speak config & profiles
+    getSpeakConfigValue,
+    setSpeakConfigValue,
+    invalidateSpeakConfig,
+    getSpeakProfile,
+    saveSpeakProfile,
+    deleteSpeakProfile,
+    countSpeakProfiles,
     updateUserAttitudeWithAI,
     // Media & Cache
     processMediaInMessage,

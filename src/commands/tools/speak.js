@@ -6,12 +6,15 @@ const {
   getSettingState,
   getUserContext,
   getUserContextsBulk,
+  getSpeakProfile,
+  getSpeakConfigValue,
   updateUserPreferences,
   updateUserAttitudeWithAI,
   storeConversationMemory,
   getRecentMemories,
   processMediaInMessage
 } = require('../../utils/db.js');
+const { maybeDistillProfile } = require('../../utils/speakProfile');
 
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { handleCommandError, sendError } = require('../../utils/errorHandler');
@@ -246,6 +249,23 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set()) 
 
 // ── PROMPT HELPERS ──────────────────────────────────────────────────────────
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Splits a reply into up to `max` message "beats" on its own line breaks.
+ * With max 1 (feature off) the text passes through untouched. Overflow folds
+ * into the last beat rather than being dropped.
+ */
+function splitIntoBeats(text, max) {
+  if (max <= 1) return [text];
+  const lines = String(text).split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length <= 1) return [text];
+  if (lines.length <= max) return lines;
+  const beats = lines.slice(0, max - 1);
+  beats.push(lines.slice(max - 1).join('\n'));
+  return beats;
+}
+
 /** "today", "yesterday", "5d ago", "3w ago", "2mo ago". */
 function ageOf(timestampMs, now = Date.now()) {
   const days = Math.floor((now - Number(timestampMs)) / 86_400_000);
@@ -381,8 +401,11 @@ module.exports = {
       // speakers in the chat log.
       const askerName = flatten(interaction.member?.displayName || interaction.user.username) || 'someone';
 
-      // 1. Checks & Blacklist
+      // 1. Checks & Blacklist. On the interjection path these bail silently:
+      //    nobody asked the bot anything, so an unprompted "you're blocked"
+      //    or maintenance notice would be worse than saying nothing.
       if (await isUserBlacklisted(userId)) {
+        if (interaction._interjection) return;
         return await sendError(
           interaction,
           'You\'re blocked from using this command. Contact an admin if you believe this is an error.',
@@ -394,18 +417,21 @@ module.exports = {
       const userIsOwner = isOwner(userId);
 
       if (activeSpeak === false && !userIsOwner) {
+        if (interaction._interjection) return;
         const randomReply = SPEAK_DISABLED_REPLIES[Math.floor(Math.random() * SPEAK_DISABLED_REPLIES.length)];
         return await interaction.editReply(`${randomReply}\n-# _(The bot is in maintenance mode. Try again later.)_`);
       }
 
       // 2. Parallelize independent fetches. excludeContext keeps memory slots
       //    filled with real exchanges, not "user was lurking" rows.
-      const [messages, userContext, recentMemories] = await Promise.all([
+      const [messages, userContext, recentMemories, speakProfile, deliveryConfig] = await Promise.all([
         interaction.channel.messages.fetch({ limit: MEMORY_LIMITS.FETCH_LIMIT }),
         getUserContext(userId),
         // A couple extra rows, because the ones duplicating the live chat log
         // are filtered out again before the prompt is built.
-        getRecentMemories(userId, MEMORY_LIMITS.RECENT_MEMORIES + 2, { excludeContext: true })
+        getRecentMemories(userId, MEMORY_LIMITS.RECENT_MEMORIES + 2, { excludeContext: true }),
+        getSpeakProfile(userId).catch(() => null),
+        getSpeakConfigValue('delivery', { multiMessage: false }).catch(() => ({ multiMessage: false })),
       ]);
 
       updateUserPreferences(userId, interaction).catch(e =>
@@ -503,7 +529,8 @@ IDENTITY:
 - STRICTLY FORBIDDEN: zoomer slang like "fr fr", "no cap", "fam", "based", "bet". You are not a teenager. Speak like a tired adult.
 - Keep it short: 1-2 sentences. If the honest answer is one word, use one word. Don't pad.
 - When something in the chat log or memory is actually relevant, refer to it naturally. Don't fake memory if you have nothing.
-- You know the time, the channel, and who is in the room. Use that only when it actually adds something; do not announce it.
+- You know the time, the channel, and who is in the room. Use that only when it actually adds something; do not announce it.${deliveryConfig?.multiMessage ? `
+- If a reply lands more naturally as two or three very short beats, put each beat on its own line; each line is sent as its own message, like a person typing. Never force it, and never exceed three.` : ''}
 
 REACTION EMOJI:
 - Do NOT use standard emojis (😂, 💀, etc.) in your reply text.
@@ -523,7 +550,10 @@ CURRENT USER:
 - Relationship: ${relationshipContext}
 - Current attitude toward them: ${userContext.attitudeLevel}
 - How to behave: ${attitudeInstruction}
-${othersText ? `
+${speakProfile?.profile ? `
+WHAT YOU KNOW ABOUT ${askerName} (long-term notes you have kept; use naturally, never recite):
+${speakProfile.profile}
+` : ''}${othersText ? `
 OTHERS IN THE CONVERSATION (people from the chat log you already know):
 ${othersText}
 ` : ''}
@@ -533,9 +563,13 @@ ${conversationContext}
 STORED MEMORY (past exchanges with this user, oldest first, each dated):
 ${memoryText}`;
 
-      const userPrompt = userRequest
-        ? `${askerName}: ${userRequest}`
-        : `(${askerName} pinged you without saying anything; react to the chat log above)`;
+      // Interjections get their own framing: nobody summoned the bot, so the
+      // model must butt in like a bystander, not answer like it was asked.
+      const userPrompt = interaction._interjection
+        ? `(nobody asked you anything. you overheard the conversation above, and the last message caught your attention. interject with ONE short remark, the way someone butts into a conversation. if you have nothing worth saying, just say something minimal and dry)`
+        : userRequest
+          ? `${askerName}: ${userRequest}`
+          : `(${askerName} pinged you without saying anything; react to the chat log above)`;
 
       // 6. API CALL with context caching (system prompt is static, worth caching)
       //    Runs concurrently with the sentiment pass started above, so the user
@@ -590,9 +624,12 @@ ${memoryText}`;
 
       if (!replyText) replyText = "bleat.";
 
-      // 8. FINAL OUTPUT
-      let finalOutput = replyText;
-      if (finalEmoji) finalOutput += ` ${finalEmoji}`;
+      // 8. DELIVERY. With multi-message on, each short line the model wrote
+      //    becomes its own message with a typing gap, the way a person sends
+      //    "just / give it a few secs / don't kick him". Capped at 3; anything
+      //    beyond folds into the last part. The emoji rides on the final part.
+      const parts = splitIntoBeats(replyText, deliveryConfig?.multiMessage ? 3 : 1);
+      if (finalEmoji) parts[parts.length - 1] += ` ${finalEmoji}`;
 
       // Mention-triggered answers go out as a native Discord reply, so the
       // client draws its own "replying to" header and the hand-built quote
@@ -601,15 +638,17 @@ ${memoryText}`;
       // Discord's "click to see command" affordance.
       if (userRequest && !sourceMessage) {
         const formattedRequest = userRequest.split('\n').map(l => `-# *"${l}"*`).join('\n');
-        finalOutput = `-# <@${userId}> :\n${formattedRequest}\n\n${finalOutput}`;
+        parts[0] = `-# <@${userId}> :\n${formattedRequest}\n\n${parts[0]}`;
       }
 
-      // 9. SAVE MEMORY (non-blocking)
-      const isContextOnly = !userRequest || !userRequest.trim();
+      // 9. SAVE MEMORY (non-blocking). Interjections are stored as
+      //    context-only: nobody asked anything, so there is no exchange to
+      //    count toward the relationship.
+      const isContextOnly = interaction._interjection || !userRequest || !userRequest.trim();
       storeConversationMemory(
         userId,
         channelId,
-        userRequest || '[context]',
+        interaction._interjection ? '[interjection]' : (userRequest || '[context]'),
         replyText,
         sentimentAnalysis.sentiment,
         isContextOnly
@@ -617,7 +656,19 @@ ${memoryText}`;
         logger.error('Failed to store conversation memory', { userId, error: e.message })
       );
 
-      await interaction.editReply(finalOutput);
+      // 10. Long-term profile upkeep, off the critical path entirely.
+      if (!isContextOnly) {
+        maybeDistillProfile(userId).catch(() => {});
+      }
+
+      await interaction.editReply(parts[0]);
+      for (const part of parts.slice(1)) {
+        // A beat of typing between messages sells the effect; length-scaled,
+        // bounded so a slow beat never adds real latency.
+        interaction.channel?.sendTyping?.().catch?.(() => {});
+        await sleep(Math.min(2_200, Math.max(700, part.length * 45)));
+        await interaction.followUp(part);
+      }
 
     } catch (error) {
       await handleCommandError(interaction, error, {
