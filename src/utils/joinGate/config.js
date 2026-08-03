@@ -26,6 +26,23 @@ const DEFAULT_DM_BAN_MESSAGE =
     'The block lifts automatically as soon as your account is old enough; you do not need to ask anyone. ' +
     'We are sorry for the inconvenience.';
 
+/**
+ * Removal DMs for the suspicion engine and the behaviour watch window.
+ * These members already PASSED the age gate, so the "made too recently"
+ * wording above would be a lie for them; each removal reason gets its own
+ * truthful text.
+ */
+const DEFAULT_DM_SUSPICION_MESSAGE =
+    'Your account was flagged by an automated safety check when joining {server}: its profile matches ' +
+    'patterns commonly seen in spam accounts. This is not about your account\'s age. If this is a mistake, ' +
+    'filling out your profile (an avatar, a display name) before trying again will help. ' +
+    'We are sorry for the inconvenience.';
+
+const DEFAULT_DM_WATCH_MESSAGE =
+    'You were removed from {server} because of what was posted from your account shortly after joining ' +
+    '(scam links, spam, or mass mentions). If your account was compromised, please secure it before ' +
+    'rejoining. We are sorry for the inconvenience.';
+
 /** Hard bounds. Anything the panel accepts is clamped into these. */
 const LIMITS = {
     MIN_AGE_MINUTES: { min: 0, max: 365 * DAY_MINUTES },
@@ -34,6 +51,7 @@ const LIMITS = {
     BURST_THRESHOLD: { min: 2, max: 100 },
     BURST_WINDOW_SECONDS: { min: 10, max: 3600 },
     SWEEP_WINDOW_HOURS: { min: 1, max: 168 },
+    BAN_HOURS: { min: 1, max: 720 },
     DM_MESSAGE_LENGTH: 1800,
     EXEMPT_IDS: 200,
 };
@@ -76,14 +94,19 @@ const DEFAULTS = Object.freeze({
     suspicion_suspect_action: 'log',
     suspicion_malicious_action: 'log',
     suspicion_log_channel_id: null,
+    suspicion_log_enabled: true,
     suspicion_weights: {},
     suspicion_keywords: null,
     suspicion_tenure_grace_days: 30,
+    suspicion_ban_hours: 24,
+    dm_suspicion_message: DEFAULT_DM_SUSPICION_MESSAGE,
     // Post-join behaviour window.
     watch_enabled: false,
     watch_window_minutes: 10,
     watch_action_at: 100,
     watch_action: 'log',
+    watch_ban_hours: 24,
+    dm_watch_message: DEFAULT_DM_WATCH_MESSAGE,
     // Invite attribution.
     invite_tracking_enabled: false,
     total_kicks: 0,
@@ -111,9 +134,10 @@ const WRITABLE_COLUMNS = new Set([
     'sweep_enabled', 'sweep_window_hours',
     'suspicion_enabled', 'suspicion_watch_at', 'suspicion_suspect_at', 'suspicion_malicious_at',
     'suspicion_watch_action', 'suspicion_suspect_action', 'suspicion_malicious_action',
-    'suspicion_log_channel_id', 'suspicion_weights', 'suspicion_keywords',
-    'suspicion_tenure_grace_days',
+    'suspicion_log_channel_id', 'suspicion_log_enabled', 'suspicion_weights', 'suspicion_keywords',
+    'suspicion_tenure_grace_days', 'suspicion_ban_hours', 'dm_suspicion_message',
     'watch_enabled', 'watch_window_minutes', 'watch_action_at', 'watch_action',
+    'watch_ban_hours', 'dm_watch_message',
     'invite_tracking_enabled',
 ]);
 
@@ -122,6 +146,28 @@ const STAT_COLUMNS = new Set(['total_kicks', 'total_bans', 'total_failures', 'to
 const CACHE_TTL_MS = 30_000;
 /** @type {Map<string, {value: object, expiresAt: number}>} */
 const cache = new Map();
+
+/**
+ * Columns this module introduced after the base schema in db.js shipped.
+ * The schema file is owned elsewhere, so the gate ensures its own late
+ * additions here, once, before the first read or write touches them.
+ * Idempotent, and a failure is retried on the next call rather than cached.
+ */
+let columnsEnsured = null;
+function ensureColumns() {
+    columnsEnsured ??= pool.query(
+        `ALTER TABLE join_gate_settings
+            ADD COLUMN IF NOT EXISTS suspicion_log_enabled BOOLEAN NOT NULL DEFAULT true,
+            ADD COLUMN IF NOT EXISTS suspicion_ban_hours   INTEGER NOT NULL DEFAULT 24,
+            ADD COLUMN IF NOT EXISTS watch_ban_hours       INTEGER NOT NULL DEFAULT 24,
+            ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
+            ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT`
+    ).catch(error => {
+        columnsEnsured = null;
+        throw error;
+    });
+    return columnsEnsured;
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -148,6 +194,8 @@ function normalise(row) {
         exempt_user_ids: Array.isArray(row.exempt_user_ids) ? row.exempt_user_ids : [],
         dm_message: row.dm_message ?? DEFAULT_DM_MESSAGE,
         dm_ban_message: row.dm_ban_message ?? DEFAULT_DM_BAN_MESSAGE,
+        dm_suspicion_message: row.dm_suspicion_message ?? DEFAULT_DM_SUSPICION_MESSAGE,
+        dm_watch_message: row.dm_watch_message ?? DEFAULT_DM_WATCH_MESSAGE,
         // JSONB comes back parsed, but a legacy NULL must not become "no object".
         suspicion_weights: (row.suspicion_weights && typeof row.suspicion_weights === 'object')
             ? row.suspicion_weights
@@ -190,6 +238,7 @@ async function getSettings(guildId, { fresh = false } = {}) {
         if (hit && hit.expiresAt > Date.now()) return hit.value;
     }
 
+    await ensureColumns();
     const { rows } = await pool.query('SELECT * FROM join_gate_settings WHERE guild_id = $1', [guildId]);
     const value = normalise(rows[0]);
     cache.set(guildId, { value, expiresAt: Date.now() + CACHE_TTL_MS });
@@ -221,6 +270,7 @@ async function updateSettings(guildId, patch) {
 
     if (keys.length === 0) return getSettings(guildId, { fresh: true });
 
+    await ensureColumns();
     const columns = ['guild_id', ...keys];
     const placeholders = columns.map((_, i) => `$${i + 1}`);
     const values = [guildId, ...keys.map(k => patch[k])];
@@ -258,7 +308,8 @@ async function incrementStat(guildId, column, by = 1) {
 
 async function resetStats(guildId) {
     await pool.query(
-        `UPDATE join_gate_settings SET total_kicks = 0, total_bans = 0, total_failures = 0, updated_at = NOW()
+        `UPDATE join_gate_settings
+         SET total_kicks = 0, total_bans = 0, total_failures = 0, total_flagged = 0, updated_at = NOW()
          WHERE guild_id = $1`,
         [guildId]
     );
@@ -277,6 +328,8 @@ module.exports = {
     DEFAULTS,
     DEFAULT_DM_MESSAGE,
     DEFAULT_DM_BAN_MESSAGE,
+    DEFAULT_DM_SUSPICION_MESSAGE,
+    DEFAULT_DM_WATCH_MESSAGE,
     TIER_ACTIONS,
     LIMITS,
     clamp,

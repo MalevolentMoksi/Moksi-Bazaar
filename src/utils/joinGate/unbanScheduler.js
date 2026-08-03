@@ -29,14 +29,23 @@ let clientRef = null;
 
 // ── DB helpers ──────────────────────────────────────────────────────────────
 
-async function insertPendingUnban(guildId, userId, unbanAtMs) {
+/**
+ * @param {'age'|'timed'} kind 'age' bans are re-derived when the owner edits
+ *   the age threshold; 'timed' bans are fixed cooldowns that must survive
+ *   threshold edits untouched. On conflict the earlier unban wins, and the
+ *   kind follows whichever date won so a timed ban can never be reclassified
+ *   into a recomputable one by a later age-gate row (or vice versa).
+ */
+async function insertPendingUnban(guildId, userId, unbanAtMs, kind = 'age') {
     await pool.query(
-        `INSERT INTO join_gate_pending_unbans (guild_id, user_id, unban_at_ms, banned_at_ms)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO join_gate_pending_unbans (guild_id, user_id, unban_at_ms, banned_at_ms, kind)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (guild_id, user_id) DO UPDATE SET
             unban_at_ms  = LEAST(join_gate_pending_unbans.unban_at_ms, EXCLUDED.unban_at_ms),
-            banned_at_ms = EXCLUDED.banned_at_ms`,
-        [guildId, userId, String(Math.round(unbanAtMs)), String(Date.now())]
+            banned_at_ms = EXCLUDED.banned_at_ms,
+            kind = CASE WHEN EXCLUDED.unban_at_ms <= join_gate_pending_unbans.unban_at_ms
+                        THEN EXCLUDED.kind ELSE join_gate_pending_unbans.kind END`,
+        [guildId, userId, String(Math.round(unbanAtMs)), String(Date.now()), kind]
     );
 }
 
@@ -66,7 +75,7 @@ async function deletePendingUnban(guildId, userId) {
 
 async function getPendingUnbans(guildId) {
     const { rows } = await pool.query(
-        `SELECT guild_id, user_id, unban_at_ms, banned_at_ms
+        `SELECT guild_id, user_id, unban_at_ms, banned_at_ms, kind
          FROM join_gate_pending_unbans WHERE guild_id = $1 ORDER BY unban_at_ms ASC`,
         [guildId]
     );
@@ -90,6 +99,10 @@ async function recomputePendingUnbans(guildId, newThresholdMs) {
     let shortened = 0;
 
     for (const row of rows) {
+        // Timed bans are fixed cooldowns from the moment of the ban; the age
+        // threshold has nothing to say about them. Recomputing one against
+        // account age would date the unban in the past and release it.
+        if (row.kind === 'timed') continue;
         let createdAt;
         try {
             createdAt = Number(SnowflakeUtil.timestampFrom(row.user_id));

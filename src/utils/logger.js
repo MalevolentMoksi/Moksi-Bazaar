@@ -44,19 +44,22 @@ const logger = winston.createLogger({
   ],
 });
 
-// Console transport for development/production
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(({ level, message, timestamp, ...meta }) => {
-          const metaStr = Object.keys(meta).length ? JSON.stringify(meta, null, 2) : '';
-          return `${timestamp} [${level}]: ${message} ${metaStr}`;
-        })
-      ),
+// Console transport: always on. In production stdout is the only place logs
+// survive at all: Railway ingests it, while the files above sit on an
+// ephemeral disk that vanishes on every redeploy.
+const consoleFormat = process.env.NODE_ENV === 'production'
+  ? winston.format.printf(({ level, message, timestamp, ...meta }) => {
+      delete meta.service;
+      const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+      return `${timestamp} [${level}]: ${message}${metaStr}`;
     })
-  );
-}
+  : winston.format.combine(
+      winston.format.colorize(),
+      winston.format.printf(({ level, message, timestamp, ...meta }) => {
+        const metaStr = Object.keys(meta).length ? JSON.stringify(meta, null, 2) : '';
+        return `${timestamp} [${level}]: ${message} ${metaStr}`;
+      })
+    );
+logger.add(new winston.transports.Console({ format: consoleFormat }));
 
 module.exports = logger;

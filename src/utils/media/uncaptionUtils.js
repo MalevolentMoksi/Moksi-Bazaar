@@ -75,17 +75,19 @@ async function cropTop(inputPath, cropTop, { isGif, isVideo, ext }) {
     const cropFilter = `crop=${outW}:${outH}:0:${cropEven}`;
 
     if (isGif) {
+        // Pin the frame rate like the other GIF pipelines: variable-delay GIFs
+        // drift after the palette re-encode otherwise.
         const fps = await getFrameRate(inputPath);
         const palettePath = createTempPath('png');
         const outputPath = createTempPath('gif');
         try {
             await runFFmpeg(inputPath, palettePath, cmd => {
-                cmd.videoFilters(`${cropFilter},${gifPaletteGen()}`);
+                cmd.videoFilters(`${cropFilter},fps=${fps},${gifPaletteGen()}`);
             });
             await new Promise((resolve, reject) => {
                 nice(ffmpeg(inputPath))
                     .input(palettePath)
-                    .complexFilter(`${cropFilter}[c];[c][1:v]${gifPaletteUse()}`)
+                    .complexFilter(`${cropFilter},fps=${fps}[c];[c][1:v]${gifPaletteUse()}`)
                     .outputOptions(['-an', '-loop 0'])
                     .on('end', resolve)
                     .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))

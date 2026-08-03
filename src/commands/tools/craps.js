@@ -11,7 +11,7 @@ const {
   ComponentType,
   MessageFlags
 } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+const { adjustBalance } = require('../../utils/db');
 const { deductBet } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
@@ -87,8 +87,9 @@ module.exports = {
     async function runRound() {
       const game = playCraps();
       const payout = game.win ? bet * 2 : 0;
-      balance += payout;
-      await updateBalance(userId, balance);
+      if (payout > 0) {
+        balance = await adjustBalance(userId, payout);
+      }
 
       const desc = game.rolls
         .map((r, i) => `Roll ${i + 1}: **${r.d1} + ${r.d2} = ${r.total}**`)
@@ -147,6 +148,9 @@ module.exports = {
           balance = deductAgain.newBalance;
           bet = originalBet;
           logger.info('Craps: Player starting new round', { userId, bet });
+          // Retire this collector before the next round attaches its own,
+          // otherwise every past round's collector also processes the click.
+          collector.stop('superseded');
           await runRound();
         } else if (btnInt.customId === 'craps_exit') {
           logger.info('Craps: Player exited game', { userId, finalBalance: balance });

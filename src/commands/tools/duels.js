@@ -6,9 +6,10 @@
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const {
   getBalance,
-  updateBalance,
+  transferBalance,
   createPendingDuel,
   getPendingDuelsFor,
+  getPendingDuelsFrom,
   updateDuelStatus,
   deleteDuel,
 } = require('../../utils/db');
@@ -45,10 +46,16 @@ module.exports = {
         return interaction.reply({ content: '❌ You can\'t duel yourself!', flags: MessageFlags.Ephemeral });
       }
 
-      // Check for existing pending duels in DB
+      // Check for existing pending duels in DB, on both sides: the target
+      // can only field one challenge, and a challenger cannot fan out
+      // simultaneous wagers backed by the same money.
       const existingDuels = await getPendingDuelsFor(target.id);
       if (existingDuels.length > 0) {
         return interaction.reply({ content: '❌ That user already has a pending duel.', flags: MessageFlags.Ephemeral });
+      }
+      const myOutgoing = await getPendingDuelsFrom(me.id);
+      if (myOutgoing.length > 0) {
+        return interaction.reply({ content: '❌ You already have an outgoing duel challenge. Wait for it to be answered or expire.', flags: MessageFlags.Ephemeral });
       }
 
       const myBal = await getBalance(me.id);
@@ -99,15 +106,18 @@ module.exports = {
       const challengerWins = Math.random() < 0.5;
       const winner = challengerWins ? challenger : interaction.member;
       const loser = challengerWins ? interaction.member : challenger;
-      const winBal = challengerWins ? balA + amount : balB + amount;
-      const loseBal = challengerWins ? balB - amount : balA - amount;
 
-      // Update balances and mark duel completed
-      await Promise.all([
-        updateBalance(winner.id, winBal),
-        updateBalance(loser.id, loseBal),
-        updateDuelStatus(duel.id, 'completed'),
-      ]);
+      // Settle both sides in one transaction; null means the loser's funds
+      // moved between the check above and now.
+      const transfer = await transferBalance(loser.id, winner.id, amount);
+      if (!transfer) {
+        await deleteDuel(duel.id);
+        return interaction.reply({ content: '❌ The duel could not be settled: the funds are no longer there.', flags: MessageFlags.Ephemeral });
+      }
+      const winBal = transfer.toBalance;
+      const loseBal = transfer.fromBalance;
+
+      await updateDuelStatus(duel.id, 'completed');
 
       return interaction.reply({
         embeds: [

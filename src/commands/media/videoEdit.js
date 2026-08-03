@@ -1,5 +1,5 @@
 // src/commands/media/videoEdit.js
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp } = require('../../utils/media/mediaHelpers');
 const { runFFmpeg, hasAudio, atempoChain, loopVideo, mp4OutputOptions, ensureMediaSize } = require('../../utils/media/ffmpegUtils');
 const { createTempPath } = require('../../utils/media/tempFiles');
@@ -20,6 +20,17 @@ function applyGifOutput(cmd) {
 
 function applyMp4Output(cmd, outputOptions) {
     cmd.outputOptions(outputOptions);
+}
+
+// Parse a strict trim timestamp: HH:MM:SS(.ms), MM:SS(.ms), or plain seconds.
+// Returns total seconds, or null if the string doesn't match. Anything reaching
+// ffmpeg must have passed this so user input can never smuggle extra flags.
+function parseTimestamp(raw) {
+    if (!/^\d{1,6}(?::[0-5]?\d){0,2}(?:\.\d{1,3})?$/.test(raw)) return null;
+    const [whole, frac] = raw.split('.');
+    let seconds = 0;
+    for (const part of whole.split(':')) seconds = seconds * 60 + Number(part);
+    return seconds + (frac ? Number(`0.${frac}`) : 0);
 }
 
 const reverse = {
@@ -113,8 +124,22 @@ const trim = {
             opt.setName('media').setDescription('Video or GIF to trim (optional: uses recent media if omitted)').setRequired(false)
         ),
     async execute(interaction) {
-        const start = interaction.options.getString('start');
-        const end = interaction.options.getString('end');
+        const start = interaction.options.getString('start').trim();
+        const end = interaction.options.getString('end').trim();
+        const startSeconds = parseTimestamp(start);
+        const endSeconds = parseTimestamp(end);
+        if (startSeconds === null || endSeconds === null) {
+            return interaction.reply({
+                content: 'Invalid time format. Use HH:MM:SS, MM:SS, or plain seconds (e.g. 00:00:05, 1:30, or 5.5).',
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+        if (endSeconds <= startSeconds) {
+            return interaction.reply({
+                content: 'The end time must be after the start time.',
+                flags: MessageFlags.Ephemeral,
+            });
+        }
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: true,
             mediaPredicate: isVideoOrGif,
@@ -124,8 +149,9 @@ const trim = {
                 const outputPath = createTempPath(gifInput ? 'gif' : 'mp4');
                 const outputOptions = gifInput ? null : await mp4OutputOptions(inputPath);
                 await runFFmpeg(inputPath, outputPath, cmd => {
-                    // Output-side -ss/-to keeps accurate timestamps at the cost of decoding from start
-                    cmd.outputOptions([`-ss ${start}`, `-to ${end}`]);
+                    // Output-side -ss/-to keeps accurate timestamps at the cost of decoding
+                    // from start. Array form: values are never split on spaces.
+                    cmd.outputOptions(['-ss', start, '-to', end]);
                     if (gifInput) applyGifOutput(cmd);
                     else applyMp4Output(cmd, outputOptions);
                 });

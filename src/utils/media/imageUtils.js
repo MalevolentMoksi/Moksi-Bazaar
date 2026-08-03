@@ -1,21 +1,40 @@
 // src/utils/media/imageUtils.js
 const sharp = require('sharp');
-const { createTempPath } = require('./tempFiles');
-const { runFFmpeg, mp4OutputOptions } = require('./ffmpegUtils');
+const { createTempPath, cleanup } = require('./tempFiles');
+const { runFFmpeg, mp4OutputOptions, nice, ffmpeg, gifPaletteGen, gifPaletteUse } = require('./ffmpegUtils');
 const { isGifInput, staticImageFormatForExt, applySharpFormat } = require('./formatHelpers');
 
+// Two-pass palette GIF re-encode (palettegen -> paletteuse with bayer dithering),
+// mirroring videoToGif: Discord mangles default-palette GIFs into noise.
 async function gifFilter(inputPath, filter, outputExt = 'gif') {
+    const palettePath = createTempPath('png');
     const outputPath = createTempPath(outputExt);
-    await runFFmpeg(inputPath, outputPath, cmd => {
-        cmd
-            .videoFilters(filter)
-            .outputOptions([
-                '-an',
-                '-loop 0',
-                '-gifflags -offsetting',
-            ]);
-    });
-    return outputPath;
+    try {
+        // Pass 1: run the filter and generate the palette
+        await runFFmpeg(inputPath, palettePath, cmd => {
+            cmd.videoFilters(`${filter},${gifPaletteGen()}`);
+        });
+        // Pass 2: run the filter again and render with the palette
+        await new Promise((resolve, reject) => {
+            nice(ffmpeg(inputPath))
+                .input(palettePath)
+                .complexFilter(`${filter}[x];[x][1:v]${gifPaletteUse()}`)
+                .outputOptions([
+                    '-an',
+                    '-loop 0',
+                    '-gifflags -offsetting',
+                ])
+                .on('end', resolve)
+                .on('error', err => reject(new Error(`FFmpeg GIF error: ${err.message}`)))
+                .save(outputPath);
+        });
+        return outputPath;
+    } catch (err) {
+        await cleanup(outputPath);
+        throw err;
+    } finally {
+        await cleanup(palettePath);
+    }
 }
 
 async function videoFilter(inputPath, filter) {

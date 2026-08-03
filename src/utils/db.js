@@ -220,8 +220,12 @@ const init = async () => {
             user_id      TEXT NOT NULL,
             unban_at_ms  BIGINT NOT NULL,
             banned_at_ms BIGINT NOT NULL,
+            -- 'age': lifts when the account matures; threshold edits recompute it.
+            -- 'timed': fixed cooldown from the ban; threshold edits must not touch it.
+            kind         TEXT NOT NULL DEFAULT 'age',
             PRIMARY KEY (guild_id, user_id)
         );
+        ALTER TABLE join_gate_pending_unbans ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'age';
         CREATE INDEX IF NOT EXISTS idx_join_gate_unbans_due ON join_gate_pending_unbans(unban_at_ms);
         -- ── SPEAK EXTRAS ─────────────────────────────────────────────────────
         -- Distilled long-term profiles: durable facts and running jokes, kept
@@ -285,6 +289,82 @@ async function updateBalance(userId, newBalance) {
         ON CONFLICT (user_id) DO UPDATE SET balance = EXCLUDED.balance
     `, [userId, newBalance]);
     logger.debug('Balance updated', { userId, newBalance });
+}
+
+/**
+ * Atomically adjusts a user's balance by a delta.
+ * Seeds the account first if it does not exist (same $10k path as getBalance),
+ * then applies the delta only when it cannot drive the balance negative.
+ * @param {string} userId - Discord user ID
+ * @param {number} delta - Amount to add (negative to deduct)
+ * @returns {Promise<number|null>} New balance, or null when funds were insufficient
+ */
+async function adjustBalance(userId, delta) {
+    const amount = Math.round(delta);
+    const seed = 10000;
+    await pool.query(
+        'INSERT INTO balances (user_id, balance) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+        [userId, seed]
+    );
+    const { rows } = await pool.query(
+        'UPDATE balances SET balance = balance + $2 WHERE user_id = $1 AND balance + $2 >= 0 RETURNING balance',
+        [userId, amount]
+    );
+    if (rows.length === 0) {
+        logger.debug('Balance adjustment blocked (insufficient funds)', { userId, delta: amount });
+        return null;
+    }
+    logger.debug('Balance adjusted', { userId, delta: amount, newBalance: rows[0].balance });
+    return Number(rows[0].balance);
+}
+
+/**
+ * Atomically moves money from one user to another in a single transaction.
+ * Both updates carry the non-negative guard; rows are touched in ascending
+ * user_id order so concurrent transfers cannot deadlock.
+ * @param {string} fromId - Paying user's Discord ID
+ * @param {string} toId - Receiving user's Discord ID
+ * @param {number} amount - Positive amount to move
+ * @returns {Promise<{fromBalance: number, toBalance: number}|null>} New balances, or null on insufficient funds or failure
+ */
+async function transferBalance(fromId, toId, amount) {
+    const value = Math.round(amount);
+    if (value <= 0 || fromId === toId) return null;
+    const seed = 10000;
+    const ids = [fromId, toId].sort();
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const id of ids) {
+            await client.query(
+                'INSERT INTO balances (user_id, balance) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                [id, seed]
+            );
+        }
+        const results = {};
+        for (const id of ids) {
+            const delta = id === fromId ? -value : value;
+            const { rows } = await client.query(
+                'UPDATE balances SET balance = balance + $2 WHERE user_id = $1 AND balance + $2 >= 0 RETURNING balance',
+                [id, delta]
+            );
+            if (rows.length === 0) {
+                await client.query('ROLLBACK');
+                logger.debug('Balance transfer blocked (insufficient funds)', { fromId, toId, amount: value });
+                return null;
+            }
+            results[id] = Number(rows[0].balance);
+        }
+        await client.query('COMMIT');
+        logger.info('Balance transferred', { fromId, toId, amount: value });
+        return { fromBalance: results[fromId], toBalance: results[toId] };
+    } catch (error) {
+        try { await client.query('ROLLBACK'); } catch { /* connection already gone */ }
+        logger.error('Balance transfer failed', { fromId, toId, amount: value, error: error.message });
+        return null;
+    } finally {
+        client.release();
+    }
 }
 
 /**
@@ -1051,6 +1131,19 @@ async function getPendingDuelsFor(userId) {
 }
 
 /**
+ * Retrieves pending duels a user has issued (outgoing challenges)
+ * @param {string} userId - Discord user ID of the challenger
+ * @returns {Promise<Array>} Array of pending duel objects
+ */
+async function getPendingDuelsFrom(userId) {
+    const { rows } = await pool.query(
+        `SELECT * FROM pending_duels WHERE challenger_id = $1 AND status = 'pending' AND expires_at > NOW()`,
+        [userId]
+    );
+    return rows;
+}
+
+/**
  * Updates duel status
  * @param {number} duelId - Duel ID
  * @param {string} status - New status (pending, accepted, completed, expired)
@@ -1165,6 +1258,8 @@ module.exports = {
     // Economy
     getBalance,
     updateBalance,
+    adjustBalance,
+    transferBalance,
     getTopBalances,
     // User Management
     isUserBlacklisted,
@@ -1195,6 +1290,7 @@ module.exports = {
     // Duels (Persistent State)
     createPendingDuel,
     getPendingDuelsFor,
+    getPendingDuelsFrom,
     updateDuelStatus,
     deleteDuel,
     // Cooldowns (Persistent State)

@@ -68,6 +68,16 @@ function prune(guildId, windowMs, now = Date.now()) {
     if (bucket.size === 0) watched.delete(guildId);
 }
 
+/**
+ * Prunes every guild at once. Members who never post are otherwise only
+ * evicted by the 500-entry cap, so a periodic janitor calls this with the
+ * largest window any guild could have configured; per-guild expiry is still
+ * enforced lazily by isWatched.
+ */
+function pruneAll(windowMs, now = Date.now()) {
+    for (const guildId of [...watched.keys()]) prune(guildId, windowMs, now);
+}
+
 function isWatched(guildId, userId, windowMs, now = Date.now()) {
     const entry = watched.get(guildId)?.get(userId);
     if (!entry) return false;
@@ -166,6 +176,7 @@ module.exports = {
     inspectMessage,
     forget,
     prune,
+    pruneAll,
     watchedCount,
     reset,
 };

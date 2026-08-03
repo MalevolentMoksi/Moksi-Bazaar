@@ -168,11 +168,18 @@ function renderTemplate(template, values) {
  * Builds the exact DM text a user would receive.
  * Exported so the panel can preview and test-send it.
  *
+ * `cause` picks the template: 'age' (the gate itself), 'suspicion' (profile
+ * score) or 'behaviour' (watch window). The age templates claim the account
+ * is too new, which is factually wrong for the other two causes; they get
+ * their own text.
+ *
  * @returns {string} message body, truncated to Discord's 2000-char limit
  */
-function renderDm(settings, { guildName, user, eligibleAt, ageMs, kind = 'kick' }) {
+function renderDm(settings, { guildName, user, eligibleAt, ageMs, kind = 'kick', cause = 'age' }) {
     const eligibleUnix = Math.floor(eligibleAt / 1000);
-    const template = kind === 'ban' ? settings.dm_ban_message : settings.dm_message;
+    const template = cause === 'suspicion' ? settings.dm_suspicion_message
+        : cause === 'behaviour' ? settings.dm_watch_message
+        : kind === 'ban' ? settings.dm_ban_message : settings.dm_message;
 
     const body = renderTemplate(template, {
         days: formatDays(settings.min_account_age_minutes),
@@ -197,7 +204,7 @@ function renderDm(settings, { guildName, user, eligibleAt, ageMs, kind = 'kick' 
 /**
  * @returns {Promise<{sent: boolean, note: string}>} never throws
  */
-async function trySendDm(member, settings, decision, kind, attempts) {
+async function trySendDm(member, settings, decision, kind, attempts, cause = 'age') {
     if (!settings.dm_enabled) return { sent: false, note: 'disabled' };
 
     if (queue.length > DM_SKIP_BACKLOG) {
@@ -226,6 +233,7 @@ async function trySendDm(member, settings, decision, kind, attempts) {
             eligibleAt: decision.eligibleAt,
             ageMs: decision.ageMs,
             kind,
+            cause,
         });
         await member.send({ content });
         await markDmSent(member.guild.id, member.id).catch(() => {});
@@ -276,7 +284,7 @@ async function removeMember(member, settings, decision, action) {
         try {
             // deleteMessageSeconds: 0 because this is an access gate, not a purge.
             await member.ban({ reason, deleteMessageSeconds: 0 });
-            await insertPendingUnban(member.guild.id, member.id, decision.eligibleAt);
+            await insertPendingUnban(member.guild.id, member.id, decision.eligibleAt, decision.unbanKind ?? 'age');
             await scheduleNext(member.client);
             return { ok: true, action: 'ban', unbanAt: decision.eligibleAt };
         } catch (error) {
@@ -500,6 +508,7 @@ async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
         inBurst,
         inviteFlood: Boolean(inviteInfo?.flooding),
         member,
+        tenureGraceDays: Number(settings.suspicion_tenure_grace_days),
         thresholds: {
             watch: Number(settings.suspicion_watch_at),
             suspect: Number(settings.suspicion_suspect_at),
@@ -520,15 +529,23 @@ async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
     let actionOutcome = null;
 
     if (!dryRun && (action === 'kick' || action === 'ban')) {
+        const now = Date.now();
+        // A suspicion ban is a fixed cooldown measured from NOW. Anyone scored
+        // here already passed the age gate, so "creation + threshold" would
+        // date the unban in the past and the scheduler would lift it seconds
+        // later, turning the ban into a kick with a misleading DM.
+        const unbanAt = now + Number(settings.suspicion_ban_hours) * 3_600_000;
         const decision = {
             action: 'gate',
             reason: `suspicion score ${result.score} (${result.tier})`,
-            ageMs: Date.now() - Number(member.user.createdTimestamp),
+            ageMs: now - Number(member.user.createdTimestamp),
             thresholdMs: thresholdMs(settings),
-            eligibleAt: Number(member.user.createdTimestamp) + thresholdMs(settings),
+            eligibleAt: action === 'ban' ? unbanAt : now,
+            // Fixed cooldown: age-threshold edits must never recompute it.
+            unbanKind: 'timed',
         };
         const attempts = await peekAttempt(guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
-        const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts);
+        const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts, 'suspicion');
         actionOutcome = await removeMember(member, settings, decision, action);
         actionOutcome.dm = dm.note;
 
@@ -659,15 +676,22 @@ async function handleWatchedMessage(message) {
 
         let actionOutcome = null;
         if (!dryRun && (action === 'kick' || action === 'ban')) {
+            const nowMs = Date.now();
+            // Same honesty rule as the suspicion path: a behaviour ban is a
+            // cooldown from now, never "creation + threshold", which is
+            // already in the past for anyone who got past the age gate.
+            const unbanAt = nowMs + Number(settings.watch_ban_hours) * 3_600_000;
             const decision = {
                 action: 'gate',
                 reason: `behaviour score ${score} within the watch window`,
-                ageMs: Date.now() - Number(member.user.createdTimestamp),
+                ageMs: nowMs - Number(member.user.createdTimestamp),
                 thresholdMs: thresholdMs(settings),
-                eligibleAt: Number(member.user.createdTimestamp) + thresholdMs(settings),
+                eligibleAt: action === 'ban' ? unbanAt : nowMs,
+                // Fixed cooldown: age-threshold edits must never recompute it.
+                unbanKind: 'timed',
             };
             const attempts = await peekAttempt(message.guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
-            const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts);
+            const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts, 'behaviour');
             actionOutcome = await removeMember(member, settings, decision, action);
             actionOutcome.dm = dm.note;
 
@@ -786,6 +810,7 @@ async function backtestGuild(guild, settings, { limit = 25, applyTenure = false 
             protectedNames,
             correlation: null,
             inBurst: false,
+            tenureGraceDays: Number(settings.suspicion_tenure_grace_days),
             thresholds,
         };
 

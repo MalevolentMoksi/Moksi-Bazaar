@@ -21,7 +21,10 @@ const CATEGORIES = {
     failure: { channelKey: 'log_failure_channel_id', toggleKey: 'log_failures', label: 'Failures' },
     preview: { channelKey: 'log_preview_channel_id', toggleKey: 'log_previews', label: 'Dry-run previews' },
     config: { channelKey: 'log_config_channel_id', toggleKey: 'log_config', label: 'Config changes' },
-    suspicion: { channelKey: 'suspicion_log_channel_id', toggleKey: 'suspicion_enabled', label: 'Suspicion reports' },
+    // The toggle governs only the LOG category. `suspicion_enabled` is the
+    // scoring engine itself; using it here would let "stop logging this"
+    // silently disarm the whole engine.
+    suspicion: { channelKey: 'suspicion_log_channel_id', toggleKey: 'suspicion_log_enabled', label: 'Suspicion reports' },
 };
 
 const COLORS = {
@@ -196,7 +199,12 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
     let outcome;
     if (dryRun) outcome = '🧪 dry run, no action';
     else if (action === 'log' || action === 'none') outcome = 'logged only, no action taken';
-    else if (actionOutcome?.ok) outcome = action === 'ban' ? 'temporarily banned' : 'kicked';
+    else if (actionOutcome?.ok && action === 'ban') {
+        outcome = actionOutcome.unbanAt
+            ? `temporarily banned, lifts <t:${toUnix(actionOutcome.unbanAt)}:R>`
+            : 'temporarily banned';
+    }
+    else if (actionOutcome?.ok) outcome = 'kicked';
     else outcome = `⚠️ ${action} failed: ${actionOutcome?.error ?? 'unknown error'}`;
 
     const embed = new EmbedBuilder()

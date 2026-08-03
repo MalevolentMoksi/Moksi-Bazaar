@@ -407,7 +407,7 @@ async function renderMemeGif(inputPath, topText, bottomText) {
             .png()
             .toFile(overlayPath);
 
-        const memeFilter = `[0:v][1:v]overlay=0:0:format=auto[v]`;
+        const memeFilter = `[0:v]scale=${width}:${height}:flags=lanczos[scaled];[scaled][1:v]overlay=0:0:format=auto[v]`;
 
         // Pass 1: Generate palette from the meme-overlay GIF with FPS applied
         await new Promise((resolve, reject) => {

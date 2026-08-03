@@ -3,7 +3,7 @@
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+const { adjustBalance } = require('../../utils/db');
 const { deductBet } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
 
@@ -49,6 +49,31 @@ module.exports = {
     const sub = interaction.options.getSubcommand();
     const betAmount = interaction.options.getInteger('amount');
 
+    // Parse number bets before any money moves so bad input costs nothing
+    let uniqueNumbers = null;
+    let betPerNumber = 0;
+    if (sub === 'number') {
+      const numberStr = interaction.options.getString('numbers');
+      const guessedNumbers = numberStr.split(',')
+        .map(n => parseInt(n.trim()))
+        .filter(n => !isNaN(n) && n >= 0 && n <= 36);
+      uniqueNumbers = [...new Set(guessedNumbers)];
+
+      if (uniqueNumbers.length === 0) {
+        return interaction.reply({
+          content: '❌ Please provide at least one valid number between 0 and 36.', flags: MessageFlags.Ephemeral
+        });
+      }
+
+      // Integer stake per number; the indivisible remainder is refunded below
+      betPerNumber = Math.floor(betAmount / uniqueNumbers.length);
+      if (betPerNumber === 0) {
+        return interaction.reply({
+          content: `❌ A bet of $${betAmount} cannot be split across ${uniqueNumbers.length} numbers.`, flags: MessageFlags.Ephemeral
+        });
+      }
+    }
+
     // Deduct bet
     const deductResult = await deductBet(userId, betAmount);
     if (!deductResult.success) {
@@ -59,6 +84,13 @@ module.exports = {
     }
 
     let finalBalance = deductResult.newBalance;
+
+    // Refund what an even split cannot use, right away
+    const remainder = sub === 'number' ? betAmount - betPerNumber * uniqueNumbers.length : 0;
+    if (remainder > 0) {
+      finalBalance = await adjustBalance(userId, remainder);
+    }
+    const staked = betAmount - remainder;
 
     // Simulate spin (0 to 36)
     const outcome = Math.floor(Math.random() * 37);
@@ -73,24 +105,14 @@ module.exports = {
     let betDescription = '';
 
     if (sub === 'number') {
-      const numberStr = interaction.options.getString('numbers');
-      const guessedNumbers = numberStr.split(',')
-        .map(n => parseInt(n.trim()))
-        .filter(n => !isNaN(n) && n >= 0 && n <= 36);
-      const uniqueNumbers = [...new Set(guessedNumbers)];
-
-      if (uniqueNumbers.length === 0) {
-        return interaction.reply({
-          content: '❌ Please provide at least one valid number between 0 and 36.', flags: MessageFlags.Ephemeral
-        });
-      }
-
-      const betPerNumber = betAmount / uniqueNumbers.length;
       if (uniqueNumbers.includes(outcome)) {
         // Straight-up number pays 35:1, so total return = bet * 36
         payout = betPerNumber * 36;
       }
-      betDescription = `Numbers: ${uniqueNumbers.join(', ')}`;
+      betDescription = `Numbers: ${uniqueNumbers.join(', ')} ($${betPerNumber} each)`;
+      if (remainder > 0) {
+        betDescription += `\nIndivisible $${remainder} returned`;
+      }
 
     } else {
       const guessColor = interaction.options.getString('color');
@@ -104,10 +126,11 @@ module.exports = {
       betDescription = `Color: ${guessColor}`;
     }
 
-    // Update balance
-    finalBalance += payout;
-    await updateBalance(userId, finalBalance);
-    
+    // Credit winnings atomically
+    if (payout > 0) {
+      finalBalance = await adjustBalance(userId, payout);
+    }
+
     logger.info('Roulette game played', {
       userId,
       sub,
@@ -139,8 +162,8 @@ module.exports = {
         {
           name: payout > 0 ? '🏆 You Won!' : '💸 You Lost',
           value: payout > 0
-            ? `You won $${(payout - betAmount).toFixed(2)} profit!\nTotal return: $${payout.toFixed(2)}\nNew balance: $${finalBalance.toFixed(2)}`
-            : `You lost $${betAmount}.\nNew balance: $${finalBalance.toFixed(2)}`,
+            ? `You won $${(payout - staked).toLocaleString()} profit!\nTotal return: $${payout.toLocaleString()}\nNew balance: $${finalBalance.toLocaleString()}`
+            : `You lost $${staked.toLocaleString()}.\nNew balance: $${finalBalance.toLocaleString()}`,
           inline: false
         }
       );

@@ -1,5 +1,6 @@
 // src/utils/media/mediaHelpers.js
 const fs = require('fs');
+const { MessageFlags } = require('discord.js');
 const logger = require('../logger');
 const { downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS } = require('./tempFiles');
 const { mediaFilePayload } = require('./formatHelpers');
@@ -183,7 +184,6 @@ async function handleMediaCommand(interaction, {
 
     // 1. Explicit attachment takes priority
     let mediaInfo = null;
-    let usedRecentFallback = false;
     const attachment = interaction.options.getAttachment('media');
     if (attachment) {
         mediaInfo = resolveMedia(attachment.url, attachment.contentType, attachment.proxyURL);
@@ -206,7 +206,6 @@ async function handleMediaCommand(interaction, {
             allowAudio,
             mediaPredicate,
         });
-        usedRecentFallback = Boolean(mediaInfo);
     }
 
     // 3. Nothing found anywhere
@@ -223,6 +222,9 @@ async function handleMediaCommand(interaction, {
     const onlyAudioAllowed = allowAudio && !allowImage && !allowVideo;
     if (onlyAudioAllowed && !isAudio) {
         return interaction.editReply('That file doesn\'t look like audio. Please provide an MP3, WAV, OGG, or similar.');
+    }
+    if (!allowAudio && allowImage && allowVideo && isAudio) {
+        return interaction.editReply('That file doesn\'t look like an image or video. Please provide a PNG, GIF, MP4, or similar.');
     }
     if (!allowAudio && allowImage && !allowVideo && !actsAsImage) {
         return interaction.editReply('That file doesn\'t look like an image. Please provide a PNG, JPG, WEBP, or similar.');
@@ -254,7 +256,7 @@ async function handleMediaCommand(interaction, {
                 try {
                     await interaction.followUp({
                         content: `ℹ️ Input ${norm.notes.join(', ')} before processing.`,
-                        ephemeral: true,
+                        flags: MessageFlags.Ephemeral,
                     });
                 } catch {}
             }
@@ -288,11 +290,8 @@ async function handleMediaCommand(interaction, {
             );
         }
 
-        const replyPayload = { files: [mediaFilePayload(outputPath, interaction.commandName)] };
-        if (usedRecentFallback) {
-            replyPayload.content = ''; // I don't want it to say anything
-        }
-        await interaction.editReply(replyPayload);
+        // Always clear content so a "queued" notice never lingers above the file.
+        await interaction.editReply({ content: '', files: [mediaFilePayload(outputPath, interaction.commandName)] });
     } catch (err) {
         const rawErrorText = [
             err?.message,

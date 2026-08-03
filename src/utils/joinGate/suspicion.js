@@ -105,6 +105,15 @@ const TENURE_BANDS = Object.freeze([
     { maxDays: Infinity, points: -60, label: 'member for over a year' },
 ]);
 
+/**
+ * The grace days that reproduce TENURE_BANDS exactly: the boundary where the
+ * outermost band (full forgiveness) begins. The per-guild
+ * `suspicion_tenure_grace_days` dial scales every band boundary by
+ * graceDays / this value, so the points per band never change; only how long
+ * each forgiveness step takes to earn stretches or compresses.
+ */
+const DEFAULT_TENURE_GRACE_DAYS = 365;
+
 const DEFAULT_SCAM_KEYWORDS = Object.freeze([
     'free nitro', 'nitro free', 'discord nitro', 'steam gift', 'free gift',
     'airdrop', 'giveaway bot', 'moderator', 'admin', 'support team',
@@ -321,6 +330,7 @@ function scoreAccount(user, options = {}) {
         inviteFlood = false,
         member = null,
         applyTenure = true,
+        tenureGraceDays = DEFAULT_TENURE_GRACE_DAYS,
         thresholds = DEFAULT_THRESHOLDS,
         now = Date.now(),
     } = options;
@@ -453,12 +463,27 @@ function scoreAccount(user, options = {}) {
     let tenureSignal = null;
     const joinedTimestamp = Number(member?.joinedTimestamp ?? 0);
     if (applyTenure && joinedTimestamp > 0) {
+        // Scaling rule: every band boundary is multiplied by
+        // graceDays / DEFAULT_TENURE_GRACE_DAYS (365 reproduces the stock
+        // bands, half of it earns each forgiveness step twice as fast, and
+        // so on); the points per band are untouched. A zero or invalid grace
+        // falls back to the stock timeline rather than damping newcomers.
+        const grace = Number(tenureGraceDays);
+        const scale = Number.isFinite(grace) && grace > 0 ? grace / DEFAULT_TENURE_GRACE_DAYS : 1;
         const tenureDays = (now - joinedTimestamp) / DAY_MS;
-        const tBand = TENURE_BANDS.find(b => tenureDays < b.maxDays) ?? TENURE_BANDS[TENURE_BANDS.length - 1];
+        const tBand = TENURE_BANDS.find(b => tenureDays < b.maxDays * scale) ?? TENURE_BANDS[TENURE_BANDS.length - 1];
         if (tBand.points) {
+            // With a custom grace the stock band labels ("member for months")
+            // would misdescribe the scaled boundaries, so describe the band by
+            // its actual cutoff instead.
+            const bandDesc = scale === 1
+                ? tBand.label
+                : (Number.isFinite(tBand.maxDays)
+                    ? `forgiveness band under ${Math.round(tBand.maxDays * scale)}d`
+                    : 'full tenure forgiveness');
             tenureSignal = {
                 id: 'membership_tenure', label: 'Long-standing member',
-                points: tBand.points, detail: `${tenureDays.toFixed(0)}d in the server (${tBand.label})`,
+                points: tBand.points, detail: `${tenureDays.toFixed(0)}d in the server (${bandDesc})`,
             };
         }
     }
@@ -550,6 +575,7 @@ module.exports = {
     DEFAULT_THRESHOLDS,
     AGE_BANDS,
     TENURE_BANDS,
+    DEFAULT_TENURE_GRACE_DAYS,
     TRUST_FLAGS,
     TRUST_CAP,
     TRUST_MAX_FRACTION,

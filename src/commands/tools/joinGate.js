@@ -19,6 +19,7 @@ const {
     getSettings, updateSettings, resetStats, invalidate,
     formatDays, daysToMinutes, thresholdMs, clamp, LIMITS, TIER_ACTIONS,
     DEFAULT_DM_MESSAGE, DEFAULT_DM_BAN_MESSAGE,
+    DEFAULT_DM_SUSPICION_MESSAGE, DEFAULT_DM_WATCH_MESSAGE,
 } = require('../../utils/joinGate/config');
 const {
     evaluateUserId, renderDm, sweepGuild, backtestGuild, collectProtectedNames,
@@ -219,6 +220,19 @@ function renderRules(settings) {
     return { embed, rows };
 }
 
+/** True when any suspicion tier is armed to remove people. */
+function suspicionRemoves(settings) {
+    return Boolean(settings.suspicion_enabled)
+        && [settings.suspicion_watch_action, settings.suspicion_suspect_action, settings.suspicion_malicious_action]
+            .some(a => a === 'kick' || a === 'ban');
+}
+
+/** True when the behaviour watch window is armed to remove people. */
+function watchRemoves(settings) {
+    return Boolean(settings.watch_enabled)
+        && (settings.watch_action === 'kick' || settings.watch_action === 'ban');
+}
+
 function renderMessaging(settings) {
     const embed = new EmbedBuilder()
         .setTitle('✉️ Join Gate: Messaging')
@@ -253,6 +267,20 @@ function renderMessaging(settings) {
                     : '*(escalation is off, unused)*',
                 inline: false,
             },
+            {
+                name: 'Suspicion removal message',
+                value: suspicionRemoves(settings)
+                    ? truncate(settings.dm_suspicion_message, 1000)
+                    : '*(no suspicion tier removes anyone, unused)*',
+                inline: false,
+            },
+            {
+                name: 'Behaviour removal message',
+                value: watchRemoves(settings)
+                    ? truncate(settings.dm_watch_message, 1000)
+                    : '*(the watch window removes nobody, unused)*',
+                inline: false,
+            },
         );
 
     const rows = [
@@ -273,6 +301,8 @@ function renderMessaging(settings) {
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('jg_edit_dm').setLabel('Edit kick message').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('jg_edit_dm_ban').setLabel('Edit ban message').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('jg_edit_dm_susp').setLabel('Edit suspicion message').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('jg_edit_dm_watch').setLabel('Edit behaviour message').setStyle(ButtonStyle.Primary),
             new ButtonBuilder().setCustomId('jg_reset_dm').setLabel('Reset to default').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
@@ -307,6 +337,13 @@ function renderEscalation(settings, pending) {
         .addFields(
             { name: 'Escalation', value: onOff(settings.escalate_enabled), inline: true },
             { name: 'Ban after', value: `**${settings.escalate_after_attempts}** join attempts`, inline: true },
+            {
+                name: 'Suspicion & behaviour bans',
+                value: `score-tier bans last **${settings.suspicion_ban_hours}h**, watch-window bans `
+                    + `**${settings.watch_ban_hours}h**. Fixed cooldowns from the moment of the ban: these `
+                    + 'members already passed the age gate, so there is no age to wait out.',
+                inline: false,
+            },
             { name: `Pending lifts (${pending.length})`, value: truncate(list, 1000), inline: false },
         );
 
@@ -317,6 +354,7 @@ function renderEscalation(settings, pending) {
                 .setLabel(settings.escalate_enabled ? 'Disable escalation' : 'Enable escalation')
                 .setStyle(settings.escalate_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
             new ButtonBuilder().setCustomId('jg_set_attempts').setLabel('Set attempt limit').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('jg_set_ban_hours').setLabel('Set ban hours').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('jg_lift_ban')
                 .setLabel('Lift a ban now')
@@ -388,7 +426,9 @@ function renderSuspicion(settings) {
             },
             {
                 name: 'Tenure grace',
-                value: `members here longer than **${settings.suspicion_tenure_grace_days}d** are damped down`,
+                value: Number(settings.suspicion_tenure_grace_days) > 0
+                    ? `tenure forgiveness reaches full strength at **${settings.suspicion_tenure_grace_days}d** in the server`
+                    : 'unset (**0d**): the stock **365d** forgiveness timeline applies',
                 inline: true,
             },
         );
@@ -865,16 +905,22 @@ module.exports = {
                 }
 
                 // ── DM text ─────────────────────────────────────────────────
-                if (id === 'jg_edit_dm' || id === 'jg_edit_dm_ban') {
-                    const isBan = id === 'jg_edit_dm_ban';
+                const DM_EDITS = {
+                    jg_edit_dm: ['dm_message', 'Kick DM'],
+                    jg_edit_dm_ban: ['dm_ban_message', 'Temp-ban DM'],
+                    jg_edit_dm_susp: ['dm_suspicion_message', 'Suspicion removal DM'],
+                    jg_edit_dm_watch: ['dm_watch_message', 'Behaviour removal DM'],
+                };
+                if (DM_EDITS[id]) {
+                    const [key, label] = DM_EDITS[id];
                     const submitted = await promptModal(i, {
-                        title: isBan ? 'Temp-ban DM' : 'Kick DM',
+                        title: label,
                         inputs: [{
                             id: 'text',
                             label: 'Message ({days} {server} {user} {eligible})',
                             paragraph: true,
                             required: true,
-                            value: isBan ? settings.dm_ban_message : settings.dm_message,
+                            value: settings[key],
                             maxLength: LIMITS.DM_MESSAGE_LENGTH,
                         }],
                     });
@@ -884,13 +930,17 @@ module.exports = {
                     if (!text) {
                         return submitted.reply({ content: '⚠️ Message cannot be empty.', flags: MessageFlags.Ephemeral });
                     }
-                    return applyChange(submitted, { [isBan ? 'dm_ban_message' : 'dm_message']: text },
-                        `${isBan ? 'Temp-ban' : 'Kick'} DM message updated`, truncate(text, 1000));
+                    return applyChange(submitted, { [key]: text },
+                        `${label} message updated`, truncate(text, 1000));
                 }
 
                 if (id === 'jg_reset_dm') {
-                    return applyChange(i, { dm_message: DEFAULT_DM_MESSAGE, dm_ban_message: DEFAULT_DM_BAN_MESSAGE },
-                        'DM messages reset to defaults');
+                    return applyChange(i, {
+                        dm_message: DEFAULT_DM_MESSAGE,
+                        dm_ban_message: DEFAULT_DM_BAN_MESSAGE,
+                        dm_suspicion_message: DEFAULT_DM_SUSPICION_MESSAGE,
+                        dm_watch_message: DEFAULT_DM_WATCH_MESSAGE,
+                    }, 'DM messages reset to defaults');
                 }
 
                 if (id === 'jg_set_invite') {
@@ -938,25 +988,37 @@ module.exports = {
                 }
 
                 if (id === 'jg_preview_dm' || id === 'jg_test_dm') {
-                    const eligibleAt = Date.now() + thresholdMs(settings) / 2;
-                    const kick = renderDm(settings, {
+                    const base = {
                         guildName: guild.name,
                         user: i.user,
-                        eligibleAt,
+                        eligibleAt: Date.now() + thresholdMs(settings) / 2,
                         ageMs: thresholdMs(settings) / 2,
-                        kind: 'kick',
-                    });
-                    const ban = settings.escalate_enabled
-                        ? renderDm(settings, {
-                            guildName: guild.name, user: i.user, eligibleAt,
-                            ageMs: thresholdMs(settings) / 2, kind: 'ban',
-                        })
-                        : null;
+                    };
+
+                    // Only the messages the current settings could actually send.
+                    const previews = [['Kick DM', renderDm(settings, { ...base, kind: 'kick' })]];
+                    if (settings.escalate_enabled) {
+                        previews.push(['Temp-ban DM', renderDm(settings, { ...base, kind: 'ban' })]);
+                    }
+                    if (suspicionRemoves(settings)) {
+                        previews.push(['Suspicion removal DM', renderDm(settings, {
+                            ...base,
+                            cause: 'suspicion',
+                            eligibleAt: Date.now() + Number(settings.suspicion_ban_hours) * 3_600_000,
+                        })]);
+                    }
+                    if (watchRemoves(settings)) {
+                        previews.push(['Behaviour removal DM', renderDm(settings, {
+                            ...base,
+                            cause: 'behaviour',
+                            eligibleAt: Date.now() + Number(settings.watch_ban_hours) * 3_600_000,
+                        })]);
+                    }
 
                     if (id === 'jg_preview_dm') {
                         return i.reply({
                             content: truncate(
-                                `**Kick DM preview**\n>>> ${kick}` + (ban ? `\n\n**Temp-ban DM preview**\n>>> ${ban}` : ''),
+                                previews.map(([label, text]) => `**${label} preview**\n>>> ${text}`).join('\n\n'),
                                 1900
                             ),
                             flags: MessageFlags.Ephemeral,
@@ -964,8 +1026,7 @@ module.exports = {
                     }
 
                     try {
-                        await i.user.send({ content: kick });
-                        if (ban) await i.user.send({ content: ban });
+                        for (const [, text] of previews) await i.user.send({ content: text });
                         return i.reply({ content: '✅ Test DM sent.', flags: MessageFlags.Ephemeral });
                     } catch (error) {
                         return i.reply({
@@ -1019,6 +1080,34 @@ module.exports = {
                     await scheduleNext(interaction.client);
                     await refresh(null);
                     return submitted.reply({ content: note, flags: MessageFlags.Ephemeral });
+                }
+
+                if (id === 'jg_set_ban_hours') {
+                    const submitted = await promptModal(i, {
+                        title: 'Suspicion & behaviour ban length',
+                        inputs: [
+                            {
+                                id: 'susp',
+                                label: `Suspicion-tier ban hours (${LIMITS.BAN_HOURS.min}-${LIMITS.BAN_HOURS.max})`,
+                                value: String(settings.suspicion_ban_hours),
+                                required: true,
+                                maxLength: 4,
+                            },
+                            {
+                                id: 'watch',
+                                label: `Watch-window ban hours (${LIMITS.BAN_HOURS.min}-${LIMITS.BAN_HOURS.max})`,
+                                value: String(settings.watch_ban_hours),
+                                required: true,
+                                maxLength: 4,
+                            },
+                        ],
+                    });
+                    if (!submitted) return;
+
+                    const suspHours = clamp(Number(submitted.fields.getTextInputValue('susp')), LIMITS.BAN_HOURS);
+                    const watchHours = clamp(Number(submitted.fields.getTextInputValue('watch')), LIMITS.BAN_HOURS);
+                    return applyChange(submitted, { suspicion_ban_hours: suspHours, watch_ban_hours: watchHours },
+                        `Suspicion-tier bans now last **${suspHours}h**, watch-window bans **${watchHours}h**`);
                 }
 
                 // ── Suspicion ───────────────────────────────────────────────

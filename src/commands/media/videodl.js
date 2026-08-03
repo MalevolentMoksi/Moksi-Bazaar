@@ -65,7 +65,8 @@ const videodl = {
                     'Try the audio-only format, or a shorter clip.'
                 );
             }
-            await interaction.editReply({ files: [mediaFilePayload(sendPath, mode === 'audio' ? 'audio' : 'video')] });
+            // Clear content so the "queued" notice never lingers above the file.
+            await interaction.editReply({ content: '', files: [mediaFilePayload(sendPath, mode === 'audio' ? 'audio' : 'video')] });
         } catch (err) {
             logger.error('videodl failed', { url, mode, error: err.message });
             const msg = String(err.message || '');

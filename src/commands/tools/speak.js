@@ -577,7 +577,7 @@ ${memoryText}`;
       // Interjections get their own framing: nobody summoned the bot, so the
       // model must butt in like a bystander, not answer like it was asked.
       const userPrompt = interaction._interjection
-        ? `(nobody asked you anything. you overheard the conversation above, and the last message caught your attention. interject with ONE short remark, the way someone butts into a conversation. if you have nothing worth saying, just say something minimal and dry)`
+        ? `(nobody asked you anything. you overheard the conversation above, and the last message caught your attention. interject with ONE short remark, the way someone butts into a conversation. if you have nothing worth saying, just say something minimal and dry)${interaction._interjectionAngle ? ` (your owner nudged you: react to ${flatten(interaction._interjectionAngle)})` : ''}`
         : userRequest
           ? `${askerName}: ${userRequest}`
           : `(${askerName} pinged you without saying anything; react to the chat log above)`;

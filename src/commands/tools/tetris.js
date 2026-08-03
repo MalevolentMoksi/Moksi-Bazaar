@@ -187,8 +187,14 @@ class TetrisGame {
         if (linesCleared > 0) {
             this.lines += linesCleared;
             this.score += linesCleared * 100 * this.level;
-            this.level = Math.floor(this.lines / 10) + 1;
-            this.fallSpeed = Math.max(100, 1000 - (this.level - 1) * 100);
+            const newLevel = Math.floor(this.lines / 10) + 1;
+            if (newLevel !== this.level) {
+                this.level = newLevel;
+                this.fallSpeed = Math.max(100, 1000 - (this.level - 1) * 100);
+                // Re-arm gravity at the new cadence; the old interval would
+                // otherwise keep ticking at the previous speed forever.
+                if (this.fallTimer) this.startFallTimer();
+            }
         }
     }
     
@@ -344,7 +350,7 @@ function createGameEmbed(game) {
             { name: '⏸️ Status', value: game.paused ? 'Paused' : (game.gameOver ? 'Game Over' : 'Playing'), inline: true },
             { name: '⏱️ Speed', value: `${game.fallSpeed}ms`, inline: true }
         )
-        .setFooter({ text: 'Use buttons to control • Auto-saves progress' })
+        .setFooter({ text: 'Use buttons to control' })
         .setTimestamp();
     
     return embed;
@@ -471,10 +477,17 @@ module.exports = {
         });
 
         collector.on('collect', async (buttonInteraction) => {
-            if (!game || game.gameOver) return;
+            if (!game) return;
+
+            const action = buttonInteraction.customId.split('_')[1];
+
+            // Restart and Quit stay usable after a top-out; every other
+            // control only works mid-game.
+            if (game.gameOver && action !== 'restart' && action !== 'quit') {
+                return buttonInteraction.deferUpdate();
+            }
 
             let updated = false;
-            const action = buttonInteraction.customId.split('_')[1];
 
             switch (action) {
                 case 'left':

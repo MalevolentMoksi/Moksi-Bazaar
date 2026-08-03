@@ -21,6 +21,11 @@ const SOURCES = [
 
 const REFRESH_MS = 12 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15_000;
+/**
+ * The panel clamps watch_window_minutes to 1440, so anything older than a day
+ * is stale for every guild. Used by the piggybacked watch-list sweep below.
+ */
+const MAX_WATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** @type {Set<string>} */
 let domains = new Set();
@@ -83,6 +88,14 @@ function startAutoRefresh() {
     refresh().catch(e => logger.warn('[JOIN-GATE] Initial scam list load failed', { error: e.message }));
     refreshTimer = setInterval(() => {
         refresh().catch(e => logger.warn('[JOIN-GATE] Scam list refresh failed', { error: e.message }));
+        // Piggybacked janitor: sweep idle watched members whose window has
+        // long expired. Required lazily because watch.js requires this module
+        // at load; by the first tick both are fully initialised.
+        try {
+            require('./watch').pruneAll(MAX_WATCH_WINDOW_MS);
+        } catch (e) {
+            logger.warn('[JOIN-GATE] Watch-list prune failed', { error: e.message });
+        }
     }, REFRESH_MS);
     refreshTimer.unref?.();
 }

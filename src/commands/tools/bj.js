@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, MessageFlags } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+const { getBalance, adjustBalance } = require('../../utils/db');
 const { deductBet, createPlayAgainCollector } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
@@ -118,8 +118,22 @@ module.exports = {
 
     let balance = deductResult.newBalance;
 
+    // One live collector of each kind at a time; stale ones are stopped
+    // before a new round starts so a single click can never settle twice.
+    let roundCollector = null;
+    let playCollector = null;
+
     // Function to run a full round, recursively called on "Play Again"
     const runRound = async () => {
+      if (roundCollector) {
+        roundCollector.stop('superseded');
+        roundCollector = null;
+      }
+      if (playCollector) {
+        playCollector.stop('superseded');
+        playCollector = null;
+      }
+
       const deck = createShuffledDeck();
       let playerCards = [drawCard(deck), drawCard(deck)];
       let dealerCards = [drawCard(deck), drawCard(deck)];
@@ -128,8 +142,7 @@ module.exports = {
       // Immediate Blackjack check
       if (calculateTotal(playerCards) === 21) {
         const payout = Math.floor(bet * 2.5);
-        balance += payout;
-        await updateBalance(userId, balance);
+        balance = await adjustBalance(userId, payout);
         const embed = buildEmbed(
           playerCards, dealerCards,
           balance, bet,
@@ -138,7 +151,7 @@ module.exports = {
         );
         const playRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId('play_again')
+            .setCustomId('bj_play_again')
             .setLabel('Play Again')
             .setStyle(ButtonStyle.Primary)
         );
@@ -170,7 +183,16 @@ module.exports = {
 
       // Fetch sent message and create collector
       const message = await interaction.fetchReply();
-      const collector = message.createMessageComponentCollector({ componentType: ComponentType.Button });
+      const collector = message.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: GAME_CONFIG.BLACKJACK.COLLECTOR_TIMEOUT,
+      });
+      roundCollector = collector;
+
+      collector.on('end', async (_collected, reason) => {
+        if (reason !== 'time') return;
+        try { await message.edit({ components: [] }); } catch { /* message may be gone */ }
+      });
 
       collector.on('collect', async btnInt => {
         if (btnInt.user.id !== userId) {
@@ -190,7 +212,7 @@ module.exports = {
             collector.stop();
             const endEmbed = buildEmbed(playerCards, dealerCards, balance, bet, '💥 Bust! You lose.');
             const playRow = new ActionRowBuilder().addComponents(
-              new ButtonBuilder().setCustomId('play_again').setLabel('Play Again').setStyle(ButtonStyle.Primary)
+              new ButtonBuilder().setCustomId('bj_play_again').setLabel('Play Again').setStyle(ButtonStyle.Primary)
             );
             await message.edit({ embeds: [endEmbed], components: [playRow] });
             return handlePlayAgain(message);
@@ -214,13 +236,13 @@ module.exports = {
 
         // DOUBLE DOWN
         if (action === 'double' && firstMove) {
-          if (balance < bet) {
+          // Deduct second bet atomically; null means insufficient funds
+          const afterDouble = await adjustBalance(userId, -bet);
+          if (afterDouble === null) {
             return btnInt.followUp({ content: 'Insufficient balance to double down.', flags: MessageFlags.Ephemeral});
           }
-          // Deduct second bet
-          balance -= bet;
+          balance = afterDouble;
           bet *= 2;
-          await updateBalance(userId, balance);
           firstMove = false;
           playerCards.push(drawCard(deck));
           // then stand automatically
@@ -250,8 +272,9 @@ module.exports = {
             resultText = '💔 You lose.';
             payout = 0;
           }
-          balance += payout;
-          await updateBalance(userId, balance);
+          if (payout > 0) {
+            balance = await adjustBalance(userId, payout);
+          }
 
           const finalEmbed = buildEmbed(
             playerCards, dealerCards,
@@ -275,12 +298,14 @@ module.exports = {
 
     // Handle "Play Again" button
     function handlePlayAgain(msg) {
-      const playCollector = msg.createMessageComponentCollector({
+      if (playCollector) playCollector.stop('superseded');
+      const collector = msg.createMessageComponentCollector({
         componentType: ComponentType.Button,
         time: GAME_CONFIG.BLACKJACK.COLLECTOR_TIMEOUT,
       });
+      playCollector = collector;
 
-      playCollector.on('collect', async (btnInt) => {
+      collector.on('collect', async (btnInt) => {
         if (btnInt.user.id !== userId) {
           return btnInt.reply({
             content: 'This is not your game!',
@@ -312,12 +337,14 @@ module.exports = {
           await runRound();
         } else if (btnInt.customId === 'bj_exit') {
           logger.info('Blackjack: Player exited game', { userId, finalBalance: balance });
-          playCollector.stop();
+          collector.stop();
         }
       });
 
-      playCollector.on('end', () => {
+      collector.on('end', async (_collected, reason) => {
         logger.debug('Blackjack collector ended', { userId });
+        if (reason !== 'time') return;
+        try { await msg.edit({ components: [] }); } catch { /* message may be gone */ }
       });
     }
   }

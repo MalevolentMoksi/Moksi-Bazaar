@@ -8,7 +8,7 @@ const {
   ComponentType,
   MessageFlags
 } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+const { getBalance, adjustBalance } = require('../../utils/db');
 const crypto = require('crypto');
 
 // -- SYMBOL DEFINITIONS --------------------------------------------------
@@ -98,6 +98,14 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
   let collected = false;
   let spinLock = false;
 
+  // Winnings are banked the moment the spin resolves. Double-Up then wagers
+  // the already-credited amount; Collect and a timeout leave the balance alone,
+  // so walking away can never lose a win.
+  let balanceAfterSpin = balanceAfterBet;
+  if (payout > 0) {
+    balanceAfterSpin = await adjustBalance(userId, payout);
+  }
+
   // Step 6) Build result embed & buttons
   const resultEmbed = new EmbedBuilder()
     .setTitle('🎰 Slot Results')
@@ -146,13 +154,12 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     if (i.customId === 'play_again') {
       if (spinLock) return;
       spinLock = true;
-      collector.stop();
-      const currentBal = await getBalance(userId);
-      if (currentBal < bet) {
+      const newBal = await adjustBalance(userId, -bet);
+      if (newBal === null) {
+        spinLock = false;
         return i.followUp({ content: `❌ You need $${bet} to play again.`, flags: MessageFlags.Ephemeral});
       }
-      const newBal = currentBal - bet;
-      await updateBalance(userId, newBal);
+      collector.stop('superseded');
       for (const btn of row.components) btn.setDisabled(true);
       await msg.edit({ components: [row] });
       return handleSpin(msg, spinEmbed, bet, userId, newBal);
@@ -162,11 +169,19 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     if (['double','collect'].includes(i.customId)) collected = true;
 
     let finalPayout = payout;
+    let finalBal = balanceAfterSpin;
     if (i.customId === 'double') {
+      // Stake the banked winnings; null means they were spent elsewhere
+      const afterStake = await adjustBalance(userId, -payout);
+      if (afterStake === null) {
+        collected = false;
+        return i.followUp({ content: '❌ You no longer have the winnings to double.', flags: MessageFlags.Ephemeral});
+      }
       finalPayout = crypto.randomInt(0, 2) === 1 ? payout * 2 : 0;
+      finalBal = finalPayout > 0
+        ? await adjustBalance(userId, finalPayout)
+        : afterStake;
     }
-    const finalBal = balanceAfterBet + finalPayout;
-    await updateBalance(userId, finalBal);
 
     resultEmbed.data.fields[4].value = finalPayout > 0
       ? (i.customId === 'double'
@@ -202,13 +217,11 @@ module.exports = {
     const userId = interaction.user.id;
     const bet    = interaction.options.getInteger('amount');
 
-    const balance = await getBalance(userId);
-    if (bet > balance) {
+    const balanceAfterBet = await adjustBalance(userId, -bet);
+    if (balanceAfterBet === null) {
+      const balance = await getBalance(userId);
       return interaction.reply({ content: `❌ You only have $${balance}.`, flags: MessageFlags.Ephemeral});
     }
-
-    const balanceAfterBet = balance - bet;
-    await updateBalance(userId, balanceAfterBet);
 
     const spinEmbed = new EmbedBuilder()
       .setTitle('🎰 Spinning the Reels...')

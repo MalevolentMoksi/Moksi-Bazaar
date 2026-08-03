@@ -5,7 +5,7 @@
 
 const { ComponentType, MessageFlags } = require('discord.js');
 const logger = require('./logger');
-const { getBalance, updateBalance } = require('./db');
+const { getBalance, adjustBalance } = require('./db');
 const { GAME_CONFIG } = require('./constants');
 
 /**
@@ -36,25 +36,19 @@ async function deductBet(userId, betAmount, options = {}) {
       };
     }
 
-    // Get current balance
-    const balance = await getBalance(userId);
-
-    // Check sufficient funds
-    if (betAmount > balance) {
+    // Atomic deduction; null means the guard blocked a negative balance
+    const newBalance = await adjustBalance(userId, -betAmount);
+    if (newBalance === null) {
+      const balance = await getBalance(userId);
       return {
         success: false,
         error: `Insufficient funds. You have $${balance}, but bet is $${betAmount}`,
       };
     }
 
-    // Deduct bet
-    const newBalance = balance - betAmount;
-    await updateBalance(userId, newBalance);
-
     logger.info('Bet deducted', {
       userId,
       betAmount,
-      previousBalance: balance,
       newBalance,
     });
 
