@@ -690,3 +690,6 @@ ${memoryText}`;
     }
   }
 };
+
+// Exported for tests only; the command loader ignores extra properties.
+module.exports.extractEmojiKey = extractEmojiKey;

@@ -84,7 +84,18 @@ function determineErrorType(error) {
     if (message.includes('network') || code === 'ENOTFOUND' || code === 'ETIMEDOUT') {
         return 'NETWORK_ERROR';
     }
-    if (code?.startsWith('PG') || message.includes('database') || message.includes('pool')) {
+    // pg errors carry a 5-char SQLSTATE (e.g. '23505', '42P01') on code, plus a
+    // severity field the driver sets on anything the server itself rejected.
+    // The old check was code.startsWith('PG'), which matches no SQLSTATE that
+    // exists. Node's errno codes are also five uppercase characters (EPIPE,
+    // EPERM), so they have to be excluded by hand or a broken pipe gets
+    // reported to the user as a database problem; no SQLSTATE class begins
+    // with E, which makes that safe to key on.
+    const isPgError = error.severity != null
+        || (typeof error.code === 'string'
+            && /^[0-9A-Z]{5}$/.test(error.code)
+            && !error.code.startsWith('E'));
+    if (isPgError || message.includes('database') || message.includes('pool')) {
         return 'DATABASE_ERROR';
     }
     if (message.includes('permission') || message.includes('forbidden')) {

@@ -1,10 +1,11 @@
 // src/utils/embedBuilder.js - Standardized Embed Creation
 const { EmbedBuilder } = require('discord.js');
-const { 
-    EMBED_COLORS, 
-    getColorForAttitude, 
-    getEmojiForAttitude 
+const {
+    EMBED_COLORS,
+    getColorForAttitude,
+    getEmojiForAttitude
 } = require('./constants');
+const { trendDirection } = require('./trend');
 
 /**
  * Creates a relationship display embed for a single user
@@ -274,22 +275,14 @@ function formatRelationshipLine(rel, index) {
     return `${emoji} **${name}** - ${rel.interactionCount || 0} msgs${sentimentStr} ${activeIcon}`;
 }
 
+// Classification lives in utils/trend.js (canonical 0.15 threshold; this
+// copy used to drift at 0.1). Here we only map the direction to display.
 function calculateTrend(sentiments) {
-    if (sentiments.length < 2) {
-        return { emoji: '➡️', description: 'Not enough data' };
-    }
-
-    const recent = sentiments.slice(-3);
-    const older = sentiments.slice(0, -3);
-    
-    const recentAvg = recent.reduce((sum, s) => sum + s, 0) / recent.length;
-    const olderAvg = older.length > 0 ? older.reduce((sum, s) => sum + s, 0) / older.length : recentAvg;
-    
-    const change = recentAvg - olderAvg;
-
-    if (change > 0.1) return { emoji: '📈', description: 'Improving' };
-    if (change < -0.1) return { emoji: '📉', description: 'Declining' };
-    return { emoji: '➡️', description: 'Stable' };
+    const direction = trendDirection(sentiments);
+    if (direction === 'rising') return { emoji: '📈', description: 'Improving' };
+    if (direction === 'falling') return { emoji: '📉', description: 'Declining' };
+    if (direction === 'stable') return { emoji: '➡️', description: 'Stable' };
+    return { emoji: '➡️', description: 'Not enough data' };
 }
 
 module.exports = {

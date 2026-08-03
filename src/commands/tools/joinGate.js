@@ -1191,8 +1191,13 @@ module.exports = {
                     if (!submitted) return;
 
                     const days = clamp(Number(submitted.fields.getTextInputValue('days')), { min: 0, max: 3650 });
+                    // 0 means "unset" to the scorer, which falls back to the
+                    // stock 365d timeline. Confirming "set to 0 days" would
+                    // read as "forgiveness switched off", the opposite.
                     return applyChange(submitted, { suspicion_tenure_grace_days: days },
-                        `Tenure grace set to **${days} days**`);
+                        days > 0
+                            ? `Tenure grace set to **${days} days**`
+                            : 'Tenure grace cleared: the stock **365d** forgiveness timeline applies');
                 }
 
                 if (id === 'jg_susp_channel') {

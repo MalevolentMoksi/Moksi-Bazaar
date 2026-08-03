@@ -1,7 +1,24 @@
 // src/functions/handlers/handleCommands.js
 const fs    = require('fs');
 const path  = require('path');
+const crypto = require('crypto');
 const { REST, Routes } = require('discord.js');
+
+/**
+ * Every boot used to PUT the full command list to every guild, whether or not
+ * anything had changed. Command registration is one of the more aggressively
+ * rate-limited endpoints Discord has, and on a bot that redeploys often that is
+ * a lot of identical writes. The payload is hashed instead and the PUT is
+ * skipped when the hash matches what was registered last time.
+ *
+ * Set FORCE_REGISTER=1 to override, which is the escape hatch for the case
+ * where Discord's copy and ours have drifted apart for some other reason.
+ */
+const HASH_KEY_PREFIX = 'cmd_hash:';
+
+function hashCommands(commands) {
+  return crypto.createHash('sha256').update(JSON.stringify(commands)).digest('hex').slice(0, 16);
+}
 
 module.exports = (client) => {
   client.handleCommands = async () => {
@@ -37,6 +54,18 @@ module.exports = (client) => {
       const appId = process.env.CLIENT_ID ?? client.user.id;
       console.log(`App ID: ${appId}`);
 
+      // The hash lives in the database because the container filesystem is
+      // wiped on every deploy, which is exactly when this needs to remember.
+      //
+      // ready.js runs init() on this same event, so on a cold database the
+      // speak_config table may not exist yet when the read below happens. Every
+      // access is therefore guarded, and an unreadable hash always means
+      // "assume stale" so the worst case is a redundant registration.
+      const { getSpeakConfigValue, setSpeakConfigValue } = require('../../utils/db');
+
+      const payloadHash = hashCommands(commands);
+      const force = process.env.FORCE_REGISTER === '1';
+
       // 1. Fetch and delete existing global commands
       let globalCmds = [];
       try {
@@ -53,10 +82,25 @@ module.exports = (client) => {
         ));
       }
 
-      // 2. Register per-guild commands in parallel
+      // 2. Register per-guild commands, skipping guilds already up to date
       const guilds = [...client.guilds.cache.values()];
+      const targets = [];
+      for (const guild of guilds) {
+        if (force) { targets.push(guild); continue; }
+        try {
+          const stored = await getSpeakConfigValue(`${HASH_KEY_PREFIX}${guild.id}`, null);
+          if (stored === payloadHash) {
+            console.log(`Commands unchanged in ${guild.name}, skipping registration`);
+            continue;
+          }
+        } catch {
+          // Unreadable hash means "assume stale", never "assume fresh".
+        }
+        targets.push(guild);
+      }
+
       const results = await Promise.allSettled(
-        guilds.map(guild =>
+        targets.map(guild =>
           rest.put(
             Routes.applicationGuildCommands(appId, guild.id),
             { body: commands }
@@ -64,11 +108,16 @@ module.exports = (client) => {
         )
       );
 
-      const failures = results.filter(r => r.status === 'rejected');
-      if (failures.length > 0) {
-        failures.forEach((f, i) => {
-          console.error(`Failed guild-register in ${guilds[i]?.name}:`, f.reason);
-        });
+      // Index into `targets`, not into the filtered failure list: the old code
+      // read guilds[i] off the failures array and named the wrong server.
+      for (let i = 0; i < results.length; i++) {
+        const guild = targets[i];
+        if (results[i].status === 'rejected') {
+          console.error(`Failed guild-register in ${guild?.name ?? 'unknown guild'}:`, results[i].reason);
+          continue;
+        }
+        await setSpeakConfigValue(`${HASH_KEY_PREFIX}${guild.id}`, payloadHash)
+          .catch(err => console.error('Could not store command hash:', err.message));
       }
     });
   };

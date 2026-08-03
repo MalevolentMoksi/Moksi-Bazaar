@@ -1,6 +1,7 @@
 // src/functions/handlers/handleEvents.js
 const fs   = require('fs');
 const path = require('path');
+const logger = require('../../utils/logger');
 
 module.exports = (client) => {
   client.handleEvents = () => {
@@ -32,11 +33,25 @@ module.exports = (client) => {
           continue;
         }
 
-        // Ensure both interaction and client are passed to execute
+        // Ensure both interaction and client are passed to execute.
+        // Catch rejections here so they carry event context instead of
+        // surfacing as anonymous unhandledRejection noise.
+        const run = async (...args) => {
+          try {
+            await event.execute(...args, client);
+          } catch (error) {
+            logger.error('Event handler failed', {
+              event: event.name,
+              file: path.relative(process.cwd(), filePath),
+              error: error.message,
+              stack: error.stack,
+            });
+          }
+        };
         if (event.once) {
-          client.once(event.name, async (...args) => await event.execute(...args, client));
+          client.once(event.name, run);
         } else {
-          client.on(event.name, async (...args) => await event.execute(...args, client));
+          client.on(event.name, run);
         }
         console.log(`Loaded event ${event.name} from ${path.relative(process.cwd(), filePath)}`);
       }

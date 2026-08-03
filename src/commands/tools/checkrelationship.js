@@ -5,20 +5,17 @@ const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { createRelationshipEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
 const { isOwner, ATTITUDE_INSTRUCTIONS } = require('../../utils/constants');
+const { trendDirection } = require('../../utils/trend');
 const logger = require('../../utils/logger');
 
 // ── TREND CALCULATION ───────────────────────────────────────────────────────
+// Classification lives in utils/trend.js; this only maps it to prose.
 function describeTrend(history) {
-  if (!history || history.length < 3) return null;
-  const recent = history.slice(-3);
-  const older  = history.slice(0, -3);
-  const avg = arr => arr.reduce((s, h) => s + h.sentiment, 0) / arr.length;
-  const recentAvg = avg(recent);
-  const olderAvg  = older.length ? avg(older) : recentAvg;
-  const delta = recentAvg - olderAvg;
-  if (delta > 0.15)  return 'warming up to them recently';
-  if (delta < -0.15) return 'growing colder toward them recently';
-  return 'steady with them';
+  const direction = trendDirection((history ?? []).map(h => h.sentiment));
+  if (direction === 'rising') return 'warming up to them recently';
+  if (direction === 'falling') return 'growing colder toward them recently';
+  if (direction === 'stable') return 'steady with them';
+  return null;
 }
 
 // ── AI RESPONSE ─────────────────────────────────────────────────────────────

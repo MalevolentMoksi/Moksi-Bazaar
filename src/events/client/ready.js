@@ -1,15 +1,77 @@
 // src/events/client/ready.js
 
+const { EmbedBuilder } = require('discord.js');
 const { init } = require('../../utils/db');
 const { initUptimePresence } = require('../../utils/presence');
 const { startReminderScheduler } = require('../../commands/tools/remind.js');
 const { initWarnReminderScheduler } = require('../../utils/warnReminderScheduler');
 const { initJoinGate } = require('../../utils/joinGate');
+const { startJanitor } = require('../../utils/janitor');
+const { startBackupScheduler } = require('../../utils/backup');
+const { EMBED_COLORS } = require('../../utils/constants');
+const logger = require('../../utils/logger');
+
+/**
+ * Boot subsystems one at a time, recording what worked.
+ *
+ * Each of these already swallowed its own errors and printed a red X to a
+ * console nobody reads at deploy time. The failures are collected instead, so
+ * the one person who can act on them gets told directly.
+ */
+async function runBootStep(results, label, fn) {
+  try {
+    await fn();
+    results.push({ label, ok: true });
+  } catch (error) {
+    results.push({ label, ok: false, error: error?.message || String(error) });
+    logger.error('Boot step failed', { step: label, error: error?.message, stack: error?.stack });
+    console.error(`❌ ${label} failed:`, error?.message || error);
+  }
+}
+
+/**
+ * Sends the owner a summary, but only when something is actually broken.
+ * A boot report that arrives after every successful deploy is a notification
+ * you learn to swipe away, which is exactly when you miss the one that matters.
+ */
+async function reportBootFailures(client, results) {
+  const failed = results.filter(r => !r.ok);
+  if (failed.length === 0) return;
+
+  const ownerId = process.env.OWNER_ID;
+  if (!ownerId) return;
+
+  const embed = new EmbedBuilder()
+    .setColor(EMBED_COLORS?.ERROR ?? 0xED4245)
+    .setTitle('Boot report: something did not start')
+    .setDescription(
+      `${failed.length} of ${results.length} subsystems failed to start. `
+      + 'The bot is running; these features are not.'
+    )
+    .addFields(
+      failed.map(f => ({
+        name: f.label,
+        value: `\`\`\`${String(f.error).slice(0, 300)}\`\`\``,
+      }))
+    )
+    .setFooter({ text: `${client.user.tag} • ${results.filter(r => r.ok).length} started normally` })
+    .setTimestamp();
+
+  try {
+    const owner = await client.users.fetch(ownerId);
+    await owner.send({ embeds: [embed] });
+  } catch (error) {
+    // Closed DMs are the owner's choice; the log line above already has it all.
+    logger.warn('Could not DM boot report to owner', { error: error.message });
+  }
+}
 
 module.exports = {
   name: 'clientReady',
   once: true, // This event should only fire once
   async execute(client) {
+    // The database is the one hard dependency: nothing below works without it,
+    // so this stays a hard exit rather than a boot-report line.
     try {
       await init();
       console.log('✅ Database initialized, balances table is ready.');
@@ -20,36 +82,25 @@ module.exports = {
 
     console.log(`Logged in as ${client.user.tag}`);
 
-    try {
-      initUptimePresence(client);
-    } catch (error) {
-      console.error('❌ Presence initialization failed:', error.message);
-    }
-    
-    // Start reminder scheduler
-    try {
-      await startReminderScheduler(client);
-      console.log('✅ Reminder scheduler started');
-    } catch (e) {
-      console.error('❌ Failed to start reminder scheduler:', e);
-    }
+    const results = [];
 
-    // Start warn reminder scheduler
-    try {
-      await initWarnReminderScheduler(client);
-      console.log('✅ Warn reminder scheduler started');
-    } catch (e) {
-      console.error('❌ Failed to start warn reminder scheduler:', e);
-    }
-
-    // Start join gate (temp-ban lifter + opt-in catch-up sweep).
+    await runBootStep(results, 'Presence', () => initUptimePresence(client));
+    await runBootStep(results, 'Reminder scheduler', () => startReminderScheduler(client));
+    await runBootStep(results, 'Warn reminder scheduler', () => initWarnReminderScheduler(client));
     // initJoinGate swallows its own errors: a broken gate must not take the
     // bot down, and a pending unban must still be lifted on time.
-    try {
-      await initJoinGate(client);
-      console.log('✅ Join gate initialised');
-    } catch (e) {
-      console.error('❌ Failed to initialise join gate:', e);
-    }
+    await runBootStep(results, 'Join gate', () => initJoinGate(client));
+    await runBootStep(results, 'Janitor', () => startJanitor());
+    await runBootStep(results, 'Backup scheduler', () => startBackupScheduler(client));
+
+    const ok = results.filter(r => r.ok).length;
+    console.log(`✅ Boot complete: ${ok}/${results.length} subsystems started`);
+    logger.info('Boot complete', {
+      started: ok,
+      total: results.length,
+      failed: results.filter(r => !r.ok).map(r => r.label),
+    });
+
+    await reportBootFailures(client, results);
   }
 };

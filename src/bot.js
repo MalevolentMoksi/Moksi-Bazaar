@@ -9,6 +9,11 @@ const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
 const logger = require('./utils/logger');
 const { validateEnvironmentVars } = require('./utils/validateEnvironment');
+const { pool } = require('./utils/db');
+const { stopJanitor } = require('./utils/janitor');
+
+/** Railway allows roughly 10s between SIGTERM and SIGKILL; stay inside it. */
+const SHUTDOWN_TIMEOUT_MS = 8000;
 
 // Use console as fallback for critical startup errors
 console.log('[STARTUP] Starting Moksi\'s Bazaar bot...');
@@ -104,16 +109,50 @@ function initializeBot() {
     process.exit(1);
   });
 
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    logger.info('Shutting down gracefully...');
+  // Graceful shutdown.
+  //
+  // Railway stops a container by sending SIGTERM and killing it outright a
+  // short while later. Only SIGINT was handled before, so every single deploy
+  // tore the process down mid-flight: sockets dropped without a close frame
+  // and in-flight database work was abandoned with the pool still open.
+  let shuttingDown = false;
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[SHUTDOWN] ${signal} received, closing down...`);
+    logger.info('Shutting down gracefully', { signal });
+
+    // Whatever has not finished by the deadline is not going to. Exiting late
+    // is worse than exiting dirty: the platform's own kill is unconditional.
+    const deadline = setTimeout(() => {
+      console.error('[SHUTDOWN] Timed out waiting for clean close, exiting anyway');
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    deadline.unref();
+
+    try { stopJanitor(); } catch { /* nothing worth reporting at this point */ }
+
     try {
       await client.destroy();
-      logger.info('Bot shut down successfully');
-      process.exit(0);
+      logger.info('Gateway connection closed');
     } catch (error) {
-      logger.error('Error during shutdown', { error: error.message });
-      process.exit(1);
+      logger.error('Error closing gateway', { error: error.message });
     }
-  });
+
+    // Last, so anything above can still write. end() waits for checked-out
+    // clients to finish their current query.
+    try {
+      await pool.end();
+      logger.info('Database pool closed');
+    } catch (error) {
+      logger.error('Error closing database pool', { error: error.message });
+    }
+
+    clearTimeout(deadline);
+    console.log('[SHUTDOWN] Clean exit');
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => { shutdown('SIGTERM'); });
+  process.on('SIGINT', () => { shutdown('SIGINT'); });
 }
