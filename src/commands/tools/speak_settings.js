@@ -9,7 +9,7 @@
  *   Overview      master switches and a health summary
  *   Interjections when/where the bot may butt in unprompted
  *   Memory        distilled long-term profiles + raw memory stats
- *   Delivery      multi-message "typing beats"
+ *   Delivery      multi-message "typing beats" + reply length mode
  *   Users         blacklist and attitude management
  */
 
@@ -41,7 +41,7 @@ const SECTIONS = [
     { value: 'overview', label: 'Overview', emoji: '📋', description: 'Master switches, health summary' },
     { value: 'interject', label: 'Interjections', emoji: '💬', description: 'Let it butt in, on your terms' },
     { value: 'memory', label: 'Memory', emoji: '🧠', description: 'Long-term profiles, raw memory, vision cache' },
-    { value: 'delivery', label: 'Delivery', emoji: '⌨️', description: 'Multi-message typing beats' },
+    { value: 'delivery', label: 'Delivery', emoji: '⌨️', description: 'Typing beats & reply length' },
     { value: 'users', label: 'Users', emoji: '👥', description: 'Blacklist, attitude resets' },
 ];
 
@@ -261,6 +261,7 @@ function renderMemory(state) {
 
 function renderDelivery(delivery) {
     const on = Boolean(delivery?.multiMessage);
+    const adaptive = delivery?.replyLength === 'adaptive';
     const embed = new EmbedBuilder()
         .setTitle('⌨️ Delivery')
         .setColor(EMBED_COLORS.INFO)
@@ -268,17 +269,28 @@ function renderDelivery(delivery) {
             'With multi-message on, the model is allowed to write a reply as two or three very short '
             + 'beats, and each beat arrives as its own message with a typing pause between them:\n\n'
             + '> just\n> give it a few secs\n> don\'t kick him\n\n'
-            + 'Reply length does not change; single-thought answers stay single messages. Off means '
-            + 'everything arrives as one message, line breaks included.'
+            + 'Off means everything arrives as one message, line breaks included.\n\n'
+            + '**Reply length** controls how much the bot is allowed to say:\n'
+            + '- **Terse**: hard lock at 1-2 sentences, no exceptions. The historical behaviour.\n'
+            + '- **Adaptive**: short stays the default, but when a message genuinely calls for a real '
+            + 'answer (an explanation, a real take, a story), it may go up to a short paragraph. '
+            + 'Interjections stay short either way.'
         )
-        .addFields({ name: 'Multi-message beats', value: onOff(on), inline: true });
+        .addFields(
+            { name: 'Multi-message beats', value: onOff(on), inline: true },
+            { name: 'Reply length', value: adaptive ? '📏 Adaptive' : '✂️ Terse', inline: true },
+        );
 
     const rows = [
         new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('ss_delivery_toggle')
                 .setLabel(on ? 'Disable beats' : 'Enable beats')
-                .setStyle(on ? ButtonStyle.Danger : ButtonStyle.Success)
+                .setStyle(on ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('ss_delivery_length')
+                .setLabel(adaptive ? 'Switch to terse' : 'Switch to adaptive')
+                .setStyle(ButtonStyle.Primary)
         ),
     ];
 
@@ -514,6 +526,14 @@ module.exports = {
                     const cfg = await getSpeakConfigValue('delivery', { multiMessage: false }) ?? { multiMessage: false };
                     await setSpeakConfigValue('delivery', { ...cfg, multiMessage: !cfg.multiMessage });
                     logger.info('Multi-message delivery toggled', { enabled: !cfg.multiMessage, by: i.user.id });
+                    return refresh(i);
+                }
+
+                if (id === 'ss_delivery_length') {
+                    const cfg = await getSpeakConfigValue('delivery', { multiMessage: false }) ?? { multiMessage: false };
+                    const next = cfg.replyLength === 'adaptive' ? 'terse' : 'adaptive';
+                    await setSpeakConfigValue('delivery', { ...cfg, replyLength: next });
+                    logger.info('Reply length mode changed', { mode: next, by: i.user.id });
                     return refresh(i);
                 }
 

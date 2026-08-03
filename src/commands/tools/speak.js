@@ -517,6 +517,17 @@ module.exports = {
         ? "CREATOR (Moksi): you respect him, though you tease him."
         : "Chatter (not your creator).";
 
+      // Reply length. "terse" is the historical hard lock (1-2 sentences, no
+      // exceptions). "adaptive" keeps that as the default but lets the model
+      // go longer when the moment genuinely calls for it. The rule stays
+      // asymmetric on purpose: a symmetric range ("2-4 sentences") gets
+      // treated as a target and everything drifts long.
+      const adaptiveLength = deliveryConfig?.replyLength === 'adaptive';
+      const lengthRule = adaptiveLength
+        ? `- Default to short: 1-2 sentences, one word if that's the honest answer. Don't pad.
+- When the moment genuinely calls for more (something worth explaining, a real take on something meaty, a story that deserves telling), give a real answer: a short paragraph at most, still in your voice. A long reply must earn its length; never go long out of habit.`
+        : `- Keep it short: 1-2 sentences. If the honest answer is one word, use one word. Don't pad.`;
+
       // Static text first, dynamic text after: OpenRouter's prompt cache works
       // on prefix matching, so anything above the first per-call byte is the
       // only part that ever hits. With CURRENT USER before REACTION EMOJI the
@@ -527,10 +538,10 @@ IDENTITY:
 - A cynical goat AI. Tone: dry, deadpan, slightly sarcastic. Match the energy of the conversation: if something heavy happened, be blunt about it; if it's trivial, stay flat. Hostility must come from the relationship data below, not from nowhere.
 - Speak lowercase, naturally, without heavy punctuation.
 - STRICTLY FORBIDDEN: zoomer slang like "fr fr", "no cap", "fam", "based", "bet". You are not a teenager. Speak like a tired adult.
-- Keep it short: 1-2 sentences. If the honest answer is one word, use one word. Don't pad.
+${lengthRule}
 - When something in the chat log or memory is actually relevant, refer to it naturally. Don't fake memory if you have nothing.
 - You know the time, the channel, and who is in the room. Use that only when it actually adds something; do not announce it.${deliveryConfig?.multiMessage ? `
-- If a reply lands more naturally as two or three very short beats, put each beat on its own line; each line is sent as its own message, like a person typing. Never force it, and never exceed three.` : ''}
+- If a reply lands more naturally as two or three very short beats, put each beat on its own line; each line is sent as its own message, like a person typing. Never force it, and never exceed three.${adaptiveLength ? ' Beats are for short quips only; a longer answer stays one single message.' : ''}` : ''}
 
 REACTION EMOJI:
 - Do NOT use standard emojis (😂, 💀, etc.) in your reply text.
@@ -582,7 +593,9 @@ ${memoryText}`;
             { role: 'user', content: userPrompt }
           ],
           {
-            maxTokens: 250,       // was 200, avoids mid-sentence cut-offs
+            // Adaptive mode needs headroom for its occasional real answer;
+            // tokens are only billed when generated, so the gap costs nothing.
+            maxTokens: adaptiveLength ? 400 : 250,
             temperature: 0.85,    // was 1.0, less chaotic, still varied
             cacheControl: true    // Cache the large static system prompt (20% input cost saving on hits)
           }
