@@ -61,8 +61,16 @@
         if (!(form instanceof HTMLFormElement) || !form.dataset.api) return;
         event.preventDefault();
 
+        // Repeated names (checkbox groups) become arrays instead of last-wins.
         const fields = {};
-        for (const [key, value] of new FormData(form).entries()) fields[key] = value;
+        for (const [key, value] of new FormData(form).entries()) {
+            if (key in fields) {
+                if (!Array.isArray(fields[key])) fields[key] = [fields[key]];
+                fields[key].push(value);
+            } else {
+                fields[key] = value;
+            }
+        }
 
         let errorBox = form.querySelector('.form-error');
         const button = form.querySelector('button[type="submit"]');

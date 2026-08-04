@@ -469,6 +469,62 @@ body.door {
     margin-top: 4px;
 }
 
+/* ── Settings page ────────────────────────────────────────────────────── */
+
+.anchor-nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding: 10px 0;
+    margin-bottom: 14px;
+    background: linear-gradient(var(--night) 82%, transparent);
+}
+
+.anchor-nav a {
+    color: var(--dust);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+}
+
+.anchor-nav a:hover { color: var(--lantern); background: var(--lantern-soft); text-decoration: none; }
+
+.anchor-state { margin-left: auto; display: flex; gap: 6px; }
+
+.toggle-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 6px 0;
+    flex-wrap: wrap;
+}
+
+.inline-fields { display: flex; gap: 8px; align-items: center; }
+.inline-fields select, .inline-fields input { flex: 1; min-width: 0; }
+.inline-fields button { flex-shrink: 0; }
+
+.form-actions { margin: 10px 0 4px; }
+
+.reference { margin: 10px 0; color: var(--dust); }
+.reference summary { cursor: pointer; font-size: 13px; }
+.reference pre {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: var(--night);
+    border: 1px solid var(--edge-soft);
+    border-radius: 6px;
+    font-size: 12.5px;
+    overflow-x: auto;
+}
+
+select[multiple] { width: 100%; font-family: var(--body); }
+
+[id] { scroll-margin-top: 64px; }
+
 /* ── Misc ─────────────────────────────────────────────────────────────── */
 
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 14px; }

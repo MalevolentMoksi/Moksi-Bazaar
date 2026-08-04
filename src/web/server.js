@@ -163,6 +163,9 @@ function buildApp(client, config) {
     // Until the gateway is up there is no guild data worth rendering.
     app.use((req, res, next) => {
         if (!client.isReady()) {
+            if (req.path.startsWith('/api/')) {
+                return res.status(503).json({ error: 'The bot is still connecting to Discord. Try again shortly.' });
+            }
             return res.status(503).send(doorPage({
                 title: 'Warming up',
                 body: html`<h1>Lighting the lanterns</h1>
@@ -179,16 +182,26 @@ function buildApp(client, config) {
         next();
     });
 
+    // Writes: every /api mutation carries the CSRF token or is refused.
+    const { createApi } = require('./api');
+    app.use('/api', auth.requireCsrf, createApi(client));
+
     const overview = require('./pages/overview');
     app.get('/', wrap(async (req, res) => {
         const model = await overview.data(client, req.guildId);
         respond(req, res, { title: 'Overview', body: overview.render(model) });
     }));
 
+    const gate = require('./pages/gate');
+    app.get('/gate', wrap(async (req, res) => {
+        const model = await gate.data(client, req.guildId);
+        respond(req, res, { title: 'Join Gate', body: gate.render(model) });
+    }));
+
     // Stubs keep the nav honest while later stages land: a page you can reach
     // that says it is coming beats a 404 that looks like a bug.
     for (const [route, title] of [
-        ['/gate', 'Join Gate'], ['/modlog', 'Mod History'],
+        ['/modlog', 'Mod History'],
         ['/members', 'Members'], ['/guard', 'Guard'],
     ]) {
         app.get(route, (req, res) => {
