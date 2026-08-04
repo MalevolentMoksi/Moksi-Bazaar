@@ -21,6 +21,9 @@
  *  4. SCRIPT IS NOT SUSPICION. Name checks look for mixed scripts WITHIN A
  *     SINGLE WORD, the actual homoglyph trick. A name written wholly in
  *     Cyrillic, Greek, Arabic or CJK is ordinary and is never penalised.
+ *     Nor is a transliteration of one: Discord forces usernames into
+ *     [a-z0-9._], so a member whose name is written in an abjad has to drop
+ *     the vowels to fit, and the result must not read as generator output.
  *  5. EVERY DECISION SHOWS ITS WORK.
  *
  * Scoring is pure and side-effect free, so the panel can backtest it against
@@ -150,8 +153,8 @@ const CONFUSABLE_SCRIPTS = [
     ['greek', new RegExp('[\\u0370-\\u03FF]')],
 ];
 
+/** y counts as a vowel, so it breaks a run rather than extending one. */
 const CONSONANT_RE = /[bcdfghjklmnpqrstvwxz]/;
-const VOWEL_RE = /[aeiouy]/;
 
 function hasInvisibleChars(name) {
     return INVISIBLE_RE.test(String(name ?? ''));
@@ -182,29 +185,50 @@ function maxConsonantRun(letters) {
 }
 
 /**
- * Gibberish detection for Latin-script names.
+ * Machine-generated name detection, for Latin-script text.
  *
- * The old version just checked the vowel ratio, which flags real surnames like
- * "Schwartz". Consonant runs are the far better tell: pronounceable names and
- * words essentially never string five consonants together, while bulk-generated
- * usernames such as "jxglybtecdmzfhwc" do it constantly.
+ * A long run of consonants is the tell: bulk-generated usernames such as
+ * "jxglybtecdmzfhwc" string five or more together constantly, and words people
+ * chose to type essentially never do.
  *
- * Non-Latin names strip to nothing here and are therefore never flagged.
+ * There used to be a second test on vowel density (under 18% across ten or more
+ * letters). It flagged "schwartzmann" and every other Germanic compound, and it
+ * caught nothing the run test missed: with one vowel in ten letters the nine
+ * consonants fall into at most two runs, so a run of five is forced anyway.
+ *
+ * Non-Latin names strip to nothing here and are never flagged. Romanisations of
+ * them are handled by the caller, which is the only place that can see the
+ * display name and know one is what it is looking at.
  */
 function looksRandom(name) {
     const letters = String(name ?? '').replace(/[^A-Za-z]/g, '');
     if (letters.length < 6) return false;
-
-    const vowels = letters.split('').filter(c => VOWEL_RE.test(c.toLowerCase())).length;
-    const ratio = vowels / letters.length;
-    const run = maxConsonantRun(letters);
-
-    // Five consonants in a row is not a name anyone chose to type.
-    if (run >= 5) return true;
-    // Otherwise demand real length before judging on vowel density, so short
-    // legitimately consonant-heavy names are left alone.
-    return letters.length >= 10 && ratio < 0.18;
+    return maxConsonantRun(letters) >= 5;
 }
+
+/**
+ * True when a name is written mostly outside the Latin alphabet.
+ *
+ * Discord allows only [a-z0-9._] in a username, so a member whose name is
+ * written in Arabic, Hebrew, Japanese, Thai or anything else has no choice but
+ * to transliterate it for that field. The display name is where the real one
+ * survives, and it is the evidence that the username is a transliteration.
+ */
+function isMostlyNonLatin(text) {
+    const letters = String(text ?? '').match(/\p{L}/gu) ?? [];
+    if (letters.length < 2) return false;
+    const latin = letters.filter(c => /[A-Za-z]/.test(c)).length;
+    return latin / letters.length < 0.5;
+}
+
+// A second exemption was considered and rejected: treating the username as
+// innocent when its letters appear in order inside the display name, so that
+// "mhmdslh" under "Mohammed Saleh" or "llwybrcwmwd" under "Llwybr Cwmwd" would
+// clear. It works, and it is too loose. Any account can author a display name
+// that spells out its own generated username and buy itself 35 points, and a
+// Latin-script name dense enough to trip the run test in the first place is
+// rare enough in a server this size that the trade is not worth it. A false
+// report costs a glance. A bot through the gate costs more.
 
 function hasSymbolSpam(name) {
     const symbols = String(name ?? '').replace(/[\p{L}\p{N}\s._-]/gu, '');
@@ -398,7 +422,21 @@ function scoreAccount(user, options = {}) {
     }
 
     // 4. Name heuristics.
-    const gibberish = looksRandom(name);
+    //
+    // Arabic, Hebrew, Persian and Urdu are abjads: short vowels are not
+    // written. A username restricted to [a-z0-9._] therefore forces speakers of
+    // those languages to produce a run of consonants to write their own name.
+    // "slwlmhmd" is a real phrase, not generator output, and scoring it as one
+    // penalises people for the script their name happens to be in. The display
+    // name is the evidence, and it is free: a generator has no real name to
+    // transliterate or shorten in the first place.
+    // The exemption is deliberately narrow: the display name must be written in
+    // another script. That is a fact about the text, not a judgement call, and
+    // it cannot be faked into by an account that simply picks a nicer-looking
+    // display name. Everything else stays flagged.
+    const transliterated = isMostlyNonLatin(user.globalName);
+
+    const gibberish = looksRandom(name) && !transliterated;
     const digitSuffix = hasDigitSuffix(name);
 
     if (hasInvisibleChars(name)) {
@@ -411,7 +449,11 @@ function scoreAccount(user, options = {}) {
         addSus('digit_suffix', 'Digit suffix', weightOf(weights, 'digit_suffix'), 'name ends in 4+ digits');
     }
     if (gibberish) {
-        addSus('gibberish_name', 'Unpronounceable name', weightOf(weights, 'gibberish_name'), 'consonant runs typical of generated names');
+        // Not "unpronounceable". Plenty of names are hard for an English
+        // speaker to pronounce and entirely ordinary to the person who has one.
+        // What this actually measures is the shape a generator leaves.
+        addSus('gibberish_name', 'Random-looking name', weightOf(weights, 'gibberish_name'),
+            'five or more consonants in a row, with no display name to explain it');
     }
     if (hasSymbolSpam(name)) {
         addSus('symbol_spam', 'Symbol-heavy name', weightOf(weights, 'symbol_spam'), '4+ decorative symbols');
@@ -452,7 +494,7 @@ function scoreAccount(user, options = {}) {
     // The name signature on its own, without needing a default avatar.
     // Every combination here used to require one, so uploading any picture at
     // all bought a generated account out of all three. An avatar is a
-    // five-second upload; a name that is both unpronounceable AND suffixed
+    // five-second upload; a name that is both random-looking AND suffixed
     // with a block of digits is what a registration script produces.
     else if (gibberish && digitSuffix) {
         addSus('generated_name', 'Generated-looking name', weightOf(weights, 'generated_name'),
@@ -603,6 +645,7 @@ module.exports = {
     hasDigitSuffix,
     looksRandom,
     maxConsonantRun,
+    isMostlyNonLatin,
     hasSymbolSpam,
     foldName,
     matchesScamKeyword,
