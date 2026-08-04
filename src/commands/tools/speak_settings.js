@@ -35,6 +35,9 @@ const SNOWFLAKE_RE = /^\d{17,20}$/;
 
 const DEFAULT_INTERJECTIONS = Object.freeze({
     enabled: false, channels: [], keywords: [], chance: 15, cooldownMinutes: 10,
+    // Extra gate: asks the cheap model whether the moment is worth a remark.
+    // Off by default like every other addition; see utils/interjectionBouncer.js.
+    bouncer: false,
 });
 
 const SECTIONS = [
@@ -186,12 +189,19 @@ function renderInterjections(interjections) {
         .setDescription(
             'Lets the bot butt into conversations nobody invited it to. A message must clear every '
             + 'gate below, in order: allowed channel → keyword (if any are set) → per-channel cooldown '
-            + '→ chance roll. Replies never ping anyone.'
+            + '→ chance roll → bouncer (if on). Replies never ping anyone.'
         )
         .addFields(
             { name: 'Status', value: onOff(cfg.enabled), inline: true },
             { name: 'Chance', value: `${cfg.chance}% per eligible message`, inline: true },
             { name: 'Cooldown', value: `${cfg.cooldownMinutes} min per channel`, inline: true },
+            {
+                name: 'Bouncer',
+                value: `${onOff(cfg.bouncer)}\n-# ${cfg.bouncer
+                    ? 'a winning roll still has to be a moment worth reacting to'
+                    : 'every winning roll interjects, however dull the moment'}`,
+                inline: false,
+            },
             { name: `Channels (${cfg.channels.length})`, value: truncate(channelsText, 1000), inline: false },
             { name: `Keywords (${cfg.keywords.length})`, value: truncate(keywordsText, 1000), inline: false },
         )
@@ -206,6 +216,10 @@ function renderInterjections(interjections) {
                 .setDisabled(!cfg.enabled && cfg.channels.length === 0),
             new ButtonBuilder().setCustomId('ss_ij_tuning').setLabel('Chance & cooldown').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId('ss_ij_keywords').setLabel('Edit keywords').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('ss_ij_bouncer')
+                .setLabel(cfg.bouncer ? 'Bouncer off' : 'Bouncer on')
+                .setStyle(cfg.bouncer ? ButtonStyle.Danger : ButtonStyle.Success),
             new ButtonBuilder()
                 .setCustomId('ss_ij_clear_channels')
                 .setLabel('Clear channels')
@@ -427,6 +441,13 @@ module.exports = {
                     }
                     await setSpeakConfigValue('interjections', { ...cfg, enabled: !cfg.enabled });
                     logger.info('Interjections toggled', { enabled: !cfg.enabled, by: i.user.id });
+                    return refresh(i);
+                }
+
+                if (id === 'ss_ij_bouncer') {
+                    const cfg = { ...DEFAULT_INTERJECTIONS, ...(await getSpeakConfigValue('interjections', DEFAULT_INTERJECTIONS) ?? {}) };
+                    await setSpeakConfigValue('interjections', { ...cfg, bouncer: !cfg.bouncer });
+                    logger.info('Interjection bouncer toggled', { enabled: !cfg.bouncer, by: i.user.id });
                     return refresh(i);
                 }
 

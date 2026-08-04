@@ -13,8 +13,9 @@ const {
   SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
   ButtonStyle, ComponentType, MessageFlags,
 } = require('discord.js');
-const { getBalance, adjustBalance } = require('../../utils/db');
+const { getBalance, adjustBalance, recordGameResult } = require('../../utils/db');
 const { deductBet } = require('../../utils/gameHelpers');
+const { considerHeckle } = require('../../utils/casinoHeckle');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
 const BJ = require('../../utils/blackjack');
@@ -404,6 +405,17 @@ module.exports = {
       logger.info('Blackjack round settled', {
         userId, staked, returned, net, hands: state.hands.length,
         outcomes: state.hands.map(h => h.outcome),
+      });
+      // Best-effort: a statistics write is never worth failing a payout over.
+      recordGameResult(userId, 'blackjack', { wagered: staked, returned }).catch(() => {});
+      // Not awaited on purpose: a payout must never wait on a language model.
+      considerHeckle({
+        channel: interaction.channel,
+        userId,
+        username: interaction.user.username,
+        game: 'blackjack',
+        wagered: staked,
+        returned,
       });
 
       const lastBet = state.hands[0].doubled ? state.hands[0].bet / 2 : state.hands[0].bet;

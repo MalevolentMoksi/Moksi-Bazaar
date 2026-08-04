@@ -9,11 +9,12 @@
 
 const {
     SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-    StringSelectMenuBuilder, ChannelSelectMenuBuilder, ModalBuilder, TextInputBuilder,
-    TextInputStyle, ChannelType, MessageFlags, PermissionFlagsBits,
+    StringSelectMenuBuilder, ChannelSelectMenuBuilder,
+    ChannelType, MessageFlags, PermissionFlagsBits,
 } = require('discord.js');
 
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
+const { promptModal: sharedPromptModal } = require('../../utils/panelHelpers');
 const logger = require('../../utils/logger');
 const {
     getSettings, updateSettings, resetStats, invalidate,
@@ -81,30 +82,12 @@ function parseIdList(raw) {
  * @returns {Promise<import('discord.js').ModalSubmitInteraction|null>} null on timeout
  */
 async function promptModal(componentInteraction, { title, inputs }) {
-    const modalId = `jg_modal_${componentInteraction.id}`;
-    const modal = new ModalBuilder().setCustomId(modalId).setTitle(truncate(title, 45));
-
-    for (const input of inputs) {
-        const builder = new TextInputBuilder()
-            .setCustomId(input.id)
-            .setLabel(truncate(input.label, 45))
-            .setStyle(input.paragraph ? TextInputStyle.Paragraph : TextInputStyle.Short)
-            .setRequired(input.required ?? false);
-        if (input.value !== undefined && input.value !== null) builder.setValue(String(input.value).slice(0, 4000));
-        if (input.placeholder) builder.setPlaceholder(truncate(input.placeholder, 100));
-        if (input.maxLength) builder.setMaxLength(input.maxLength);
-        modal.addComponents(new ActionRowBuilder().addComponents(builder));
-    }
-
-    await componentInteraction.showModal(modal);
-    try {
-        return await componentInteraction.awaitModalSubmit({
-            filter: m => m.customId === modalId && m.user.id === componentInteraction.user.id,
-            time: MODAL_TIMEOUT_MS,
-        });
-    } catch {
-        return null; // timed out; the panel stays as it was
-    }
+    // Implementation lives in utils/panelHelpers.js so the casino panel uses
+    // the same one. This wrapper keeps the twenty-odd call sites below and the
+    // jg_ modal id prefix exactly as they were.
+    return sharedPromptModal(componentInteraction, {
+        title, inputs, idPrefix: 'jg', timeoutMs: MODAL_TIMEOUT_MS,
+    });
 }
 
 // ── Section renderers ───────────────────────────────────────────────────────

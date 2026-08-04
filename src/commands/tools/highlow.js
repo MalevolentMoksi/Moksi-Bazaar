@@ -8,7 +8,9 @@ const {
   ComponentType,
   MessageFlags
 } = require('discord.js');
-const { getBalance, updateBalance } = require('../../utils/db');
+const { adjustBalance, recordGameResult } = require('../../utils/db');
+const { deductBet } = require('../../utils/gameHelpers');
+const { considerHeckle } = require('../../utils/casinoHeckle');
 
 const SUITS = ['♠', '♥', '♦', '♣'];
 const RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
@@ -51,15 +53,18 @@ module.exports = {
     let bet = interaction.options.getInteger('bet');
     const originalBet = bet;
 
-    let balance = await getBalance(userId);
-    if (bet > balance) {
-      return interaction.reply({ content: `❌ You only have $${balance}.`, flags: MessageFlags.Ephemeral});
-    }
-
-    balance -= bet;
-    await updateBalance(userId, balance);
-
+    // Deferred before the money moves, and deducted atomically. This used to
+    // read the balance, subtract locally and write the absolute result back,
+    // which quietly clobbers any other command that touched the same balance
+    // in between.
     await interaction.deferReply();
+
+    const opening = await deductBet(userId, bet);
+    if (!opening.success) {
+      return interaction.editReply(`❌ ${opening.error}`);
+    }
+    let balance = opening.newBalance;
+
     await runRound();
 
     async function runRound() {
@@ -121,8 +126,19 @@ module.exports = {
           resultText = `Wrong! Next card was **${format(next)}**.`;
         }
 
-        balance += payout;
-        await updateBalance(userId, balance);
+        if (payout > 0) {
+          const after = await adjustBalance(userId, payout);
+          if (after !== null) balance = after;
+        }
+        recordGameResult(userId, 'highlow', { wagered: bet, returned: payout }).catch(() => {});
+        considerHeckle({
+          channel: interaction.channel,
+          userId,
+          username: interaction.user.username,
+          game: 'highlow',
+          wagered: bet,
+          returned: payout,
+        });
 
         const resultEmbed = new EmbedBuilder()
           .setTitle('🃏 High-Low Results')
@@ -152,13 +168,12 @@ module.exports = {
           if (b.user.id !== userId) return b.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
           await b.deferUpdate();
           if (b.customId !== 'play_again') return;
-          const balNow = await getBalance(userId);
-          if (balNow < originalBet) {
-            return b.followUp({ content: `❌ You need $${originalBet} to play again.`, flags: MessageFlags.Ephemeral});
+          const again = await deductBet(userId, originalBet);
+          if (!again.success) {
+            return b.followUp({ content: `❌ ${again.error}`, flags: MessageFlags.Ephemeral });
           }
-          balance = balNow - originalBet;
+          balance = again.newBalance;
           bet = originalBet;
-          await updateBalance(userId, balance);
           againCollector.stop();
           await runRound();
         });

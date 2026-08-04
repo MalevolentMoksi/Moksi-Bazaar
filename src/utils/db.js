@@ -114,6 +114,56 @@ const init = async () => {
             PRIMARY KEY (user_id, command)
         );
         CREATE INDEX IF NOT EXISTS idx_user_cooldowns_expires ON user_cooldowns(expires_at);
+        -- One row per player per game. Money in and money out are tracked
+        -- separately from win and loss counts on purpose: a player can win
+        -- most of their hands and still be down, and the profile should be
+        -- able to say so rather than flattering them with a win rate.
+        CREATE TABLE IF NOT EXISTS game_stats (
+            user_id      TEXT NOT NULL,
+            game         TEXT NOT NULL,
+            rounds       BIGINT NOT NULL DEFAULT 0,
+            wagered      BIGINT NOT NULL DEFAULT 0,
+            returned     BIGINT NOT NULL DEFAULT 0,
+            wins         BIGINT NOT NULL DEFAULT 0,
+            losses       BIGINT NOT NULL DEFAULT 0,
+            pushes       BIGINT NOT NULL DEFAULT 0,
+            biggest_win  BIGINT NOT NULL DEFAULT 0,
+            biggest_loss BIGINT NOT NULL DEFAULT 0,
+            last_played  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, game)
+        );
+        CREATE INDEX IF NOT EXISTS idx_game_stats_user ON game_stats(user_id);
+        -- Claim dates are stored as a plain DATE in UTC so "one per day" is a
+        -- comparison rather than an interval, and a streak survives the bot
+        -- being down for part of a day.
+        CREATE TABLE IF NOT EXISTS daily_claims (
+            user_id      TEXT PRIMARY KEY,
+            last_claim   DATE NOT NULL,
+            streak       INTEGER NOT NULL DEFAULT 1,
+            best_streak  INTEGER NOT NULL DEFAULT 1,
+            total_claims INTEGER NOT NULL DEFAULT 1
+        );
+        -- Why an attitude moved, not just that it did. Capped per user by
+        -- recordAttitudeChange; see the note there.
+        CREATE TABLE IF NOT EXISTS attitude_ledger (
+            id            SERIAL PRIMARY KEY,
+            user_id       TEXT NOT NULL,
+            delta         REAL NOT NULL,
+            new_score     REAL NOT NULL,
+            new_level     TEXT NOT NULL,
+            raw_sentiment REAL,
+            reason        TEXT,
+            excerpt       TEXT,
+            created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_attitude_ledger_user ON attitude_ledger(user_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS user_inventory (
+            user_id     TEXT NOT NULL,
+            item_id     TEXT NOT NULL,
+            quantity    INTEGER NOT NULL DEFAULT 1,
+            acquired_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, item_id)
+        );
         CREATE TABLE IF NOT EXISTS reminders (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -924,8 +974,69 @@ async function updateUserAttitudeWithAI(userId, userMessage, conversationContext
             updated_at = NOW()
     `, [userId, newLevel, newScore]);
 
+    // The sentiment model already explains itself and that explanation was
+    // being thrown away, which is why an attitude could slide for weeks with
+    // no way to find out what caused it. Best-effort: a missing ledger row is
+    // not worth failing the attitude update over.
+    recordAttitudeChange(userId, {
+        delta: newScore - currentScore,
+        newScore,
+        newLevel,
+        rawSentiment: analysis.sentiment,
+        reason: analysis.reasoning,
+        excerpt: userMessage,
+    }).catch(error => logger.warn('Attitude ledger write failed', { userId, error: error.message }));
+
     // Return both smoothed score and original for proper recording
     return { sentiment: newScore, originalSentiment: analysis.sentiment, reasoning: analysis.reasoning };
+}
+
+// ── ATTITUDE LEDGER ─────────────────────────────────────────────────────────
+
+/** Excerpts are for recognising the moment, not for re-reading the message. */
+const LEDGER_EXCERPT_CHARS = 160;
+/** Rows below this delta are ordinary drift and would bury the real swings. */
+const LEDGER_MIN_DELTA = 0.02;
+
+async function recordAttitudeChange(userId, { delta, newScore, newLevel, rawSentiment, reason, excerpt }) {
+    if (!Number.isFinite(delta) || Math.abs(delta) < LEDGER_MIN_DELTA) return;
+    await pool.query(
+        `INSERT INTO attitude_ledger
+            (user_id, delta, new_score, new_level, raw_sentiment, reason, excerpt, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+        [
+            userId, delta, newScore, newLevel, rawSentiment,
+            String(reason ?? '').slice(0, 500),
+            String(excerpt ?? '').replace(/\s+/g, ' ').slice(0, LEDGER_EXCERPT_CHARS),
+        ]
+    );
+
+    // Keep it to the last 50 entries per user. This is a "what happened
+    // lately" log, not an archive, and it is written on every exchange.
+    await pool.query(
+        `DELETE FROM attitude_ledger WHERE user_id = $1 AND id NOT IN (
+            SELECT id FROM attitude_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50
+        )`,
+        [userId]
+    );
+}
+
+/** Most recent first. */
+async function getAttitudeLedger(userId, limit = 10) {
+    const { rows } = await pool.query(
+        `SELECT delta, new_score, new_level, raw_sentiment, reason, excerpt, created_at
+         FROM attitude_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+        [userId, limit]
+    );
+    return rows.map(r => ({
+        delta: Number(r.delta),
+        newScore: Number(r.new_score),
+        newLevel: r.new_level,
+        rawSentiment: Number(r.raw_sentiment),
+        reason: r.reason,
+        excerpt: r.excerpt,
+        createdAt: r.created_at,
+    }));
 }
 
 // ── MEMORY ──────────────────────────────────────────────────────────────────
@@ -1251,6 +1362,238 @@ async function cleanupMediaCache(maxRows = 1000) {
     }
 }
 
+// ── CASINO STATISTICS ───────────────────────────────────────────────────────
+
+/**
+ * Records one settled round.
+ *
+ * `wagered` and `returned` are both gross: everything the player put on the
+ * table and everything that came back, stake included. Net is derived, never
+ * stored, so a partial write can never leave the two disagreeing.
+ *
+ * Best-effort by design. Statistics are not worth failing a payout over, so a
+ * caller that cannot reach the database still finishes its round.
+ *
+ * @param {'blackjack'|'slots'|'roulette'|'craps'|'highlow'|'tetris'|'duel'|'gacha'} game
+ */
+async function recordGameResult(userId, game, { wagered = 0, returned = 0, rounds = 1 } = {}) {
+    try {
+        const net = returned - wagered;
+        await pool.query(
+            `INSERT INTO game_stats (user_id, game, rounds, wagered, returned,
+                                     wins, losses, pushes, biggest_win, biggest_loss, last_played)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+             ON CONFLICT (user_id, game) DO UPDATE SET
+                rounds       = game_stats.rounds + EXCLUDED.rounds,
+                wagered      = game_stats.wagered + EXCLUDED.wagered,
+                returned     = game_stats.returned + EXCLUDED.returned,
+                wins         = game_stats.wins + EXCLUDED.wins,
+                losses       = game_stats.losses + EXCLUDED.losses,
+                pushes       = game_stats.pushes + EXCLUDED.pushes,
+                biggest_win  = GREATEST(game_stats.biggest_win, EXCLUDED.biggest_win),
+                biggest_loss = GREATEST(game_stats.biggest_loss, EXCLUDED.biggest_loss),
+                last_played  = CURRENT_TIMESTAMP`,
+            [
+                userId, game, rounds, wagered, returned,
+                net > 0 ? 1 : 0,
+                net < 0 ? 1 : 0,
+                net === 0 ? 1 : 0,
+                net > 0 ? net : 0,
+                net < 0 ? -net : 0,
+            ]
+        );
+    } catch (error) {
+        logger.warn('Could not record game result', { userId, game, error: error.message });
+    }
+}
+
+/** Every game a player has touched, busiest first. */
+async function getGameStats(userId) {
+    const { rows } = await pool.query(
+        'SELECT * FROM game_stats WHERE user_id = $1 ORDER BY rounds DESC', [userId]
+    );
+    return rows.map(r => ({
+        game: r.game,
+        rounds: Number(r.rounds),
+        wagered: Number(r.wagered),
+        returned: Number(r.returned),
+        wins: Number(r.wins),
+        losses: Number(r.losses),
+        pushes: Number(r.pushes),
+        biggestWin: Number(r.biggest_win),
+        biggestLoss: Number(r.biggest_loss),
+        lastPlayed: r.last_played,
+    }));
+}
+
+/**
+ * The players who are furthest ahead or furthest behind, by lifetime net.
+ * @param {'up'|'down'} direction
+ */
+async function getCasinoLeaders(direction = 'up', limit = 10) {
+    const { rows } = await pool.query(
+        `SELECT user_id, SUM(returned - wagered) AS net, SUM(rounds) AS rounds
+         FROM game_stats GROUP BY user_id
+         HAVING SUM(rounds) > 0
+         ORDER BY SUM(returned - wagered) ${direction === 'down' ? 'ASC' : 'DESC'}
+         LIMIT $1`,
+        [limit]
+    );
+    return rows.map(r => ({ userId: r.user_id, net: Number(r.net), rounds: Number(r.rounds) }));
+}
+
+// ── DAILY CLAIM ─────────────────────────────────────────────────────────────
+
+/**
+ * Claims the daily stipend, if it is due.
+ *
+ * Days are UTC calendar days rather than rolling 24-hour windows, so the reset
+ * is at a time a player can learn instead of drifting later every day.
+ *
+ * @returns {Promise<{claimed: boolean, streak: number, bestStreak: number,
+ *   totalClaims: number, broke: boolean}>} `broke` says a previous streak
+ *   lapsed, which the caller may want to commiserate about.
+ */
+async function claimDaily(userId) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+            `SELECT last_claim, streak, best_streak, total_claims FROM daily_claims
+             WHERE user_id = $1 FOR UPDATE`, [userId]
+        );
+
+        const { rows: today } = await client.query(
+            "SELECT CURRENT_DATE AS today, CURRENT_DATE - 1 AS yesterday"
+        );
+        const todayStr = String(today[0].today);
+        const yesterdayStr = String(today[0].yesterday);
+
+        if (!rows.length) {
+            await client.query(
+                `INSERT INTO daily_claims (user_id, last_claim, streak, best_streak, total_claims)
+                 VALUES ($1, CURRENT_DATE, 1, 1, 1)`, [userId]
+            );
+            await client.query('COMMIT');
+            return { claimed: true, streak: 1, bestStreak: 1, totalClaims: 1, broke: false };
+        }
+
+        const row = rows[0];
+        const last = String(row.last_claim);
+        if (last === todayStr) {
+            await client.query('COMMIT');
+            return {
+                claimed: false, streak: row.streak, bestStreak: row.best_streak,
+                totalClaims: row.total_claims, broke: false,
+            };
+        }
+
+        const continued = last === yesterdayStr;
+        const streak = continued ? row.streak + 1 : 1;
+        const bestStreak = Math.max(streak, row.best_streak);
+
+        await client.query(
+            `UPDATE daily_claims SET last_claim = CURRENT_DATE, streak = $2,
+                best_streak = $3, total_claims = total_claims + 1
+             WHERE user_id = $1`, [userId, streak, bestStreak]
+        );
+        await client.query('COMMIT');
+        return {
+            claimed: true, streak, bestStreak,
+            totalClaims: row.total_claims + 1,
+            broke: !continued && row.streak > 1,
+        };
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+async function getDailyState(userId) {
+    const { rows } = await pool.query(
+        `SELECT last_claim, streak, best_streak, total_claims,
+                (last_claim = CURRENT_DATE) AS claimed_today
+         FROM daily_claims WHERE user_id = $1`, [userId]
+    );
+    if (!rows.length) return null;
+    return {
+        streak: rows[0].streak,
+        bestStreak: rows[0].best_streak,
+        totalClaims: rows[0].total_claims,
+        claimedToday: rows[0].claimed_today,
+    };
+}
+
+// ── INVENTORY ───────────────────────────────────────────────────────────────
+
+async function addInventoryItem(userId, itemId, quantity = 1) {
+    const { rows } = await pool.query(
+        `INSERT INTO user_inventory (user_id, item_id, quantity) VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = user_inventory.quantity + EXCLUDED.quantity
+         RETURNING quantity`,
+        [userId, itemId, quantity]
+    );
+    return rows[0].quantity;
+}
+
+async function getInventory(userId) {
+    const { rows } = await pool.query(
+        'SELECT item_id, quantity, acquired_at FROM user_inventory WHERE user_id = $1 ORDER BY acquired_at ASC',
+        [userId]
+    );
+    return rows.map(r => ({ itemId: r.item_id, quantity: r.quantity, acquiredAt: r.acquired_at }));
+}
+
+/**
+ * Buys an item, taking the money and granting it in one transaction so a
+ * failure between the two can never charge for nothing.
+ * @returns {Promise<{ok: boolean, balance?: number, quantity?: number, error?: string}>}
+ */
+async function purchaseItem(userId, itemId, price, { unique = false } = {}) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        if (unique) {
+            const { rows: owned } = await client.query(
+                'SELECT 1 FROM user_inventory WHERE user_id = $1 AND item_id = $2', [userId, itemId]
+            );
+            if (owned.length) {
+                await client.query('ROLLBACK');
+                return { ok: false, error: 'You already own that.' };
+            }
+        }
+
+        const { rows } = await client.query(
+            `UPDATE balances SET balance = balance - $2
+             WHERE user_id = $1 AND balance >= $2 RETURNING balance`,
+            [userId, price]
+        );
+        if (!rows.length) {
+            await client.query('ROLLBACK');
+            return { ok: false, error: 'You cannot afford that.' };
+        }
+
+        const { rows: inv } = await client.query(
+            `INSERT INTO user_inventory (user_id, item_id, quantity) VALUES ($1, $2, 1)
+             ON CONFLICT (user_id, item_id) DO UPDATE SET quantity = user_inventory.quantity + 1
+             RETURNING quantity`,
+            [userId, itemId]
+        );
+
+        await client.query('COMMIT');
+        return { ok: true, balance: Number(rows[0].balance), quantity: inv[0].quantity };
+    } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        logger.error('Purchase failed', { userId, itemId, error: error.message });
+        return { ok: false, error: 'Something went wrong; nothing was charged.' };
+    } finally {
+        client.release();
+    }
+}
+
 // ── EXPORTS ─────────────────────────────────────────────────────────────────
 module.exports = {
     pool,
@@ -1298,4 +1641,18 @@ module.exports = {
     getUserCooldownRemaining,
     isUserOnCooldown,
     clearExpiredCooldowns,
+    // Casino statistics
+    recordGameResult,
+    getGameStats,
+    getCasinoLeaders,
+    // Daily claim
+    claimDaily,
+    getDailyState,
+    // Inventory
+    addInventoryItem,
+    getInventory,
+    purchaseItem,
+    // Attitude ledger
+    recordAttitudeChange,
+    getAttitudeLedger,
 };

@@ -1,5 +1,58 @@
 // src/commands/games/tetris.js - Full Discord Tetris Implementation
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
+const {
+    adjustBalance, recordGameResult, setUserCooldown, getUserCooldownRemaining,
+} = require('../../utils/db');
+const logger = require('../../utils/logger');
+
+/**
+ * Tetris is the one game here that costs nothing to play, so it had nothing to
+ * do with the economy at all. Cleared lines now pay, with two brakes on it:
+ * a per-game ceiling, and an hour between paid games. Play as much as you like
+ * past that; it just stops printing money.
+ */
+const TETRIS_PER_LINE = 100;
+const TETRIS_MAX_PAID_LINES = 50;
+const TETRIS_PAYOUT_COOLDOWN_MS = 60 * 60 * 1000;
+const TETRIS_COOLDOWN_KEY = 'tetris_payout';
+
+/**
+ * Settles a finished game exactly once.
+ *
+ * The `paid` flag is set before the first await: the game can end down several
+ * code paths at once (top-out, quit, restart, collector expiry) and two of
+ * them racing must not pay twice.
+ *
+ * @returns {Promise<string|null>} a line to show the player, or null
+ */
+async function awardTetris(game) {
+    if (game.paid || game.lines <= 0) return null;
+    game.paid = true;
+
+    try {
+        const remaining = await getUserCooldownRemaining(game.userId, TETRIS_COOLDOWN_KEY);
+        if (remaining > 0) {
+            const mins = Math.ceil(remaining / 60000);
+            return `No payout: another paid game in ${mins} min. Lines still counted.`;
+        }
+
+        const paidLines = Math.min(game.lines, TETRIS_MAX_PAID_LINES);
+        const amount = paidLines * TETRIS_PER_LINE;
+        const balance = await adjustBalance(game.userId, amount);
+        await setUserCooldown(game.userId, TETRIS_COOLDOWN_KEY, TETRIS_PAYOUT_COOLDOWN_MS);
+        recordGameResult(game.userId, 'tetris', { wagered: 0, returned: amount }).catch(() => {});
+
+        logger.info('Tetris payout', { userId: game.userId, lines: game.lines, amount });
+
+        const capped = game.lines > TETRIS_MAX_PAID_LINES
+            ? ` (${TETRIS_MAX_PAID_LINES} line cap)` : '';
+        return `Earned **$${amount.toLocaleString()}** for ${paidLines} lines${capped}. `
+            + `Balance $${Number(balance ?? 0).toLocaleString()}.`;
+    } catch (error) {
+        logger.error('Tetris payout failed', { userId: game.userId, error: error.message });
+        return null;
+    }
+}
 
 // Tetris piece definitions with rotations
 const PIECES = {
@@ -87,7 +140,10 @@ class TetrisGame {
         this.level = 1;
         this.gameOver = false;
         this.paused = false;
-        
+        // Settlement state; see awardTetris.
+        this.paid = false;
+        this.payoutText = null;
+
         // Current piece
         this.currentPiece = null;
         this.currentX = 0;
@@ -352,7 +408,11 @@ function createGameEmbed(game) {
         )
         .setFooter({ text: 'Use buttons to control' })
         .setTimestamp();
-    
+
+    if (game.payoutText) {
+        embed.addFields({ name: '💰 Payout', value: game.payoutText, inline: false });
+    }
+
     return embed;
 }
 
@@ -510,29 +570,41 @@ module.exports = {
                     game.pause();
                     updated = true;
                     break;
-                case 'restart':
+                case 'restart': {
+                    // Settle the run being abandoned before it is thrown away,
+                    // then carry the receipt onto the new board so the player
+                    // is not left wondering where the money came from.
+                    const carried = await awardTetris(game);
                     game.destroy();
                     game = new TetrisGame(userId, channelId);
+                    if (carried) game.payoutText = `Previous game: ${carried}`;
                     activeGames.set(gameKey, game);
                     game.startFallTimer();
                     updated = true;
                     break;
-                case 'quit':
+                }
+                case 'quit': {
+                    const receipt = await awardTetris(game);
                     game.destroy();
                     collector.stop();
-                    return buttonInteraction.update({
-                        embeds: [new EmbedBuilder()
-                            .setTitle('🎮 Tetris - Game Ended')
-                            .setDescription('Thanks for playing!')
-                            .setColor(0xFF0000)
-                            .addFields(
-                                { name: 'Final Score', value: game.score.toString(), inline: true },
-                                { name: 'Lines Cleared', value: game.lines.toString(), inline: true },
-                                { name: 'Level Reached', value: game.level.toString(), inline: true }
-                            )
-                        ],
-                        components: []
-                    });
+                    const endEmbed = new EmbedBuilder()
+                        .setTitle('🎮 Tetris - Game Ended')
+                        .setDescription('Thanks for playing!')
+                        .setColor(0xFF0000)
+                        .addFields(
+                            { name: 'Final Score', value: game.score.toString(), inline: true },
+                            { name: 'Lines Cleared', value: game.lines.toString(), inline: true },
+                            { name: 'Level Reached', value: game.level.toString(), inline: true }
+                        );
+                    if (receipt) endEmbed.addFields({ name: '💰 Payout', value: receipt, inline: false });
+                    return buttonInteraction.update({ embeds: [endEmbed], components: [] });
+                }
+            }
+
+            // A top-out settles here, on whichever move caused it.
+            if (game.gameOver && !game.paid) {
+                game.payoutText = await awardTetris(game);
+                updated = true;
             }
 
             if (updated) {
@@ -549,9 +621,12 @@ module.exports = {
         });
 
         collector.on('end', () => {
-            if (game && !game.gameOver) {
-                game.destroy();
-            }
+            if (!game) return;
+            // The buttons are gone and there is nothing left to edit, but the
+            // lines were still cleared, so pay for them.
+            awardTetris(game).catch(error =>
+                logger.error('Tetris payout on expiry failed', { error: error.message }));
+            if (!game.gameOver) game.destroy();
         });
     },
 };

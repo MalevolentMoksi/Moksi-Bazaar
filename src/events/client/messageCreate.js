@@ -2,6 +2,7 @@
 const logger = require('../../utils/logger');
 const { handleWatchedMessage } = require('../../utils/joinGate/enforcement');
 const { getSpeakConfigValue } = require('../../utils/db');
+const { passesBouncer } = require('../../utils/interjectionBouncer');
 
 /** Discord's typing indicator lasts ~10s; refresh just inside that. */
 const TYPING_REFRESH_MS = 8_000;
@@ -39,6 +40,21 @@ async function shouldInterject(message) {
 
     const chance = Math.min(100, Math.max(0, Number(config.chance) || 0));
     if (Math.random() * 100 >= chance) return false;
+
+    // Last gate, and the only expensive one: everything above decides how
+    // often to interject, this decides whether this particular moment is worth
+    // it. Off unless switched on.
+    if (config.bouncer) {
+        const worthIt = await passesBouncer(message);
+        if (!worthIt) {
+            // A rejected roll costs a quarter of the window rather than all of
+            // it. Charging the full cooldown would let one dull moment buy
+            // silence through an interesting one; charging nothing would put
+            // the bouncer on every message in a busy channel.
+            lastInterjection.set(message.channelId, Date.now() - cooldownMs * 0.75);
+            return false;
+        }
+    }
 
     lastInterjection.set(message.channelId, Date.now());
     return true;

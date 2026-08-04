@@ -6,6 +6,7 @@
 const { ComponentType, MessageFlags } = require('discord.js');
 const logger = require('./logger');
 const { getBalance, adjustBalance } = require('./db');
+const { getBetLimits } = require('./casinoConfig');
 const { GAME_CONFIG } = require('./constants');
 
 /**
@@ -18,21 +19,30 @@ const { GAME_CONFIG } = require('./constants');
  * @returns {Promise<{success: boolean, newBalance?: number, error?: string}>}
  */
 async function deductBet(userId, betAmount, options = {}) {
-  const { minBet = 1, maxBet = Infinity } = options;
-
   try {
-    // Validate bet amount
+    // Every game takes its opening stake through here, which makes it the one
+    // place house limits can be enforced without editing seven commands. An
+    // explicit option still wins, so a game with its own reason for a bound
+    // keeps it.
+    const house = await getBetLimits().catch(() => ({ min: 1, max: Infinity }));
+    const minBet = options.minBet ?? house.min;
+    const maxBet = options.maxBet ?? house.max;
+
+    if (!Number.isFinite(betAmount) || Math.floor(betAmount) !== betAmount) {
+      return { success: false, error: 'Bets have to be whole dollars' };
+    }
+
     if (betAmount < minBet) {
       return {
         success: false,
-        error: `Minimum bet is $${minBet}`,
+        error: `Minimum bet is $${minBet.toLocaleString()}`,
       };
     }
 
     if (betAmount > maxBet) {
       return {
         success: false,
-        error: `Maximum bet is $${maxBet}`,
+        error: `Maximum bet is $${maxBet.toLocaleString()}`,
       };
     }
 

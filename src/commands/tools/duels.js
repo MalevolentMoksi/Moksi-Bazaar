@@ -12,6 +12,7 @@ const {
   getPendingDuelsFrom,
   updateDuelStatus,
   deleteDuel,
+  recordGameResult,
 } = require('../../utils/db');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
@@ -118,6 +119,13 @@ module.exports = {
       const loseBal = transfer.fromBalance;
 
       await updateDuelStatus(duel.id, 'completed');
+
+      // Both sides staked the same amount; the winner gets theirs back plus
+      // the loser's, which is what makes this a zero-sum entry in the books.
+      recordGameResult(winner.id, 'duel', { wagered: amount, returned: amount * 2 }).catch(() => {});
+      recordGameResult(loser.id, 'duel', { wagered: amount, returned: 0 }).catch(() => {});
+
+      logger.info('Duel settled', { winner: winner.id, loser: loser.id, amount });
 
       return interaction.reply({
         embeds: [

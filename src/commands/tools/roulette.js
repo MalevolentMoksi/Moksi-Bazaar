@@ -3,7 +3,8 @@
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
-const { adjustBalance } = require('../../utils/db');
+const { adjustBalance, recordGameResult } = require('../../utils/db');
+const { considerHeckle } = require('../../utils/casinoHeckle');
 const { deductBet } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
 
@@ -130,6 +131,18 @@ module.exports = {
     if (payout > 0) {
       finalBalance = await adjustBalance(userId, payout);
     }
+
+    // The refunded remainder was never at risk, so `staked` is what was
+    // actually wagered and is what the statistics should count.
+    recordGameResult(userId, 'roulette', { wagered: staked, returned: payout }).catch(() => {});
+    considerHeckle({
+      channel: interaction.channel,
+      userId,
+      username: interaction.user.username,
+      game: 'roulette',
+      wagered: staked,
+      returned: payout,
+    });
 
     logger.info('Roulette game played', {
       userId,

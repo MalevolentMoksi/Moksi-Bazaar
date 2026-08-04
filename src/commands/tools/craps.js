@@ -11,7 +11,8 @@ const {
   ComponentType,
   MessageFlags
 } = require('discord.js');
-const { adjustBalance } = require('../../utils/db');
+const { adjustBalance, recordGameResult } = require('../../utils/db');
+const { considerHeckle } = require('../../utils/casinoHeckle');
 const { deductBet } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
@@ -90,6 +91,15 @@ module.exports = {
       if (payout > 0) {
         balance = await adjustBalance(userId, payout);
       }
+      recordGameResult(userId, 'craps', { wagered: bet, returned: payout }).catch(() => {});
+      considerHeckle({
+        channel: interaction.channel,
+        userId,
+        username: interaction.user.username,
+        game: 'craps',
+        wagered: bet,
+        returned: payout,
+      });
 
       const desc = game.rolls
         .map((r, i) => `Roll ${i + 1}: **${r.d1} + ${r.d2} = ${r.total}**`)

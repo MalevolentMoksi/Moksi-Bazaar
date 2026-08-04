@@ -8,7 +8,7 @@ const {
   ComponentType,
   MessageFlags
 } = require('discord.js');
-const { getBalance, adjustBalance } = require('../../utils/db');
+const { getBalance, adjustBalance, recordGameResult } = require('../../utils/db');
 const crypto = require('crypto');
 
 // -- SYMBOL DEFINITIONS --------------------------------------------------
@@ -105,6 +105,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
   if (payout > 0) {
     balanceAfterSpin = await adjustBalance(userId, payout);
   }
+  recordGameResult(userId, 'slots', { wagered: bet, returned: payout }).catch(() => {});
 
   // Step 6) Build result embed & buttons
   const resultEmbed = new EmbedBuilder()
@@ -181,6 +182,9 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       finalBal = finalPayout > 0
         ? await adjustBalance(userId, finalPayout)
         : afterStake;
+      // A separate wager on its own terms: the winnings were already banked,
+      // and this stakes them again on a coin flip.
+      recordGameResult(userId, 'slots', { wagered: payout, returned: finalPayout }).catch(() => {});
     }
 
     resultEmbed.data.fields[4].value = finalPayout > 0

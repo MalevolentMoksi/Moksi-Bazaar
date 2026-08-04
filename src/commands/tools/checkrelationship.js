@@ -1,6 +1,8 @@
 // src/commands/tools/checkrelationship.js - Nuanced, trend-aware
 const { SlashCommandBuilder } = require('discord.js');
-const { getUserContext, getRecentMemories, getSentimentHistory } = require('../../utils/db.js');
+const {
+  getUserContext, getRecentMemories, getSentimentHistory, getAttitudeLedger,
+} = require('../../utils/db.js');
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { createRelationshipEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
@@ -103,6 +105,26 @@ module.exports = {
         recentMemories,
         detailed: showDetailed
       });
+
+      // The ledger is the sentiment model's own reasoning about a person, and
+      // reading that out in public would be a distinctly worse experience for
+      // whoever it is about. Owner only, and only when they asked for detail.
+      if (showDetailed && isOwner(interaction.user.id)) {
+        const ledger = await getAttitudeLedger(targetUser.id, 5).catch(() => []);
+        if (ledger.length) {
+          embed.addFields({
+            name: 'Why it moved',
+            value: ledger.map(entry => {
+              const when = Math.floor(new Date(entry.createdAt).getTime() / 1000);
+              const arrow = entry.delta > 0 ? '📈' : '📉';
+              const reason = (entry.reason || 'no reason recorded').slice(0, 120);
+              return `${arrow} **${entry.delta > 0 ? '+' : ''}${entry.delta.toFixed(2)}** `
+                + `→ ${entry.newLevel} <t:${when}:R>\n-# ${reason}`;
+            }).join('\n'),
+            inline: false,
+          });
+        }
+      }
 
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
