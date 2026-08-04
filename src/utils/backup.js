@@ -197,9 +197,10 @@ async function checkAndRun(client) {
  */
 async function sendStructureSnapshots(client, channelId) {
     let snapshot;
+    let resolveChannel;
     let getSettings;
     try {
-        ({ sendSnapshot: snapshot } = require('./joinGate/snapshot'));
+        ({ sendSnapshot: snapshot, resolveChannel } = require('./joinGate/snapshot'));
         ({ getSettings } = require('./joinGate/config'));
     } catch (error) {
         logger.warn('[SNAPSHOT] Module unavailable', { error: error.message });
@@ -211,8 +212,13 @@ async function sendStructureSnapshots(client, channelId) {
             const settings = await getSettings(guild.id);
             if (!settings.snapshot_enabled) continue;
 
-            const result = await snapshot(guild, settings.guard_channel_id || channelId);
-            if (result.ok) logger.info('[SNAPSHOT] Posted', { guildId: guild.id, ...result.meta });
+            // Same resolution the button uses, and a DM as well. The channel
+            // copy is convenience; the DM is the one that survives someone
+            // deleting the channel it would otherwise have been sitting in.
+            const result = await snapshot(guild, resolveChannel(settings, channelId), {
+                dmUserId: settings.snapshot_dm_owner ? (process.env.OWNER_ID || null) : null,
+            });
+            if (result.ok) logger.info('[SNAPSHOT] Posted', { guildId: guild.id, sentTo: result.sentTo, ...result.meta });
             else logger.warn('[SNAPSHOT] Did not post', { guildId: guild.id, error: result.error });
         } catch (error) {
             logger.warn('[SNAPSHOT] Guild failed', { guildId: guild.id, error: error.message });

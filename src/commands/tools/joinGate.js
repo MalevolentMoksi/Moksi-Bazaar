@@ -30,7 +30,7 @@ const {
     scoreAccount, explain, DEFAULT_WEIGHTS, DEFAULT_SCAM_KEYWORDS,
 } = require('../../utils/joinGate/suspicion');
 const { describeShape } = require('../../utils/joinGate/cohorts');
-const { sendSnapshot } = require('../../utils/joinGate/snapshot');
+const { sendSnapshot, resolveChannel: resolveSnapshotChannel } = require('../../utils/joinGate/snapshot');
 const { stats: phishingStats, startAutoRefresh: startPhishingRefresh } = require('../../utils/joinGate/phishing');
 const { syncGuild: syncInvites, canRead: canReadInvites } = require('../../utils/joinGate/invites');
 const { describeRouting, logConfigChange, logTest, CATEGORIES } = require('../../utils/joinGate/logging');
@@ -605,11 +605,14 @@ function renderGuard(settings) {
             },
             {
                 name: 'Weekly structure snapshot',
-                value: settings.snapshot_enabled
+                value: (settings.snapshot_enabled
                     ? '🟢 On. Channels, roles, permission overwrites, who holds which role, settings and emoji, '
-                      + 'posted alongside the database backup.\n'
-                      + '-# Capture only: there is no restore button, here or anywhere'
-                    : '⚪ Off. The database backup holds nothing about the server itself',
+                      + `sent to ${channelRef(resolveSnapshotChannel(settings))}`
+                    : '⚪ Off. The database backup holds nothing about the server itself')
+                    + (settings.snapshot_dm_owner
+                        ? '\n-# 🟢 also DM\'d to you, which is the copy that survives the server being wrecked'
+                        : '\n-# ⚠️ no DM copy: the only backup would live inside the server it backs up')
+                    + '\n-# Capture only: there is no restore button, here or anywhere',
                 inline: false,
             },
             {
@@ -647,12 +650,20 @@ function renderGuard(settings) {
                 .setCustomId('jg_guard_exempt_clear')
                 .setLabel('Clear exemptions')
                 .setStyle(ButtonStyle.Danger)
-                .setDisabled(!settings.guard_exempt_user_ids?.length),
+                .setDisabled(!settings.guard_exempt_user_ids?.length)
+        ),
+        // Snapshots get their own row: they are storage, not detection, and
+        // there is now a third control that would not have fitted above.
+        new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('jg_guard_snapshot')
                 .setLabel(settings.snapshot_enabled ? 'Stop snapshots' : 'Weekly snapshot')
                 .setStyle(settings.snapshot_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('jg_guard_snapshot_now').setLabel('Snapshot now').setStyle(ButtonStyle.Primary)
+            new ButtonBuilder().setCustomId('jg_guard_snapshot_now').setLabel('Snapshot now').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId('jg_guard_snapshot_dm')
+                .setLabel(settings.snapshot_dm_owner ? 'Stop DM copy' : 'DM me a copy')
+                .setStyle(settings.snapshot_dm_owner ? ButtonStyle.Secondary : ButtonStyle.Success)
         ),
         new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
@@ -1468,23 +1479,31 @@ module.exports = {
                         `Weekly structure snapshot **${settings.snapshot_enabled ? 'off' : 'on'}**`);
                 }
                 if (id === 'jg_guard_snapshot_now') {
-                    const target = settings.guard_channel_id || settings.log_channel_id;
-                    if (!target) {
+                    const target = resolveSnapshotChannel(settings);
+                    const dmUserId = settings.snapshot_dm_owner ? (process.env.OWNER_ID || null) : null;
+                    if (!target && !dmUserId) {
                         return i.reply({
-                            content: '⚠️ Set a guard alert channel first: that is where the snapshot goes.',
+                            content: '⚠️ Nowhere to send it. Set a guard alert channel, or turn on the DM copy.',
                             flags: MessageFlags.Ephemeral,
                         });
                     }
                     await i.deferReply({ flags: MessageFlags.Ephemeral });
-                    const result = await sendSnapshot(guild, target);
+                    const result = await sendSnapshot(guild, target, { dmUserId });
                     return i.editReply({
                         content: result.ok
-                            ? `📸 Snapshot posted to <#${target}>: **${result.meta.channels}** channels, `
+                            ? `📸 Snapshot sent (${result.sentTo.join(' and ')}): **${result.meta.channels}** channels, `
                               + `**${result.meta.roles}** roles, **${result.meta.overwrites}** permission overwrites, `
                               + `**${result.meta.membersWithRoles}** members with roles, `
                               + `${(result.meta.bytes / 1024).toFixed(0)} KB.`
+                              + (result.warning ? `\n-# but: ${result.warning}` : '')
                             : `⚠️ Snapshot failed: ${result.error}`,
                     });
+                }
+                if (id === 'jg_guard_snapshot_dm') {
+                    return applyChange(i, { snapshot_dm_owner: !settings.snapshot_dm_owner },
+                        settings.snapshot_dm_owner
+                            ? 'Snapshots will no longer be DM\'d: the only copy would live in the server it describes'
+                            : 'Snapshots will be DM\'d as well, so a copy survives the server');
                 }
 
                 if (id === 'jg_guard_exempt_clear') {

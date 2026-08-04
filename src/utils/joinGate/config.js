@@ -137,6 +137,9 @@ const DEFAULTS = Object.freeze({
     guard_exempt_user_ids: [],
 
     snapshot_enabled: false,
+    // A snapshot kept only in the server it describes does not survive the one
+    // event it exists for. The DM is the copy that outlives the server.
+    snapshot_dm_owner: true,
     dm_watch_message: DEFAULT_DM_WATCH_MESSAGE,
     // Invite attribution.
     invite_tracking_enabled: false,
@@ -179,7 +182,8 @@ const WRITABLE_COLUMNS = new Set([
     'watch_automod_enabled',
     'guard_enabled', 'guard_channel_id', 'guard_dm_owner', 'guard_window_seconds',
     'guard_delete_limit', 'guard_create_limit', 'guard_perm_limit', 'guard_webhook_limit',
-    'guard_watch_identity', 'guard_watch_bots', 'guard_exempt_user_ids', 'snapshot_enabled',
+    'guard_watch_identity', 'guard_watch_bots', 'guard_exempt_user_ids',
+    'snapshot_enabled', 'snapshot_dm_owner',
     'invite_tracking_enabled',
 ]);
 
@@ -217,6 +221,7 @@ function ensureColumns() {
             ADD COLUMN IF NOT EXISTS guard_watch_bots      BOOLEAN NOT NULL DEFAULT true,
             ADD COLUMN IF NOT EXISTS guard_exempt_user_ids TEXT[],
             ADD COLUMN IF NOT EXISTS snapshot_enabled      BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS snapshot_dm_owner     BOOLEAN NOT NULL DEFAULT true,
             ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
             ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT`
     ).catch(error => {

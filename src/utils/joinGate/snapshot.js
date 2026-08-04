@@ -142,15 +142,34 @@ function snapshotFilename(guild, date = new Date()) {
 }
 
 /**
- * Builds a snapshot and posts it.
- * @returns {Promise<{ok: boolean, meta?: object, error?: string}>}
+ * Where a snapshot should go, resolved in one place.
+ *
+ * There were two of these once, one for the weekly run and one for the button,
+ * and they disagreed about the fallback. That is the worst kind of bug in a
+ * backup: you press the button, watch the file arrive, and the scheduled copy
+ * has been going somewhere else the whole time.
  */
-async function sendSnapshot(guild, channelId) {
+function resolveChannel(settings, fallbackChannelId = null) {
+    return settings?.guard_channel_id || settings?.log_channel_id || fallbackChannelId || null;
+}
+
+/**
+ * Builds a snapshot and delivers it.
+ *
+ * Delivered to a DM as well as a channel, and the DM is the copy that matters.
+ * A snapshot stored in the server it is a snapshot OF does not survive the one
+ * event it exists for: whoever deletes your channels deletes the backups with
+ * them. A direct message is outside the server entirely.
+ *
+ * Built once and sent twice, because the expensive part is fetching 1,600
+ * members and doing it again for the second destination would be silly.
+ *
+ * @returns {Promise<{ok: boolean, meta?: object, error?: string, sentTo?: string[]}>}
+ */
+async function sendSnapshot(guild, channelId, { dmUserId = null } = {}) {
     try {
-        const channel = guild.channels.cache.get(channelId)
-            ?? await guild.channels.fetch(channelId).catch(() => null);
-        if (!channel?.isTextBased?.()) {
-            return { ok: false, error: 'The snapshot channel is gone or is not a text channel.' };
+        if (!channelId && !dmUserId) {
+            return { ok: false, error: 'Nowhere to send it: no channel set and no owner to DM.' };
         }
 
         const { buffer, meta } = await buildSnapshot(guild);
@@ -162,20 +181,54 @@ async function sendSnapshot(guild, channelId) {
             };
         }
 
-        await channel.send({
-            content: `**Server structure snapshot** ${new Date().toISOString().slice(0, 10)}\n`
+        const payload = {
+            content: `**Server structure snapshot** ${new Date().toISOString().slice(0, 10)} `
+                + `(${guild.name})\n`
                 + `${meta.channels} channels, ${meta.roles} roles, ${meta.overwrites} permission overwrites, `
                 + `${meta.membersWithRoles} members with roles, ${(meta.bytes / 1024).toFixed(0)} KB gzipped.\n`
                 + '-# Capture only. There is no restore button anywhere; putting this back is a '
                 + 'decision made by hand, with the file open.',
             files: [new AttachmentBuilder(buffer, { name: snapshotFilename(guild) })],
-        });
+        };
 
-        return { ok: true, meta };
+        const sentTo = [];
+        const failures = [];
+
+        if (channelId) {
+            const channel = guild.channels.cache.get(channelId)
+                ?? await guild.channels.fetch(channelId).catch(() => null);
+            if (channel?.isTextBased?.()) {
+                try {
+                    await channel.send(payload);
+                    sentTo.push('channel');
+                } catch (error) {
+                    failures.push(`channel: ${error.message}`);
+                }
+            } else {
+                failures.push('channel: gone, or not a text channel');
+            }
+        }
+
+        if (dmUserId) {
+            try {
+                const owner = await guild.client.users.fetch(dmUserId);
+                await owner.send(payload);
+                sentTo.push('DM');
+            } catch (error) {
+                failures.push(`DM: ${error.message}`);
+            }
+        }
+
+        if (sentTo.length === 0) {
+            return { ok: false, error: failures.join('; ') || 'nothing was sent', meta };
+        }
+        return { ok: true, meta, sentTo, warning: failures.length ? failures.join('; ') : null };
     } catch (error) {
         logger.error('[SNAPSHOT] Failed', { error: error.message, stack: error.stack });
         return { ok: false, error: error.message };
     }
 }
 
-module.exports = { buildSnapshot, sendSnapshot, snapshotFilename, MAX_ATTACHMENT_BYTES };
+module.exports = {
+    buildSnapshot, sendSnapshot, snapshotFilename, resolveChannel, MAX_ATTACHMENT_BYTES,
+};
