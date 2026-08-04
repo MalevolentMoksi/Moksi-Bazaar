@@ -84,6 +84,36 @@ describe('backup delivery', () => {
         expect(result.errors[0]).toContain('Building the dump failed');
     });
 
+    test('the fallback DM stays quiet when the channel took it', async () => {
+        const { client, channel, user } = fakeWorld();
+        const result = await sendBackup(client, { channelId: 'c1', fallbackDmUserId: 'u1' }, { build: smallDump });
+        expect(result.sentTo).toEqual(['channel']);
+        expect(channel.send).toHaveBeenCalledTimes(1);
+        expect(user.send).not.toHaveBeenCalled();
+    });
+
+    test('the fallback DM fires when the channel is gone', async () => {
+        const { client, user } = fakeWorld({ channelAlive: false });
+        const result = await sendBackup(client, { channelId: 'gone', fallbackDmUserId: 'u1' }, { build: smallDump });
+        expect(result.ok).toBe(true);
+        expect(result.sentTo).toEqual(['DM']);
+        expect(user.send).toHaveBeenCalledTimes(1);
+    });
+
+    test('with no channel at all, the fallback is the whole delivery', async () => {
+        const { client, user } = fakeWorld();
+        const result = await sendBackup(client, { fallbackDmUserId: 'u1' }, { build: smallDump });
+        expect(result.sentTo).toEqual(['DM']);
+        expect(user.send).toHaveBeenCalledTimes(1);
+    });
+
+    test('both destinations dead is an honest failure', async () => {
+        const { client } = fakeWorld({ channelAlive: false, dmAlive: false });
+        const result = await sendBackup(client, { channelId: 'gone', fallbackDmUserId: 'u1' }, { build: smallDump });
+        expect(result.ok).toBe(false);
+        expect(result.errors.join(' ')).toContain('Fallback DM failed');
+    });
+
     test('the filename carries the date', () => {
         expect(backupFilename(new Date('2026-08-04T12:00:00Z'))).toBe('bazaar-backup-2026-08-04.json.gz');
     });

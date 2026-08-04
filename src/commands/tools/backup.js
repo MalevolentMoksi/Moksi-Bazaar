@@ -46,8 +46,9 @@ module.exports = {
         if (sub === 'here') {
             await setBackupChannelId(interaction.channelId);
             return interaction.editReply(
-                `Weekly backups will go to ${interaction.channel}, on top of the DM copy. `
-                + 'The first one lands within six hours.'
+                `Weekly dumps and snapshots will be filed in ${interaction.channel}, and will stop `
+                + 'DMing you. The first one lands within six hours. Mute the channel; you should never '
+                + 'need to look at it.'
             );
         }
 
@@ -56,8 +57,8 @@ module.exports = {
             await setBackupChannelId(null);
             return interaction.editReply(
                 had
-                    ? 'The channel copy is off. Weekly dumps still land in your DMs, and `/backup now` still works.'
-                    : 'There was no channel copy to turn off. Weekly dumps still land in your DMs.'
+                    ? 'Archive channel cleared. Weekly dumps go back to your DMs, since they have to go somewhere.'
+                    : 'There was no archive channel. Weekly dumps land in your DMs.'
             );
         }
 
@@ -67,8 +68,8 @@ module.exports = {
         const lastText = last ? `<t:${Math.floor(last / 1000)}:R>` : 'never';
         return interaction.editReply(
             (channelId
-                ? `Weekly backups go to <#${channelId}> and your DMs.`
-                : 'Weekly backups go to your DMs.')
+                ? `Weekly dumps are filed in <#${channelId}>; you are only DMed if that fails.`
+                : 'Weekly dumps are DMed to you. `/backup here` in a quiet channel stops that.')
             + ` Last run: ${lastText}.`
         );
     },

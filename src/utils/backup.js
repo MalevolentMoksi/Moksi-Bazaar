@@ -11,9 +11,16 @@
  * container has no postgres client binaries and pulling one in for this is not
  * worth it. scripts/restore-backup.js reads the format back.
  *
- * The weekly run always DMs the owner a copy; `/backup here` adds a channel
- * copy on top. The DM is the backbone on purpose: a dump that only lives in a
- * channel of the server it protects burns down with the server.
+ * The weekly dump goes to an archive channel, and DMs the owner only when
+ * there is no archive channel or the delivery to it failed. Needing this file
+ * is a rare-to-never event, so a weekly DM is a weekly interruption charged
+ * against an emergency that may never come; a muted channel costs nothing
+ * until the day it matters. The DM stays as the safety net, because insurance
+ * that silently stopped existing is worse than insurance that nags.
+ *
+ * Pick the archive channel in a server OTHER than the one being protected
+ * (the dashboard's server picker makes that easy). A dump filed inside the
+ * server it backs up does not survive the event it exists for.
  */
 
 const zlib = require('zlib');
@@ -112,21 +119,22 @@ function backupFilename(date = new Date()) {
 }
 
 /**
- * Builds one dump and delivers it everywhere asked: a channel, the owner's
- * DMs, or both. One build, then independent sends; a dead destination never
- * blocks a live one, because the DM copy is the one that must survive the
- * server burning down.
+ * Builds one dump and delivers it. A channel copy, a DM copy, or both, plus
+ * `fallbackDmUserId`, which fires only when every other destination failed:
+ * that is what lets the weekly run stay quiet without ever going silent.
  *
- * `build` is injectable so tests can exercise delivery without a database.
+ * One build, then independent sends, so a dead destination never blocks a
+ * live one. `build` is injectable so tests can exercise delivery without a
+ * database.
  *
  * @returns {Promise<{ok: boolean, sentTo: string[], errors: string[], meta?: object}>}
  */
 async function sendBackup(client, destinations = {}, { build = buildBackup } = {}) {
-    const { channelId = null, dmUserId = null } = destinations;
+    const { channelId = null, dmUserId = null, fallbackDmUserId = null } = destinations;
     const sentTo = [];
     const errors = [];
 
-    if (!channelId && !dmUserId) {
+    if (!channelId && !dmUserId && !fallbackDmUserId) {
         return { ok: false, sentTo, errors: ['Nowhere to send the backup.'] };
     }
 
@@ -163,13 +171,21 @@ async function sendBackup(client, destinations = {}, { build = buildBackup } = {
         files: [new AttachmentBuilder(buffer, { name: backupFilename() })],
     });
 
+    const toChannel = async (id) => {
+        const channel = await client.channels.fetch(id).catch(() => null);
+        if (!channel?.isTextBased?.()) {
+            throw new Error('the archive channel is gone or is not a text channel');
+        }
+        await channel.send(payload());
+    };
+    const toDm = async (id) => {
+        const user = await client.users.fetch(id);
+        await user.send(payload());
+    };
+
     if (channelId) {
         try {
-            const channel = await client.channels.fetch(channelId).catch(() => null);
-            if (!channel?.isTextBased?.()) {
-                throw new Error('the backup channel is gone or is not a text channel');
-            }
-            await channel.send(payload());
+            await toChannel(channelId);
             sentTo.push('channel');
         } catch (error) {
             errors.push(`Channel copy failed: ${error.message}`);
@@ -178,11 +194,21 @@ async function sendBackup(client, destinations = {}, { build = buildBackup } = {
 
     if (dmUserId) {
         try {
-            const user = await client.users.fetch(dmUserId);
-            await user.send(payload());
+            await toDm(dmUserId);
             sentTo.push('DM');
         } catch (error) {
             errors.push(`DM copy failed: ${error.message}`);
+        }
+    }
+
+    // Only when everything else came to nothing: the week's dump has to land
+    // somewhere, and a DM the owner did not ask for beats no backup at all.
+    if (!sentTo.length && fallbackDmUserId) {
+        try {
+            await toDm(fallbackDmUserId);
+            sentTo.push('DM');
+        } catch (error) {
+            errors.push(`Fallback DM failed: ${error.message}`);
         }
     }
 
@@ -212,8 +238,9 @@ async function checkAndRun(client, { send = sendBackup } = {}) {
     // this retrying in a tight loop.
     await setSpeakConfigValue(LAST_RUN_KEY, Date.now());
 
-    // The DM copy is unconditional; the channel copy rides along if configured.
-    const result = await send(client, { channelId, dmUserId: OWNER_ID });
+    // Quiet by default: the archive channel takes it, and the owner is only
+    // disturbed when that did not work or was never set up.
+    const result = await send(client, { channelId, fallbackDmUserId: OWNER_ID });
     if (result.ok) {
         logger.info('[BACKUP] Weekly backup sent', { sentTo: result.sentTo, ...result.meta });
     } else {
@@ -229,7 +256,8 @@ async function checkAndRun(client, { send = sendBackup } = {}) {
 }
 
 /**
- * Rides the same weekly slot as the database dump.
+ * Rides the same weekly slot as the database dump, and files itself in the
+ * same archive channel when one is set.
  *
  * The dump holds everything this bot knows and nothing about the server it runs
  * in. A snapshot is the other half: if the channel tree were deleted tomorrow,
@@ -256,10 +284,10 @@ async function sendStructureSnapshots(client, channelId) {
             const settings = await getSettings(guild.id);
             if (!settings.snapshot_enabled) continue;
 
-            // Same resolution the button uses, and a DM as well. The channel
-            // copy is convenience; the DM is the one that survives someone
-            // deleting the channel it would otherwise have been sitting in.
-            const result = await snapshot(guild, resolveChannel(settings, channelId), {
+            // The archive channel wins over the guard channel when one is set.
+            // Guard alerts are things to react to; a weekly snapshot is a thing
+            // to file, and mixing the two buries the alerts under paperwork.
+            const result = await snapshot(guild, channelId || resolveChannel(settings), {
                 dmUserId: settings.snapshot_dm_owner ? (process.env.OWNER_ID || null) : null,
             });
             if (result.ok) logger.info('[SNAPSHOT] Posted', { guildId: guild.id, sentTo: result.sentTo, ...result.meta });

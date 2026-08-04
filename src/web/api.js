@@ -288,6 +288,31 @@ function createApi(client) {
         });
     }));
 
+    // ── Where backups are filed ─────────────────────────────────────────
+    // Not a guild setting: one archive channel serves every server, which is
+    // the point. Picking it in a different server than the one being backed
+    // up is the whole idea, and the dashboard's server picker is how.
+    router.post('/guild/:g/backup-channel', wrap(async (req, res) => {
+        const { setBackupChannelId } = require('../utils/backup');
+        const guild = guildOf(req);
+        if (!guild) return res.status(404).json({ error: 'The bot is not in that server.' });
+
+        const channelId = String(fieldsOf(req).channel ?? '').trim();
+        if (channelId === '') {
+            await setBackupChannelId(null);
+            logger.info('[DASHBOARD] Backup archive channel cleared', { by: req.owner.uid });
+            return res.json({ ok: true, summary: 'Archive channel cleared. Weekly dumps will be DMed to you instead.' });
+        }
+
+        const channel = guild.channels.cache.get(channelId);
+        if (!channel?.isTextBased?.() || channel.isThread?.()) {
+            return res.status(400).json({ error: 'That is not a text channel in this server.' });
+        }
+        await setBackupChannelId(channelId);
+        logger.info('[DASHBOARD] Backup archive channel set', { channelId, by: req.owner.uid });
+        return res.json({ ok: true, summary: `Backups and snapshots will be filed in #${channel.name}` });
+    }));
+
     // ── Back up now ─────────────────────────────────────────────────────
     // The whole database, not one guild's slice; the :g in the route only
     // keeps the client-side plumbing uniform. Sends wherever the weekly run
@@ -298,7 +323,7 @@ function createApi(client) {
         const { OWNER_ID } = require('../utils/constants');
 
         const channelId = await getBackupChannelId();
-        const result = await sendBackup(client, { channelId, dmUserId: OWNER_ID });
+        const result = await sendBackup(client, { channelId, fallbackDmUserId: OWNER_ID });
         if (!result.ok) return res.status(502).json({ error: result.errors.join(' ') });
 
         // Stamped so the weekly slot does not double up right after a manual run.

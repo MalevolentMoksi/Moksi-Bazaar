@@ -17,8 +17,10 @@ describe('the guard page', () => {
         guardChannelName: null,
         snapshotChannelName: null,
         snapshotHasDm: true,
+        backupChannelId: null,
         backupChannelName: null,
         backupLastMs: 0,
+        channels: [{ id: '1', name: 'general' }, { id: '9', name: 'the-vault' }],
         auditEntries: [],
         auditError: null,
         watchedNouns: ['channel deleted', 'role deleted', 'bot added'],
@@ -48,20 +50,32 @@ describe('the guard page', () => {
         expect(out).toContain('inside the server it backs up');
     });
 
-    test('the backup card always offers the button, and is honest about never', () => {
+    test('the archive card offers the button, and is honest about never', () => {
         const out = guardPage.render(base).__raw;
         expect(out).toContain('/api/guild/g1/backup');
         expect(out).toContain('Back up now');
         expect(out).toContain('never yet');
-        expect(out).toContain('DMed to you');
     });
 
-    test('a configured channel copy and a past run both show', () => {
+    test('with no archive channel it says so, and says why that costs a DM', () => {
+        const out = guardPage.render(base).__raw;
+        expect(out).toContain('your DMs');
+        expect(out).toContain('interrupt you');
+    });
+
+    test('a configured archive channel is named, preselected, and stops the DM warning', () => {
         const out = guardPage.render({
-            ...base, backupChannelName: 'the-vault', backupLastMs: base.now - 3 * 86_400_000,
+            ...base, backupChannelId: '9', backupChannelName: 'the-vault', backupLastMs: base.now - 3 * 86_400_000,
         }).__raw;
         expect(out).toContain('#the-vault');
+        expect(out).not.toContain('interrupt you');
         expect(out).not.toContain('never yet');
+        const select = out.slice(out.indexOf('id="bch"'), out.indexOf('</select>', out.indexOf('id="bch"')));
+        expect(select).toContain('value="9" selected');
+    });
+
+    test('the archive picker posts to its own endpoint', () => {
+        expect(guardPage.render(base).__raw).toContain('data-api="backup-channel"');
     });
 
     test('an unreadable audit log names the missing permission', () => {

@@ -44,8 +44,15 @@ async function data(client, guildId) {
     }
 
     const channelName = id => guild?.channels.cache.get(id)?.name ?? null;
-    const snapshotChannelId = resolveChannel(settings);
     const backupChannelId = await getBackupChannelId();
+    // The archive channel wins for both weekly files when one is set.
+    const snapshotChannelId = backupChannelId || resolveChannel(settings);
+    const channels = guild
+        ? [...guild.channels.cache.values()]
+            .filter(c => c.isTextBased?.() && !c.isThread?.())
+            .sort((a, b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))
+            .map(c => ({ id: c.id, name: c.name }))
+        : [];
 
     return {
         settings,
@@ -53,8 +60,10 @@ async function data(client, guildId) {
         guardChannelName: channelName(settings.guard_channel_id),
         snapshotChannelName: channelName(snapshotChannelId),
         snapshotHasDm: Boolean(settings.snapshot_dm_owner),
+        backupChannelId,
         backupChannelName: backupChannelId ? channelName(backupChannelId) : null,
         backupLastMs: Number(await getSpeakConfigValue(LAST_RUN_KEY, 0)) || 0,
+        channels,
         auditEntries,
         auditError,
         watchedNouns: [...new Set(Object.values(WATCHED).map(w => w.noun))],
@@ -111,15 +120,29 @@ function render(model) {
     });
 
     const backupCard = card({
-        title: 'Database backup',
-        hint: 'balances, warns, mod history, settings; everything the bot knows',
+        title: 'Archive',
+        hint: 'the weekly database dump and structure snapshot, filed together',
         body: html`<dl class="kv">
-            <dt>Weekly</dt><dd>${pill('on', 'DMed to you')}
-                ${model.backupChannelName ? html` + #${model.backupChannelName}` : html` <span class="hint">(no channel copy; /backup here adds one)</span>`}</dd>
+            <dt>Filed in</dt><dd>${model.backupChannelName
+                ? html`#${model.backupChannelName}`
+                : html`${pill('warn', 'your DMs')} <span class="hint">no channel set, so it has to interrupt you</span>`}</dd>
             <dt>Last run</dt><dd>${model.backupLastMs
                 ? html`<span title="${fmtDateTime(model.backupLastMs)}">${fmtAgo(model.backupLastMs, model.now)}</span>`
                 : html`<span class="hint">never yet</span>`}</dd>
         </dl>
+        <form data-api="backup-channel" class="field" data-reload>
+            <label for="bch">Archive channel</label>
+            <div class="inline-fields">
+                <select id="bch" name="channel">
+                    <option value="">(none: DM me instead)</option>
+                    ${model.channels.map(c => html`<option value="${c.id}" ${c.id === model.backupChannelId ? raw('selected') : ''}>#${c.name}</option>`)}
+                </select>
+                <button type="submit" class="ghost">Save</button>
+            </div>
+        </form>
+        <p class="hint">Pick a quiet channel in a <strong>different server</strong> (switch servers with the picker
+        above, the choice is shared): a dump filed inside the server it backs up dies with it. Mute the channel and
+        forget it exists until the day you need it.</p>
         <div class="form-actions">
             <button data-action="/api/guild/${model.guildId}/backup" data-busy="Dumping every table..." data-reload>Back up now</button>
         </div>`,
