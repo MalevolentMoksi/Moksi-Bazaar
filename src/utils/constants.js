@@ -254,12 +254,15 @@ const SPEAK_DISABLED_REPLIES = [
 ];
 
 const OWNER_REJECTION_JOKES = [
-    "Woah! Trying to tamper with the wires, buddy?",
     "Hands off, weirdo.",
-    "Only the Supreme Goat can tweak these settings.",
     "you STINK.",
     "Shoo.",
-    "You are not the guy."
+    "You are not the guy.",
+    "No.",
+    "Absolutely not.",
+    "lol",
+    "Access denied. Appeal denied. Appeal of appeal denied.",
+    "Not with those hands."
 ];
 
 // ── HELPER FUNCTIONS ────────────────────────────────────────────────────────

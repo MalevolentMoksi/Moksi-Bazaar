@@ -34,6 +34,19 @@ let refreshTimer = null;
 
 const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
 
+/**
+ * Bare hostname-shaped tokens: `steamcomunity.com`, `discord-nitro.ru/claim`.
+ *
+ * URL_RE deliberately requires a scheme or a www., because "anything with a
+ * dot in it" would call node.js and file.txt links. That is right for counting
+ * links, and wrong for catching scams: Discord renders `steamcomunity.com/gift`
+ * as a clickable link with no scheme at all, and that is the single most common
+ * shape a Discord scam takes. Matching this pattern is only ever ACTED on after
+ * checking it against the blocklist, so a false match on `node.js` costs
+ * nothing; it simply is not a known scam domain.
+ */
+const BARE_HOST_RE = /\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24})\b/gi;
+
 function parsePayload(text) {
     const data = JSON.parse(text);
     if (Array.isArray(data)) return data;
@@ -145,10 +158,22 @@ function hostOf(rawUrl) {
 function scanText(text) {
     const urls = extractUrls(text);
     const hits = [];
+
     for (const url of urls) {
         const host = hostOf(url);
         if (host && isListedHost(host)) hits.push(normalizeHost(host));
     }
+
+    // Second pass for schemeless hosts. Gated entirely on the blocklist, so
+    // this can only ever add a hit for a domain someone has already curated as
+    // a scam; it cannot invent one. `urls` is left alone, because a bare
+    // hostname is not reliably a link and should not inflate the link count.
+    if (domains.size > 0) {
+        for (const [, host] of String(text ?? '').matchAll(BARE_HOST_RE)) {
+            if (isListedHost(host)) hits.push(normalizeHost(host));
+        }
+    }
+
     return { urls, hits: [...new Set(hits)] };
 }
 

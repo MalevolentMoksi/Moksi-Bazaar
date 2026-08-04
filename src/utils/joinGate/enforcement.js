@@ -312,6 +312,43 @@ async function removeMember(member, settings, decision, action) {
     }
 }
 
+/**
+ * Deletes the messages that got a member flagged.
+ *
+ * A ban can ask Discord to sweep recent history in one call, but a kick and a
+ * timeout cannot, and leaving a wall of scam links up after removing the person
+ * who posted them is half a job. The watch window already knows exactly which
+ * messages they were.
+ *
+ * Best-effort throughout: a message already deleted by a moderator, or in a
+ * channel the bot cannot manage, is skipped rather than raised.
+ *
+ * @returns {Promise<number>} how many were actually deleted
+ */
+async function purgeEvidence(guild, evidence) {
+    let deleted = 0;
+    // Newest first: if the bot runs out of permission part-way through, the
+    // most recent spam is the part that got removed.
+    for (const item of [...evidence].reverse()) {
+        if (!item.messageId || !item.channelId) continue;
+        try {
+            const channel = guild.channels.cache.get(item.channelId)
+                ?? await guild.channels.fetch(item.channelId).catch(() => null);
+            if (!channel?.messages?.delete) continue;
+            await channel.messages.delete(item.messageId);
+            deleted++;
+        } catch (error) {
+            // 10008 Unknown Message: already gone, which is the desired state.
+            if (error?.code !== 10008) {
+                logger.debug('[JOIN-GATE] Evidence delete failed', {
+                    messageId: item.messageId, error: error.message,
+                });
+            }
+        }
+    }
+    return deleted;
+}
+
 // ── Burst detection ─────────────────────────────────────────────────────────
 
 /**
@@ -692,6 +729,9 @@ async function handleWatchedMessage(message) {
         };
 
         let actionOutcome = null;
+        // Captured before anything acts: a ban removes the member, and with
+        // them the ability to look up what they posted.
+        const evidence = watch.evidenceFor(message.guild.id, member.id);
 
         // A timeout is not a removal, so it goes through member.timeout rather
         // than the kick/ban path: no DM template, no pending unban row, nothing
@@ -745,6 +785,13 @@ async function handleWatchedMessage(message) {
             }
         }
 
+        // Clean up after any real action. Removing the person who posted a wall
+        // of scam links and leaving the links up is half a job, and a kick and
+        // a timeout have no equivalent of the ban endpoint's message sweep.
+        if (!dryRun && actionOutcome?.ok && evidence.length) {
+            actionOutcome.deleted = await purgeEvidence(message.guild, evidence);
+        }
+
         // Keep watching. Dropping the member here was what stopped a sweep
         // across channels from ever being seen as a sweep: the first flagged
         // message ended the watch, so every later copy scored nothing and the
@@ -758,6 +805,7 @@ async function handleWatchedMessage(message) {
         await logSuspicion(message.guild, settings, {
             user: member.user, result, action, actionOutcome, dryRun,
             channelId: message.channelId,
+            evidence,
         });
         if (!dryRun) await incrementStat(message.guild.id, 'total_flagged');
 

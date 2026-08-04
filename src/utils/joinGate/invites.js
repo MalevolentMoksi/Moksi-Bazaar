@@ -21,6 +21,16 @@ const logger = require('../logger');
 const cache = new Map();
 /** guildId -> Map<code, number[]> of recent join timestamps per code. */
 const recentUses = new Map();
+/**
+ * guildId -> promise chain, so resolveJoin runs one at a time per guild.
+ *
+ * The whole method is a read-modify-write of the cached use counts. Two joins
+ * landing together both read the same snapshot, both fetch, and both see the
+ * same code incremented: the join gets attributed twice and the flood counter
+ * double-counts it. That is not a rare edge, it is what a raid looks like, and
+ * flood detection is the one thing this module exists for.
+ */
+const resolveChains = new Map();
 
 const FLOOD_WINDOW_MS = 5 * 60_000;
 const FLOOD_THRESHOLD = 10;
@@ -72,6 +82,17 @@ function noteUse(guildId, code, now = Date.now()) {
     if (!perGuild) { perGuild = new Map(); recentUses.set(guildId, perGuild); }
 
     const cutoff = now - FLOOD_WINDOW_MS;
+
+    // Drop codes that have gone quiet. Only the code being used was ever
+    // pruned before, so a server that cycles invite links accumulated a map
+    // entry per code it had ever seen, for as long as the process lived.
+    for (const [otherCode, times] of perGuild) {
+        if (otherCode === code) continue;
+        const kept = times.filter(t => t >= cutoff);
+        if (kept.length === 0) perGuild.delete(otherCode);
+        else perGuild.set(otherCode, kept);
+    }
+
     const times = (perGuild.get(code) ?? []).filter(t => t >= cutoff);
     times.push(now);
     perGuild.set(code, times);
@@ -89,6 +110,15 @@ function noteUse(guildId, code, now = Date.now()) {
  *                    usesInWindow: number, flooding: boolean, known: boolean}>}
  */
 async function resolveJoin(guild, now = Date.now()) {
+    // Serialised per guild: see resolveChains. The chain always resolves, so a
+    // failing call cannot wedge every later join behind a rejected promise.
+    const previous = resolveChains.get(guild.id) ?? Promise.resolve();
+    const run = previous.then(() => resolveJoinInner(guild, now), () => resolveJoinInner(guild, now));
+    resolveChains.set(guild.id, run.catch(() => {}));
+    return run;
+}
+
+async function resolveJoinInner(guild, now) {
     const unknown = { code: null, inviterId: null, inviterTag: null, usesInWindow: 0, flooding: false, known: false };
     if (!canRead(guild)) return unknown;
 
@@ -103,7 +133,7 @@ async function resolveJoin(guild, now = Date.now()) {
     }
 
     const after = new Map();
-    let used = null;
+    const grew = [];
     for (const invite of invites.values()) {
         const uses = invite.uses ?? 0;
         after.set(invite.code, {
@@ -111,29 +141,45 @@ async function resolveJoin(guild, now = Date.now()) {
             inviterId: invite.inviter?.id ?? null,
             inviterTag: invite.inviter?.username ?? null,
         });
-        const previous = before?.get(invite.code);
-        if (previous && uses > previous.uses && !used) {
-            used = { code: invite.code, inviterId: invite.inviter?.id ?? null, inviterTag: invite.inviter?.username ?? null };
+        const prior = before?.get(invite.code);
+        if (prior && uses > prior.uses) {
+            grew.push({
+                code: invite.code,
+                delta: uses - prior.uses,
+                inviterId: invite.inviter?.id ?? null,
+                inviterTag: invite.inviter?.username ?? null,
+            });
         }
     }
     cache.set(guild.id, after);
 
     // No prior snapshot, a vanity URL, or a one-use invite that deleted itself
     // on use: all indistinguishable from here, so report honestly as unknown.
-    if (!used) return unknown;
+    if (grew.length === 0) return unknown;
+
+    // More than one code moved between snapshots, so this join cannot be
+    // pinned on any of them. Taking the first, as this used to, was a guess
+    // presented as a fact. The largest mover is the best guess available, and
+    // it is marked as ambiguous so the log can say so.
+    grew.sort((a, b) => b.delta - a.delta);
+    const used = grew[0];
+    const ambiguous = grew.length > 1;
 
     const usesInWindow = noteUse(guild.id, used.code, now);
     return {
-        ...used,
+        code: used.code,
+        inviterId: used.inviterId,
+        inviterTag: used.inviterTag,
         usesInWindow,
         flooding: usesInWindow >= FLOOD_THRESHOLD,
+        ambiguous,
         known: true,
     };
 }
 
 function reset(guildId) {
-    if (guildId) { cache.delete(guildId); recentUses.delete(guildId); }
-    else { cache.clear(); recentUses.clear(); }
+    if (guildId) { cache.delete(guildId); recentUses.delete(guildId); resolveChains.delete(guildId); }
+    else { cache.clear(); recentUses.clear(); resolveChains.clear(); }
 }
 
 module.exports = {

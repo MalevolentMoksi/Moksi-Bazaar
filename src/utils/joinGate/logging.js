@@ -184,7 +184,7 @@ const TIER_STYLE = {
  * Reports a scored joiner. The whole point is that the arithmetic is visible,
  * so staff can judge the call rather than trusting a verdict.
  */
-async function logSuspicion(guild, settings, { user, result, action, actionOutcome, dryRun, channelId }) {
+async function logSuspicion(guild, settings, { user, result, action, actionOutcome, dryRun, channelId, evidence }) {
     const style = TIER_STYLE[result.tier] ?? TIER_STYLE.watch;
     const isBehaviour = result.source === 'behaviour';
 
@@ -204,8 +204,19 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
             ? `temporarily banned, lifts <t:${toUnix(actionOutcome.unbanAt)}:R>`
             : 'temporarily banned';
     }
+    // Every non-ban success used to render as "kicked", so a timeout was
+    // reported in the audit log as a removal that never happened.
+    else if (actionOutcome?.ok && action === 'timeout') {
+        outcome = actionOutcome.minutes
+            ? `timed out for ${actionOutcome.minutes} min`
+            : 'timed out';
+    }
     else if (actionOutcome?.ok) outcome = 'kicked';
     else outcome = `⚠️ ${action} failed: ${actionOutcome?.error ?? 'unknown error'}`;
+
+    if (actionOutcome?.deleted > 0) {
+        outcome += `, ${actionOutcome.deleted} message${actionOutcome.deleted === 1 ? '' : 's'} removed`;
+    }
 
     const embed = new EmbedBuilder()
         .setColor(style.color)
@@ -230,12 +241,32 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
     if (channelId) {
         embed.addFields({ name: 'Where', value: `<#${channelId}>`, inline: true });
     }
+
+    // What they actually posted. A report that says "score 117, invite link"
+    // still leaves you opening three channels to find out what happened, and
+    // by the time an action fired the messages may already be gone.
+    if (evidence?.length) {
+        const quoted = evidence
+            .slice(-3)
+            .map(item => {
+                const text = String(item.content ?? '').replace(/\s+/g, ' ').trim();
+                const shown = text.length > 180 ? `${text.slice(0, 180)}...` : (text || '(no text)');
+                // Blockquoted so a scam link in the evidence is not rendered as
+                // a clickable embed in the log channel.
+                return `> <#${item.channelId}> \`${shown.replace(/`/g, "'")}\``;
+            })
+            .join('\n');
+        embed.addFields({ name: 'What they posted', value: quoted.slice(0, 1000), inline: false });
+    }
     if (result.inviteInfo?.known) {
         const inv = result.inviteInfo;
         embed.addFields({
             name: 'Invite used',
             value: `\`${inv.code}\`${inv.inviterId ? ` from <@${inv.inviterId}>` : ''}`
-                + (inv.usesInWindow > 1 ? ` (${inv.usesInWindow} joins in 5min)` : ''),
+                + (inv.usesInWindow > 1 ? ` (${inv.usesInWindow} joins in 5min)` : '')
+                // Several codes moved between snapshots, so this is the most
+                // likely one rather than a known one. Say so.
+                + (inv.ambiguous ? '\n-# several invites moved at once; best guess' : ''),
             inline: true,
         });
     }

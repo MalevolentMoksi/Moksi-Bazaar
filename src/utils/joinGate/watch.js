@@ -125,6 +125,25 @@ function markReported(guildId, userId, score) {
     if (entry) entry.reportedScore = score;
 }
 
+/**
+ * What the member has actually said in the window, newest last.
+ *
+ * Returned as a copy so a caller cannot reach in and mutate the history the
+ * duplicate and cross-channel detection depends on.
+ *
+ * @returns {Array<{content: string, messageId: string, channelId: string, at: number}>}
+ */
+function evidenceFor(guildId, userId) {
+    const entry = watched.get(guildId)?.get(userId);
+    if (!entry) return [];
+    return entry.messages.map(m => ({
+        content: m.raw ?? m.content,
+        messageId: m.messageId,
+        channelId: m.channelId,
+        at: m.at,
+    }));
+}
+
 /** Drops anyone whose window has closed. */
 function prune(guildId, windowMs, now = Date.now()) {
     const bucket = watched.get(guildId);
@@ -223,7 +242,16 @@ function inspectMessage(guildId, message, { windowMs, threshold = Infinity, now 
     const add = (id, label, points, detail) => signals.push({ id, label, points, detail });
 
     // Track history before scoring so this message counts toward repetition.
-    entry.messages.push({ content: content.trim().toLowerCase(), channelId: message.channelId, at: now });
+    // `raw` and `messageId` are kept alongside the normalised copy: the
+    // normalised one is for comparison, the other two are for showing a human
+    // what was said and for cleaning it up afterwards.
+    entry.messages.push({
+        content: content.trim().toLowerCase(),
+        raw: content.slice(0, 300),
+        messageId: message.id,
+        channelId: message.channelId,
+        at: now,
+    });
     if (entry.messages.length > 25) entry.messages.shift();
 
     // 1. Known-scam domain. The strongest single thing this bot can observe.
@@ -331,6 +359,7 @@ module.exports = {
     watchMember,
     setJoinScore,
     markReported,
+    evidenceFor,
     isWatched,
     inspectMessage,
     forget,
