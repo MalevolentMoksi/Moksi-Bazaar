@@ -109,6 +109,15 @@ const DEFAULTS = Object.freeze({
     watch_action: 'log',
     watch_ban_hours: 24,
     watch_timeout_minutes: 60,
+    /**
+     * Channels the behaviour window ignores entirely.
+     *
+     * A server with a #self-promotion channel has a place where posting your
+     * own invite is the whole point, and scoring it as advertising there is
+     * just wrong. Empty by default, which is exactly the behaviour this had
+     * before the setting existed.
+     */
+    watch_exempt_channel_ids: [],
     dm_watch_message: DEFAULT_DM_WATCH_MESSAGE,
     // Invite attribution.
     invite_tracking_enabled: false,
@@ -147,7 +156,7 @@ const WRITABLE_COLUMNS = new Set([
     'suspicion_log_channel_id', 'suspicion_log_enabled', 'suspicion_weights', 'suspicion_keywords',
     'suspicion_tenure_grace_days', 'suspicion_ban_hours', 'dm_suspicion_message',
     'watch_enabled', 'watch_window_minutes', 'watch_action_at', 'watch_action',
-    'watch_ban_hours', 'watch_timeout_minutes', 'dm_watch_message',
+    'watch_ban_hours', 'watch_timeout_minutes', 'watch_exempt_channel_ids', 'dm_watch_message',
     'invite_tracking_enabled',
 ]);
 
@@ -171,6 +180,7 @@ function ensureColumns() {
             ADD COLUMN IF NOT EXISTS suspicion_ban_hours   INTEGER NOT NULL DEFAULT 24,
             ADD COLUMN IF NOT EXISTS watch_ban_hours       INTEGER NOT NULL DEFAULT 24,
             ADD COLUMN IF NOT EXISTS watch_timeout_minutes INTEGER NOT NULL DEFAULT 60,
+            ADD COLUMN IF NOT EXISTS watch_exempt_channel_ids TEXT[],
             ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
             ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT`
     ).catch(error => {
@@ -203,6 +213,8 @@ function normalise(row) {
         ...row,
         configured: true,
         exempt_user_ids: Array.isArray(row.exempt_user_ids) ? row.exempt_user_ids : [],
+        watch_exempt_channel_ids: Array.isArray(row.watch_exempt_channel_ids)
+            ? row.watch_exempt_channel_ids : [],
         dm_message: row.dm_message ?? DEFAULT_DM_MESSAGE,
         dm_ban_message: row.dm_ban_message ?? DEFAULT_DM_BAN_MESSAGE,
         dm_suspicion_message: row.dm_suspicion_message ?? DEFAULT_DM_SUSPICION_MESSAGE,

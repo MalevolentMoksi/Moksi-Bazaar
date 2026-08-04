@@ -275,6 +275,9 @@ const init = async () => {
             -- How long a 'timeout' watch action mutes for. Never applied
             -- unless watch_action is set to 'timeout', which is not a default.
             ADD COLUMN IF NOT EXISTS watch_timeout_minutes INTEGER NOT NULL DEFAULT 60,
+            -- Channels the behaviour window ignores, e.g. a #self-promotion
+            -- channel where posting an invite is the point.
+            ADD COLUMN IF NOT EXISTS watch_exempt_channel_ids TEXT[],
             ADD COLUMN IF NOT EXISTS suspicion_tenure_grace_days INTEGER NOT NULL DEFAULT 30;
         -- Rejoin tracking. Drives escalation and DM de-duplication.
         CREATE TABLE IF NOT EXISTS join_gate_attempts (

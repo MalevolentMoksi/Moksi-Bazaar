@@ -400,6 +400,9 @@ function renderSuspicion(settings) {
                 value: settings.watch_enabled
                     ? `🟢 first **${settings.watch_window_minutes} min** after joining · act at **${settings.watch_action_at}** → ${actionLabel(settings.watch_action)}`
                       + (settings.watch_action === 'timeout' ? ` for **${settings.watch_timeout_minutes} min**` : '')
+                      + (settings.watch_exempt_channel_ids?.length
+                          ? `\n-# ignores ${settings.watch_exempt_channel_ids.map(channelRef).join(' ')}`
+                          : '')
                       + `\n-# scam-domain list: ${phishingStats().domains || 'not loaded yet'} domains`
                     : '⚪ Off. Nothing is scored on what people post',
                 inline: false,
@@ -454,6 +457,14 @@ function renderSuspicion(settings) {
                 .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
                 .setMinValues(1)
                 .setMaxValues(1)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ChannelSelectMenuBuilder()
+                .setCustomId('jg_watch_exempt')
+                .setPlaceholder('Channels the watch window ignores (replaces the list)')
+                .setChannelTypes(ChannelType.GuildText)
+                .setMinValues(0)
+                .setMaxValues(10)
         ),
     ];
 
@@ -1204,6 +1215,15 @@ module.exports = {
                         days > 0
                             ? `Tenure grace set to **${days} days**`
                             : 'Tenure grace cleared: the stock **365d** forgiveness timeline applies');
+                }
+
+                if (id === 'jg_watch_exempt') {
+                    // Replaces the list, including with nothing: picking no
+                    // channels is how you clear it, which is why minValues is 0.
+                    return applyChange(i, { watch_exempt_channel_ids: i.values },
+                        i.values.length
+                            ? `The watch window now ignores ${i.values.map(channelRef).join(' ')}`
+                            : 'The watch window now scores every channel');
                 }
 
                 if (id === 'jg_susp_channel') {

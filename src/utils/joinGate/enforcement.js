@@ -661,6 +661,12 @@ async function handleWatchedMessage(message) {
         }
         if (!settings.enabled || !settings.watch_enabled) return;
 
+        // Channels where the behaviour signals mean something else. In a
+        // #self-promotion channel an invite link is the reason the channel
+        // exists, so scoring it as advertising would punish people for using
+        // the server correctly.
+        if (settings.watch_exempt_channel_ids?.includes(message.channelId)) return;
+
         const windowMs = Number(settings.watch_window_minutes) * 60_000;
         if (!watch.isWatched(message.guild.id, message.author.id, windowMs)) return;
 
