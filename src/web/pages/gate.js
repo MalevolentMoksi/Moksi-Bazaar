@@ -209,6 +209,7 @@ function renderSuspicion(s, channels) {
                 <pre class="mono">${Object.entries(DEFAULT_WEIGHTS).map(([k, v]) => `${k} = ${v}`).join('\n')}</pre>
             </details>
             ${channelForm('suspicion_log_channel_id', 'Suspicion log channel', s.suspicion_log_channel_id, channels)}`,
+        footer: html`<a href="/gate/backtest">Backtest these settings</a> against everyone already in the server.`,
     });
 }
 

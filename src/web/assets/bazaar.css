@@ -587,6 +587,17 @@ select[multiple] { width: 100%; font-family: var(--body); }
     white-space: pre-wrap;
 }
 
+.plain-list { list-style: none; columns: 2; gap: 24px; }
+.plain-list li { padding: 3px 0; color: var(--parchment); break-inside: avoid; }
+.plain-list li::before { content: '· '; color: var(--lantern); }
+
+.section-title {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: 20px;
+    margin: 26px 0 14px;
+}
+
 /* ── Misc ─────────────────────────────────────────────────────────────── */
 
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 14px; }

@@ -223,21 +223,17 @@ function buildApp(client, config) {
         respond(req, res, { title: name, body: member.render(model) });
     }));
 
-    // Stubs keep the nav honest while later stages land: a page you can reach
-    // that says it is coming beats a 404 that looks like a bug.
-    for (const [route, title] of [
-        ['/guard', 'Guard'],
-    ]) {
-        app.get(route, (req, res) => {
-            respond(req, res, {
-                title,
-                body: card({
-                    title: 'This stall is being stocked',
-                    body: html`<p class="empty">Coming in the next stage of the build.</p>`,
-                }),
-            });
-        });
-    }
+    const guard = require('./pages/guard');
+    app.get('/guard', wrap(async (req, res) => {
+        const model = await guard.data(client, req.guildId);
+        respond(req, res, { title: 'Guard', body: guard.render(model) });
+    }));
+
+    const backtest = require('./pages/backtest');
+    app.get('/gate/backtest', wrap(async (req, res) => {
+        const model = await backtest.data(client, req.guildId, req.query);
+        respond(req, res, { title: 'Backtest', body: backtest.render(model) });
+    }));
 
     // ── Errors ──────────────────────────────────────────────────────────
     app.use((req, res) => {

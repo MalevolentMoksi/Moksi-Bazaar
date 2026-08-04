@@ -257,6 +257,37 @@ function createApi(client) {
         });
     }));
 
+    // ── Snapshot now ────────────────────────────────────────────────────
+    // The one button that DOES something, and what it does is read: it
+    // builds the structure file and sends it to the configured copies. The
+    // exact logic of the panel's own button, including the refusal when
+    // there is nowhere to send one.
+    router.post('/guild/:g/snapshot', wrap(async (req, res) => {
+        const guild = guildOf(req);
+        if (!guild) return res.status(404).json({ error: 'The bot is not in that server.' });
+
+        const { resolveChannel, sendSnapshot } = require('../utils/joinGate/snapshot');
+        const settings = await getSettings(guild.id);
+        const target = resolveChannel(settings);
+        const dmUserId = settings.snapshot_dm_owner ? (process.env.OWNER_ID || null) : null;
+        if (!target && !dmUserId) {
+            return res.status(400).json({
+                error: 'Nowhere to send it. Set a guard alert channel, or turn on the DM copy.',
+            });
+        }
+
+        const result = await sendSnapshot(guild, target, { dmUserId });
+        if (!result.ok) return res.status(502).json({ error: `Snapshot failed: ${result.error}` });
+
+        logger.info('[DASHBOARD] Snapshot sent', { guildId: guild.id, by: req.owner.uid });
+        return res.json({
+            ok: true,
+            summary: `Snapshot sent (${result.sentTo.join(' and ')}): ${result.meta.channels} channels, `
+                + `${result.meta.roles} roles, ${(result.meta.bytes / 1024).toFixed(0)} KB`
+                + (result.warning ? `. But: ${result.warning}` : ''),
+        });
+    }));
+
     // ── Watch-window channel exemptions ─────────────────────────────────
     router.post('/guild/:g/watch-exempt-channels', wrap(async (req, res) => {
         const guild = guildOf(req);
