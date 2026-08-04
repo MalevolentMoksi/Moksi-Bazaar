@@ -202,23 +202,27 @@ async function setBackupChannelId(channelId) {
     await setSpeakConfigValue(CHANNEL_KEY, channelId);
 }
 
-async function checkAndRun(client) {
+async function checkAndRun(client, { send = sendBackup } = {}) {
     const channelId = await getBackupChannelId();
 
     const last = Number(await getSpeakConfigValue(LAST_RUN_KEY, 0)) || 0;
     if (Date.now() - last < WEEK_MS) return;
 
-    // Stamped before the attempt, not after. A dump that fails for a structural
-    // reason (too large, channel deleted) would otherwise retry every six hours
-    // forever, and the owner would learn about it as a flood.
+    // Stamped before the attempt, not after, so a crash mid-dump cannot leave
+    // this retrying in a tight loop.
     await setSpeakConfigValue(LAST_RUN_KEY, Date.now());
 
     // The DM copy is unconditional; the channel copy rides along if configured.
-    const result = await sendBackup(client, { channelId, dmUserId: OWNER_ID });
+    const result = await send(client, { channelId, dmUserId: OWNER_ID });
     if (result.ok) {
         logger.info('[BACKUP] Weekly backup sent', { sentTo: result.sentTo, ...result.meta });
     } else {
         logger.warn('[BACKUP] Weekly backup did not send', { errors: result.errors });
+        // A failure must not cost a whole week. Discord outages, closed DMs and
+        // deleted channels are usually temporary or noticed quickly, and a
+        // backup that silently skips its week is the opposite of insurance, so
+        // the clock is wound back to retry at the next six-hourly check.
+        await setSpeakConfigValue(LAST_RUN_KEY, Date.now() - WEEK_MS + CHECK_INTERVAL_MS);
     }
 
     await sendStructureSnapshots(client, channelId);
@@ -288,6 +292,7 @@ function stopBackupScheduler() {
 module.exports = {
     buildBackup,
     sendBackup,
+    checkAndRun,
     backupFilename,
     getBackupChannelId,
     setBackupChannelId,
