@@ -128,6 +128,11 @@ describe('the backtest page', () => {
         expect(out).toContain('member fetch failed');
     });
 
+    test('no inline style attributes: the CSP blocks them', () => {
+        expect(backtestPage.render(report).__raw).not.toContain('style="');
+        expect(backtestPage.render({ ran: false, limit: 50, applyTenure: false }).__raw).not.toContain('style="');
+    });
+
     test('span formatting has sane units', () => {
         expect(backtestPage.fmtSpan(90_000)).toBe('1m');
         expect(backtestPage.fmtSpan(3 * 3_600_000 + 120_000)).toBe('3h 2m');

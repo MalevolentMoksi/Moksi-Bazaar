@@ -61,9 +61,9 @@ function renderLanding(model) {
             is the honest tuning view.</p>
             <form method="get" class="search-bar">
                 <input type="hidden" name="run" value="1">
-                <label for="bt_n" style="margin:0">Show top</label>
-                <input type="number" id="bt_n" name="n" value="${model.limit}" min="5" max="${MAX_LIMIT}" style="width:90px">
-                <label class="toggle" style="margin:0"><input type="checkbox" name="tenure" value="1" ${model.applyTenure ? raw('checked') : ''}><span class="track"></span>apply tenure forgiveness</label>
+                <label for="bt_n" class="compact-label">Show top</label>
+                <input type="number" id="bt_n" name="n" value="${model.limit}" min="5" max="${MAX_LIMIT}" class="num-small">
+                <label class="toggle compact-label"><input type="checkbox" name="tenure" value="1" ${model.applyTenure ? raw('checked') : ''}><span class="track"></span>apply tenure forgiveness</label>
                 <button type="submit">Run the backtest</button>
             </form>`,
         footer: html`<a href="/gate#suspicion">The settings it will use</a> are live and current.`,

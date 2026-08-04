@@ -107,7 +107,7 @@ function render(model) {
             ${armed}
             ${unbanRows}
         </div>
-        <div style="height:20px"></div>
+        <div class="spacer"></div>
         ${recentTable}
         <p class="hint">Bot up ${Math.floor(model.uptimeMs / 3_600_000)}h ${Math.floor((model.uptimeMs % 3_600_000) / 60_000)}m.</p>
     `;

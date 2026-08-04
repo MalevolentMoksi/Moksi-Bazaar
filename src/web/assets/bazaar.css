@@ -443,6 +443,9 @@ body.door {
     border: 1px solid var(--edge-soft);
     border-radius: 10px;
     padding: 44px 38px 38px;
+    box-shadow:
+        0 0 70px rgba(240, 164, 60, 0.07),
+        inset 0 1px 0 rgba(240, 164, 60, 0.08);
 }
 
 .door-lantern .lantern {
@@ -599,6 +602,12 @@ select[multiple] { width: 100%; font-family: var(--body); }
 }
 
 /* ── Misc ─────────────────────────────────────────────────────────────── */
+
+/* CSP forbids style attributes, deliberately; spacing lives here instead. */
+.spacer { height: 20px; }
+.compact-label { margin: 0; }
+.num-small { width: 90px; }
+.kv-below { margin-top: 12px; }
 
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; font-size: 14px; }
 .kv dt { color: var(--dust); }

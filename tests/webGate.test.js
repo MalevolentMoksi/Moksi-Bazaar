@@ -86,6 +86,10 @@ describe('the gate page covers everything', () => {
         expect(out).not.toContain('inside the server it backs up');
     });
 
+    test('no inline style attributes: the CSP blocks them', () => {
+        expect(out).not.toContain('style="');
+    });
+
     test('minimum account age renders in days, not minutes', () => {
         const model = fixture();
         model.settings.min_account_age_minutes = 20160;

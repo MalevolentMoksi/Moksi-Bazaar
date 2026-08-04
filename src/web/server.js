@@ -120,7 +120,7 @@ function buildApp(client, config) {
             body: html`
                 <h1>Moksi's Bazaar</h1>
                 <p>The stall is closed to strangers. The keeper may enter.</p>
-                <a class="btn" href="/login/discord">Log in with Discord</a>`.__raw,
+                <a class="btn" href="/login/discord">Log in with Discord</a>`,
         }));
     });
 
@@ -135,7 +135,7 @@ function buildApp(client, config) {
                 <h1>${result.status === 403 ? 'The lantern stays dark' : 'That did not work'}</h1>
                 <p>${result.reason}</p>
                 ${result.joke ? html`<p class="joke">${result.joke}</p>` : ''}
-                <a class="btn" href="/login">Back to the door</a>`.__raw,
+                <a class="btn" href="/login">Back to the door</a>`,
         }));
     }));
 
@@ -169,14 +169,14 @@ function buildApp(client, config) {
             return res.status(503).send(doorPage({
                 title: 'Warming up',
                 body: html`<h1>Lighting the lanterns</h1>
-                    <p>The bot is still connecting to Discord. Give it a few seconds and refresh.</p>`.__raw,
+                    <p>The bot is still connecting to Discord. Give it a few seconds and refresh.</p>`,
             }));
         }
         req.guildId = resolveGuildId(req, res, client);
         if (!req.guildId) {
             return res.status(503).send(doorPage({
                 title: 'No stalls',
-                body: html`<h1>No servers</h1><p>The bot is not in any server yet.</p>`.__raw,
+                body: html`<h1>No servers</h1><p>The bot is not in any server yet.</p>`,
             }));
         }
         next();
@@ -255,7 +255,7 @@ function buildApp(client, config) {
             title: 'Broke',
             body: html`<h1>Something broke</h1>
                 <p>The error is logged. The bot itself is unaffected.</p>
-                <a class="btn" href="/">Back to the bazaar</a>`.__raw,
+                <a class="btn" href="/">Back to the bazaar</a>`,
         }));
     });
 

@@ -133,9 +133,9 @@ function render(model) {
 
     return html`
         <div class="row-cards">${guardCard}${watchesCard}</div>
-        <div style="height:20px"></div>
+        <div class="spacer"></div>
         <div class="row-cards">${snapshotCard}</div>
-        <div style="height:20px"></div>
+        <div class="spacer"></div>
         ${auditCard}`;
 }
 

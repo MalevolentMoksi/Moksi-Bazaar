@@ -5,7 +5,7 @@
 // renders <script> from a Discord username hands the only owner session on
 // earth to whoever picked the username. Ugly loses to unsafe.
 
-const { esc, raw, html, table, pill, fmtAgo, layout } = require('../src/web/html');
+const { esc, raw, html, table, pill, fmtAgo, layout, doorPage } = require('../src/web/html');
 const overview = require('../src/web/pages/overview');
 const { DEFAULTS } = require('../src/utils/joinGate/config');
 
@@ -76,6 +76,24 @@ describe('the layout shell', () => {
     test('the csrf token rides along as a meta tag', () => {
         const page = layout({ title: 'T', body: html``, owner: { uid: '1', tag: 'm' }, csrfToken: 'the-token', guilds: [], guildId: null });
         expect(page).toContain('<meta name="csrf" content="the-token">');
+    });
+});
+
+describe('the door pages', () => {
+    test('a door page renders its body as markup, not as text', () => {
+        // The login page shipped once showing literal <h1> tags on screen,
+        // because a pre-rendered string was fed back through the escaping
+        // template. The body must be an html`` object end to end.
+        const page = doorPage({ title: 'The door', body: html`<h1>Moksi's Bazaar</h1><a class="btn" href="/login/discord">Log in with Discord</a>` });
+        expect(page).toContain('<h1>Moksi\'s Bazaar</h1>');
+        expect(page).toContain('<a class="btn" href="/login/discord">');
+        expect(page).not.toContain('&lt;h1&gt;');
+    });
+
+    test('user-supplied text inside a door body still escapes', () => {
+        const page = doorPage({ title: 'No', body: html`<p>${'<script>x</script>'}</p>` });
+        expect(page).toContain('&lt;script&gt;');
+        expect(page).not.toContain('<script>x');
     });
 });
 

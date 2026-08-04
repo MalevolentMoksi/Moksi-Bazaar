@@ -142,6 +142,13 @@ describe('member dossier', () => {
         expect(out).toContain('333333333333333333');
     });
 
+    test('no inline style attributes anywhere: the CSP blocks them', () => {
+        for (const page of [modlog.render({ q: null, action: null, page: 1, warnPage: 1, now: Date.now(), actions: { total: 0, rows: [] }, breakdown: [], warns: { total: 0, rows: [] } }),
+            member.render(full)]) {
+            expect(page.__raw).not.toContain('style="');
+        }
+    });
+
     test('a clean member reads as clean', () => {
         const out = member.render({
             ...full,

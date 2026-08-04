@@ -120,7 +120,7 @@ function render(model) {
                 <div class="sub mono">${u.id}</div>
             </div>
         </div>
-        <dl class="kv" style="margin-top:12px">
+        <dl class="kv kv-below">
             <dt>Account created</dt><dd><span title="${fmtDateTime(u.createdTimestamp)}">${fmtAgo(u.createdTimestamp, model.now)}</span></dd>
             ${m ? html`<dt>Joined</dt><dd><span title="${fmtDateTime(m.joinedTimestamp)}">${fmtAgo(m.joinedTimestamp, model.now)}</span></dd>
             <dt>Roles</dt><dd>${fmtNumber(m.roleCount)}</dd>` : ''}
@@ -195,9 +195,9 @@ function render(model) {
     return html`
         <p><a href="/members">&larr; all members</a></p>
         <div class="row-cards">${profile}${scoreCard}</div>
-        <div style="height:20px"></div>
+        <div class="spacer"></div>
         <div class="row-cards">${activityCard}${evidenceCard}</div>
-        <div style="height:20px"></div>
+        <div class="spacer"></div>
         ${historyCard}
         ${warnsCard}`;
 }
