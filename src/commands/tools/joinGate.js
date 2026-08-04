@@ -18,7 +18,7 @@ const { promptModal: sharedPromptModal, fitRows } = require('../../utils/panelHe
 const logger = require('../../utils/logger');
 const {
     getSettings, updateSettings, resetStats, invalidate,
-    formatDays, daysToMinutes, thresholdMs, clamp, LIMITS, TIER_ACTIONS,
+    formatDays, daysToMinutes, thresholdMs, clamp, LIMITS,
     DEFAULT_DM_MESSAGE, DEFAULT_DM_BAN_MESSAGE,
     DEFAULT_DM_SUSPICION_MESSAGE, DEFAULT_DM_WATCH_MESSAGE,
 } = require('../../utils/joinGate/config');
@@ -29,6 +29,7 @@ const {
 const {
     scoreAccount, explain, DEFAULT_WEIGHTS, DEFAULT_SCAM_KEYWORDS,
 } = require('../../utils/joinGate/suspicion');
+const validate = require('../../utils/joinGate/validate');
 const { describeShape } = require('../../utils/joinGate/cohorts');
 const { sendSnapshot, resolveChannel: resolveSnapshotChannel } = require('../../utils/joinGate/snapshot');
 const { stats: phishingStats, startAutoRefresh: startPhishingRefresh } = require('../../utils/joinGate/phishing');
@@ -43,7 +44,6 @@ const PANEL_IDLE_MS = 5 * 60_000;
 const MODAL_TIMEOUT_MS = 120_000;
 
 const SNOWFLAKE_RE = /^\d{17,20}$/;
-const INVITE_RE = /^https:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[A-Za-z0-9-]+$/;
 
 const SECTIONS = [
     { value: 'overview', label: 'Overview', emoji: '📋', description: 'Status, master switch, dry run' },
@@ -955,6 +955,36 @@ module.exports = {
             }
         };
 
+        /** Permissions from a validator's `requires` that the bot does not have. */
+        const missingPermissions = async (required = []) => {
+            if (!required?.length) return [];
+            const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+            return required.filter(name => !me?.permissions.has(PermissionFlagsBits[name]));
+        };
+
+        /**
+         * Applies a validated change, or explains why it was refused.
+         *
+         * One path for every settings write here. The rules themselves live in
+         * validate.js so anything else that writes settings reads the same
+         * definition, and the permissions a change declares are enforced at
+         * this end, where the guild actually is.
+         */
+        const applyValidated = async (respondTo, verdict) => {
+            if (!verdict.ok) {
+                return respondTo.reply({ content: `⚠️ ${verdict.error}`, flags: MessageFlags.Ephemeral });
+            }
+            const missing = await missingPermissions(verdict.requires);
+            if (missing.length) {
+                return respondTo.reply({
+                    content: `⚠️ That needs **${missing.join('**, **')}**, which the bot does not have here. `
+                        + 'Grant it first: otherwise the panel would report an action as armed that cannot happen.',
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+            return applyChange(respondTo, verdict.patch, verdict.summary);
+        };
+
         /** Applies a settings patch, refreshes, and writes the audit entry. */
         const applyChange = async (respondTo, patch, summary, details = null) => {
             const updated = await updateSettings(guild.id, patch);
@@ -1170,17 +1200,11 @@ module.exports = {
                     });
                     if (!submitted) return;
 
-                    const url = submitted.fields.getTextInputValue('url').trim();
-                    if (url && !INVITE_RE.test(url)) {
-                        // Restricted to Discord invites on purpose: this string is DMed
-                        // to strangers, so it must not become an arbitrary-link vector.
-                        return submitted.reply({
-                            content: '⚠️ Only Discord invite links are accepted (`https://discord.gg/…` or `https://discord.com/invite/…`).',
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-                    return applyChange(submitted, { dm_invite_url: url || null },
-                        url ? `Rejoin invite set to ${url}` : 'Rejoin invite cleared');
+                    // Restricted to Discord invites on purpose: this string is
+                    // DMed to strangers, so it must not become an
+                    // arbitrary-link vector. The rule lives in validate.js.
+                    return applyValidated(submitted,
+                        validate.inviteUrl(submitted.fields.getTextInputValue('url')));
                 }
 
                 if (id === 'jg_set_dm_cooldown') {
@@ -1367,47 +1391,15 @@ module.exports = {
                     });
                     if (!submitted) return;
 
-                    const minutes = clamp(Number(submitted.fields.getTextInputValue('minutes')), { min: 1, max: 1440 });
-                    const at = clamp(Number(submitted.fields.getTextInputValue('at')), { min: 1, max: 500 });
-                    const action = submitted.fields.getTextInputValue('action').trim().toLowerCase();
-                    const timeoutRaw = submitted.fields.getTextInputValue('timeout')?.trim();
-                    const timeoutMinutes = timeoutRaw
-                        ? clamp(Number(timeoutRaw), LIMITS.TIMEOUT_MINUTES)
-                        : Number(settings.watch_timeout_minutes);
-
-                    if (!TIER_ACTIONS.includes(action)) {
-                        return submitted.reply({
-                            content: `⚠️ Unknown action "${action}". Use one of: ${TIER_ACTIONS.join(', ')}.`,
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-                    if (action === 'ban') {
-                        const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
-                        if (!me?.permissions.has(PermissionFlagsBits.BanMembers)) {
-                            return submitted.reply({
-                                content: '⚠️ The watch action is set to **ban** but the bot lacks **Ban Members** here.',
-                                flags: MessageFlags.Ephemeral,
-                            });
-                        }
-                    }
-                    // Same check for timeouts: an action the bot cannot carry
-                    // out is worse than one that is switched off, because the
-                    // panel would claim the window is armed when it is not.
-                    if (action === 'timeout') {
-                        const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
-                        if (!me?.permissions.has(PermissionFlagsBits.ModerateMembers)) {
-                            return submitted.reply({
-                                content: '⚠️ The watch action is set to **timeout** but the bot lacks **Timeout Members** here.',
-                                flags: MessageFlags.Ephemeral,
-                            });
-                        }
-                    }
-
-                    return applyChange(submitted, {
-                        watch_window_minutes: minutes, watch_action_at: at, watch_action: action,
-                        watch_timeout_minutes: timeoutMinutes,
-                    }, `Watch window: **${minutes} min**, act at **${at}** → **${action}**`
-                        + (action === 'timeout' ? ` for **${timeoutMinutes} min**` : ''));
+                    // Bounds, the action check and both permission checks now
+                    // live in validate.js, so a second writer cannot arm a
+                    // watch action this bot is unable to carry out.
+                    return applyValidated(submitted, validate.watchWindow({
+                        minutes: submitted.fields.getTextInputValue('minutes'),
+                        at: submitted.fields.getTextInputValue('at'),
+                        action: submitted.fields.getTextInputValue('action'),
+                        timeout: submitted.fields.getTextInputValue('timeout'),
+                    }));
                 }
 
                 if (id === 'jg_susp_tenure') {
@@ -1521,17 +1513,13 @@ module.exports = {
                         ],
                     });
                     if (!submitted) return;
-                    const patch = {
-                        guard_window_seconds: clamp(Number(submitted.fields.getTextInputValue('window')), { min: 5, max: 3600 }),
-                        guard_delete_limit: clamp(Number(submitted.fields.getTextInputValue('del')), { min: 1, max: 100 }),
-                        guard_create_limit: clamp(Number(submitted.fields.getTextInputValue('cre')), { min: 1, max: 100 }),
-                        guard_perm_limit: clamp(Number(submitted.fields.getTextInputValue('perm')), { min: 1, max: 100 }),
-                        guard_webhook_limit: clamp(Number(submitted.fields.getTextInputValue('hook')), { min: 1, max: 100 }),
-                    };
-                    return applyChange(submitted, patch,
-                        `Guard limits: **${patch.guard_delete_limit}** deleted, **${patch.guard_create_limit}** created, `
-                        + `**${patch.guard_perm_limit}** permission grants, **${patch.guard_webhook_limit}** webhooks `
-                        + `per **${patch.guard_window_seconds}s**`);
+                    return applyValidated(submitted, validate.guardLimits({
+                        window: submitted.fields.getTextInputValue('window'),
+                        del: submitted.fields.getTextInputValue('del'),
+                        cre: submitted.fields.getTextInputValue('cre'),
+                        perm: submitted.fields.getTextInputValue('perm'),
+                        hook: submitted.fields.getTextInputValue('hook'),
+                    }));
                 }
                 if (id === 'jg_guard_exempt') {
                     const submitted = await promptModal(i, {
@@ -1546,10 +1534,12 @@ module.exports = {
                         }],
                     });
                     if (!submitted) return;
-                    const ids = submitted.fields.getTextInputValue('ids')
-                        .split(/[\s,]+/).map(s => s.trim()).filter(s => SNOWFLAKE_RE.test(s));
-                    return applyChange(submitted, { guard_exempt_user_ids: [...new Set(ids)] },
-                        `Guard exemptions: **${new Set(ids).size}** user(s)`);
+                    const parsed = validate.userIds(submitted.fields.getTextInputValue('ids'));
+                    if (!parsed.ok) {
+                        return submitted.reply({ content: `⚠️ ${parsed.error}`, flags: MessageFlags.Ephemeral });
+                    }
+                    return applyChange(submitted, { guard_exempt_user_ids: parsed.ids },
+                        `Guard exemptions: **${parsed.ids.length}** user(s)`);
                 }
 
                 if (id === 'jg_watch_automod') {
@@ -1581,22 +1571,11 @@ module.exports = {
                     });
                     if (!submitted) return;
 
-                    const bounds = { min: 1, max: 500 };
-                    const watch = clamp(Number(submitted.fields.getTextInputValue('watch')), bounds);
-                    const suspect = clamp(Number(submitted.fields.getTextInputValue('suspect')), bounds);
-                    const malicious = clamp(Number(submitted.fields.getTextInputValue('malicious')), bounds);
-
-                    if (!(watch <= suspect && suspect <= malicious)) {
-                        return submitted.reply({
-                            content: `⚠️ Thresholds must rise: watch (${watch}) ≤ suspect (${suspect}) ≤ malicious (${malicious}).`,
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-                    return applyChange(submitted, {
-                        suspicion_watch_at: watch,
-                        suspicion_suspect_at: suspect,
-                        suspicion_malicious_at: malicious,
-                    }, `Thresholds set to **${watch} / ${suspect} / ${malicious}**`);
+                    return applyValidated(submitted, validate.thresholds({
+                        watch: submitted.fields.getTextInputValue('watch'),
+                        suspect: submitted.fields.getTextInputValue('suspect'),
+                        malicious: submitted.fields.getTextInputValue('malicious'),
+                    }));
                 }
 
                 if (id === 'jg_susp_actions') {
@@ -1610,33 +1589,14 @@ module.exports = {
                     });
                     if (!submitted) return;
 
-                    const picked = ['watch', 'suspect', 'malicious'].map(t =>
-                        submitted.fields.getTextInputValue(t).trim().toLowerCase());
-                    const bad = picked.filter(a => !TIER_ACTIONS.includes(a));
-                    if (bad.length) {
-                        return submitted.reply({
-                            content: `⚠️ Unknown action(s): ${bad.join(', ')}. Use one of: ${TIER_ACTIONS.join(', ')}.`,
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    // Banning needs the permission, and it is worth saying so
-                    // out loud rather than discovering it on a live raid.
-                    if (picked.includes('ban')) {
-                        const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
-                        if (!me?.permissions.has(PermissionFlagsBits.BanMembers)) {
-                            return submitted.reply({
-                                content: '⚠️ A tier is set to **ban** but the bot lacks **Ban Members** here. Grant it first.',
-                                flags: MessageFlags.Ephemeral,
-                            });
-                        }
-                    }
-
-                    return applyChange(submitted, {
-                        suspicion_watch_action: picked[0],
-                        suspicion_suspect_action: picked[1],
-                        suspicion_malicious_action: picked[2],
-                    }, `Tier actions set to **${picked.join(' / ')}**`);
+                    // The permission check that used to sit here is declared by
+                    // the validator and enforced in applyValidated, so the rule
+                    // holds for every writer rather than only this one.
+                    return applyValidated(submitted, validate.tierActions({
+                        watch: submitted.fields.getTextInputValue('watch'),
+                        suspect: submitted.fields.getTextInputValue('suspect'),
+                        malicious: submitted.fields.getTextInputValue('malicious'),
+                    }));
                 }
 
                 if (id === 'jg_susp_weights') {
@@ -1655,27 +1615,8 @@ module.exports = {
                     });
                     if (!submitted) return;
 
-                    const raw = submitted.fields.getTextInputValue('weights').trim();
-                    const weights = {};
-                    const unknown = [];
-                    for (const line of raw.split('\n').map(l => l.trim()).filter(Boolean)) {
-                        const [key, value] = line.split('=').map(p => p?.trim());
-                        if (!key || !Object.prototype.hasOwnProperty.call(DEFAULT_WEIGHTS, key)) { unknown.push(line); continue; }
-                        const points = Number(value);
-                        if (!Number.isFinite(points)) { unknown.push(line); continue; }
-                        weights[key] = clamp(points, { min: -100, max: 100 });
-                    }
-                    if (unknown.length) {
-                        return submitted.reply({
-                            content: `⚠️ Unrecognised line(s): ${truncate(unknown.join(', '), 400)}\n`
-                                + `Valid signals: ${Object.keys(DEFAULT_WEIGHTS).join(', ')}`,
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-                    return applyChange(submitted, { suspicion_weights: weights },
-                        Object.keys(weights).length
-                            ? `Weight overrides set (${Object.keys(weights).length})`
-                            : 'Weight overrides cleared, back to defaults');
+                    return applyValidated(submitted,
+                        validate.weights(submitted.fields.getTextInputValue('weights')));
                 }
 
                 if (id === 'jg_susp_keywords') {
