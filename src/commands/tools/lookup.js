@@ -17,7 +17,7 @@ const {
 } = require('discord.js');
 const {
     getUserContext, getAttitudeLedger, getRecentMemories, getSentimentHistory,
-    getBalance, getGameStats, getDailyState, getInventory, isUserBlacklisted, getWarns,
+    getBalance, getGameStats, getDailyState, getInventory, isUserBlacklisted, getWarns, getModActions,
 } = require('../../utils/db');
 const { getSettings } = require('../../utils/joinGate/config');
 const suspicion = require('../../utils/joinGate/suspicion');
@@ -145,6 +145,28 @@ async function buildDossier(interaction, target) {
                 value: `**${warns.length}** on file, **${recent}** in the last 90 days\n`
                     + `-# most recent ${stamp(latest.createdAtMs)}`
                     + (latest.reason ? `: ${latest.reason.slice(0, 120)}` : ''),
+                inline: false,
+            });
+        }
+    }
+
+    // ── Moderation history ──────────────────────────────────────────────────
+    // Read from the audit log as it happened, so actions taken through Dyno are
+    // here too. Discord's own copy of this is gone after 45 days.
+    if (guild) {
+        const actions = await getModActions(guild.id, target.id, 6).catch(() => []);
+        if (actions.length) {
+            const VERB = {
+                ban: '🔨 banned', unban: '🔓 unbanned', kick: '👢 kicked',
+                timeout: '🔇 timed out', timeout_cleared: '🔊 timeout lifted',
+            };
+            embed.addFields({
+                name: `Moderation history (${actions.length})`,
+                value: actions.map(a =>
+                    `${VERB[a.action] ?? a.action} ${stamp(Number(a.at_ms))}`
+                    + (a.actor_tag ? ` by **${a.actor_tag}**${a.actor_is_bot ? ' (bot)' : ''}` : '')
+                    + (a.reason ? `\n-# ${String(a.reason).slice(0, 110)}` : '')
+                ).join('\n'),
                 inline: false,
             });
         }

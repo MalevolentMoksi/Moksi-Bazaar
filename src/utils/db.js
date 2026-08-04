@@ -165,6 +165,34 @@ const init = async () => {
         CREATE INDEX IF NOT EXISTS idx_warns_label ON warns(guild_id, user_label);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_warns_case ON warns(guild_id, case_id)
             WHERE case_id IS NOT NULL;
+        -- Bans, kicks and timeouts, whoever performed them.
+        --
+        -- Discord keeps its audit log for 45 days and then discards it, and the
+        -- copy Dyno keeps lives on Dyno's servers. This is the durable one:
+        -- who, whom, when, why, and which bot carried it out. Recorded from the
+        -- audit log, which means actions taken through Dyno are captured too.
+        --
+        -- Recording only. Nothing here feeds the guard's thresholds or raises
+        -- an alert; the guard deliberately does not watch moderation at all.
+        CREATE TABLE IF NOT EXISTS mod_actions (
+            id           BIGSERIAL PRIMARY KEY,
+            guild_id     TEXT NOT NULL,
+            audit_id     TEXT,
+            action       TEXT NOT NULL,
+            target_id    TEXT NOT NULL,
+            target_tag   TEXT,
+            actor_id     TEXT,
+            actor_tag    TEXT,
+            actor_is_bot BOOLEAN NOT NULL DEFAULT false,
+            reason       TEXT,
+            at_ms        BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mod_actions_target
+            ON mod_actions(guild_id, target_id, at_ms DESC);
+        -- Audit entries can arrive twice after a reconnect; the id is the only
+        -- thing that makes a replay idempotent.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mod_actions_audit
+            ON mod_actions(guild_id, audit_id) WHERE audit_id IS NOT NULL;
         -- Why an attitude moved, not just that it did. Capped per user by
         -- recordAttitudeChange; see the note there.
         CREATE TABLE IF NOT EXISTS attitude_ledger (
@@ -1060,6 +1088,60 @@ async function recordWarn({ guildId, userId, userLabel, caseId, moderator, reaso
 }
 
 /**
+ * Records one moderation action read from the audit log.
+ *
+ * Idempotent on the audit entry id, because a gateway reconnect can replay
+ * entries and a duplicated ban in someone's history is a lie about how many
+ * times it happened.
+ *
+ * @returns {Promise<boolean>} whether a new row was written
+ */
+async function recordModAction({
+    guildId, auditId, action, targetId, targetTag,
+    actorId, actorTag, actorIsBot = false, reason, atMs,
+}) {
+    const { rowCount } = await pool.query(
+        `INSERT INTO mod_actions
+            (guild_id, audit_id, action, target_id, target_tag, actor_id, actor_tag, actor_is_bot, reason, at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT DO NOTHING`,
+        [
+            guildId, auditId ? String(auditId) : null, String(action),
+            String(targetId), targetTag ? String(targetTag).slice(0, 200) : null,
+            actorId ? String(actorId) : null, actorTag ? String(actorTag).slice(0, 200) : null,
+            Boolean(actorIsBot), reason ? String(reason).slice(0, 1000) : null,
+            String(atMs ?? Date.now()),
+        ]
+    );
+    return rowCount > 0;
+}
+
+/** One member's moderation history, newest first. */
+async function getModActions(guildId, targetId, limit = 15) {
+    const { rows } = await pool.query(
+        `SELECT audit_id, action, target_tag, actor_id, actor_tag, actor_is_bot, reason, at_ms
+           FROM mod_actions
+          WHERE guild_id = $1 AND target_id = $2
+          ORDER BY at_ms DESC
+          LIMIT $3`,
+        [guildId, targetId, limit]
+    );
+    return rows;
+}
+
+/** How far back the record goes, and how much of it there is. */
+async function getModActionSummary(guildId) {
+    const { rows } = await pool.query(
+        `SELECT COUNT(*)::int AS total,
+                MIN(at_ms) AS oldest_ms,
+                COUNT(DISTINCT target_id)::int AS people
+           FROM mod_actions WHERE guild_id = $1`,
+        [guildId]
+    );
+    return rows[0] ?? { total: 0, oldest_ms: null, people: 0 };
+}
+
+/**
  * A user's warn history. Matches on the resolved id when there is one, and
  * falls back to the label so warns recorded before an id could be worked out
  * are not orphaned.
@@ -1761,6 +1843,9 @@ module.exports = {
     getAttitudeLedger,
     // Warns
     recordWarn,
+    recordModAction,
+    getModActions,
+    getModActionSummary,
     getWarns,
     linkWarnsToUser,
 };

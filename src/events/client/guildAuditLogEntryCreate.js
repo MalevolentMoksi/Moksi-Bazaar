@@ -12,6 +12,7 @@
 const { EmbedBuilder } = require('discord.js');
 const logger = require('../../utils/logger');
 const guard = require('../../utils/joinGate/guard');
+const modlog = require('../../utils/joinGate/modlog');
 const { getSettings } = require('../../utils/joinGate/config');
 
 const ALERT_COLOR = 0xd64545;
@@ -83,7 +84,15 @@ module.exports = {
             } catch {
                 return; // fail open, same as every other gate path
             }
-            if (!settings.enabled || !settings.guard_enabled) return;
+            if (!settings.enabled) return;
+
+            // Bookkeeping first, and independent of the guard. Discord discards
+            // its audit log after 45 days, so a history only exists if it was
+            // being kept before anyone thought to ask for it. This records and
+            // returns: it raises nothing and feeds no threshold.
+            await modlog.record(guild, entry);
+
+            if (!settings.guard_enabled) return;
 
             const verdict = guard.record(guild.id, entry, settings);
             if (!verdict) return;
