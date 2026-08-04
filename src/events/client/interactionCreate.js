@@ -3,12 +3,28 @@
  * Routes slash commands and buttons to their respective handlers
  */
 
-const { MessageFlags } = require('discord.js');
+const { MessageFlags, InteractionType } = require('discord.js');
 const logger = require('../../utils/logger');
+
+/** Enums arrive as numbers; a log line saying "2" helps nobody. */
+const TYPE_NAME = Object.fromEntries(
+    Object.entries(InteractionType).filter(([, v]) => typeof v === 'number').map(([k, v]) => [v, k]));
 
 module.exports = {
     name: 'interactionCreate',
     async execute(interaction, client) {
+        // Every interaction announces itself before any branching. Without
+        // this, an interaction that arrives and matches no branch below is
+        // indistinguishable in the logs from one that never arrived at all,
+        // and those two have completely different causes: the first is a bug
+        // in here, the second is Discord not delivering to the gateway.
+        logger.info('[INTERACTION] Received', {
+            type: TYPE_NAME[interaction.type] ?? interaction.type,
+            name: interaction.commandName ?? interaction.customId ?? null,
+            userId: interaction.user?.id,
+            guildId: interaction.guildId,
+        });
+
         // Context-menu entries ("right click a user, Apps, Lookup") are
         // commands too, but they are not chat input commands. Without this
         // they fell past every branch below and the user was told the button
@@ -96,6 +112,13 @@ module.exports = {
             }, 2500);
             // Fires at most once; unref so a pending timer never holds the process open.
             fallbackTimer.unref();
+        } else {
+            // Autocomplete and modal submissions land here. Neither is used
+            // yet, but silently dropping an interaction type is precisely the
+            // failure that looks like a hung bot, so it gets said out loud.
+            logger.warn('[INTERACTION] No branch handled this', {
+                type: TYPE_NAME[interaction.type] ?? interaction.type,
+            });
         }
     }
 };
