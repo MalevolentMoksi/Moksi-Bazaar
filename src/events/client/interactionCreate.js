@@ -19,7 +19,22 @@ module.exports = {
             const command = commands.get(commandName);
 
             if (!command) {
+                // Returning silently here left the command spinning in the
+                // client forever, which looks identical to a hung bot and
+                // names nothing. Discord offers a command the bot does not
+                // know only when registration and the loaded set have drifted
+                // apart, so say that out loud instead.
                 logger.warn('Unknown command attempted', { commandName, userId: interaction.user.id });
+                try {
+                    await interaction.reply({
+                        content: `\`/${commandName}\` is registered with Discord but is not loaded in the bot `
+                            + 'right now, so nothing can answer it. This is a bot-side fault, not your doing; '
+                            + 'the boot logs name the file that failed.',
+                        flags: MessageFlags.Ephemeral,
+                    });
+                } catch (error) {
+                    logger.error('Could not answer an unknown command', { commandName, error: error.message });
+                }
                 return;
             }
 

@@ -22,23 +22,49 @@ function hashCommands(commands) {
 
 module.exports = (client) => {
   client.handleCommands = async () => {
-    // Load all commands from disk
+    // Load all commands from disk.
+    //
+    // Each file is loaded in isolation. This loop used to require() bare: one
+    // module throwing on import (a native dependency that did not build, a
+    // typo in a rarely-touched file) aborted the whole pass, so every command
+    // after it alphabetically silently ceased to exist, registration never ran,
+    // and Discord kept offering commands the bot no longer knew. The symptom
+    // was a slash command that spins forever, which names nothing.
     const commands = [];
+    const failures = [];
     const commandsPath = path.join(__dirname, '..', '..', 'commands');
     for (const category of fs.readdirSync(commandsPath)) {
       const categoryPath = path.join(commandsPath, category);
       if (!fs.lstatSync(categoryPath).isDirectory()) continue;
       for (const file of fs.readdirSync(categoryPath).filter(f => f.endsWith('.js'))) {
-        const exported = require(path.join(categoryPath, file));
-        const cmdList = Array.isArray(exported) ? exported : [exported];
-        for (const cmd of cmdList) {
-          if (cmd.data && cmd.execute) {
-            client.commands.set(cmd.data.name, cmd);
-            commands.push(cmd.data.toJSON());
+        try {
+          const exported = require(path.join(categoryPath, file));
+          const cmdList = Array.isArray(exported) ? exported : [exported];
+          let usable = 0;
+          for (const cmd of cmdList) {
+            if (cmd?.data && cmd?.execute) {
+              client.commands.set(cmd.data.name, cmd);
+              commands.push(cmd.data.toJSON());
+              usable++;
+            }
           }
+          if (!usable) {
+            failures.push({ file: `${category}/${file}`, error: 'exported no usable command' });
+          }
+        } catch (error) {
+          failures.push({ file: `${category}/${file}`, error: error.message });
+          console.error(`[COMMANDS] Failed to load ${category}/${file}:`, error.message);
         }
       }
     }
+
+    // Kept on the client so the dashboard can show what the bot actually
+    // knows, rather than what the source tree implies.
+    client.commandLoadFailures = failures;
+    if (failures.length) {
+      console.error(`[COMMANDS] ${failures.length} file(s) failed to load; those commands will not answer.`);
+    }
+    console.log(`[COMMANDS] Loaded ${commands.length} commands from disk`);
 
     // Store command JSON array for guildCreate event
     client.commandArray = commands;
@@ -53,6 +79,16 @@ module.exports = (client) => {
     client.once('clientReady', async () => {
       const appId = process.env.CLIENT_ID ?? client.user.id;
       console.log(`App ID: ${appId}`);
+
+      // Registration mirrors what loaded, so a file that stops loading does
+      // deregister its command; that is honest. Loading NOTHING, though, is a
+      // broken deploy rather than an intentional emptying, and pushing it
+      // would strip every command from Discord and leave nothing to diagnose
+      // with. Keep the old registration and let the logs do the talking.
+      if (commands.length === 0) {
+        console.error('[COMMANDS] Nothing loaded; skipping registration so the existing commands survive.');
+        return;
+      }
 
       // The hash lives in the database because the container filesystem is
       // wiped on every deploy, which is exactly when this needs to remember.

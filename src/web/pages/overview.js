@@ -31,6 +31,8 @@ async function data(client, guildId) {
         modSummary,
         recentActions: recent.rows,
         unbans,
+        commandCount: client.commands?.size ?? 0,
+        commandFailures: client.commandLoadFailures ?? [],
         now: Date.now(),
     };
 }
@@ -95,7 +97,22 @@ function render(model) {
         }),
     }) : '';
 
+    // Only ever shown when something is actually wrong: a slash command that
+    // spins forever looks like a hung bot, and this is where that gets a name.
+    const failures = model.commandFailures ?? [];
+    const commandTrouble = failures.length ? card({
+        title: 'Commands that failed to load',
+        hint: `${fmtNumber(model.commandCount ?? 0)} command(s) answered for; these files did not`,
+        body: html`<ul class="plain-list">
+            ${failures.map(f => html`<li><span class="mono">${f.file}</span>: ${f.error}</li>`)}
+        </ul>
+        <p class="hint">Discord still offers whatever was registered last, so those commands appear in the
+        picker and then answer with a fault notice. Fixing the file and redeploying is the whole cure.</p>`,
+    }) : '';
+
     return html`
+        ${commandTrouble}
+        ${failures.length ? html`<div class="spacer"></div>` : ''}
         <div class="stats">
             ${statTile({ label: 'Members', value: model.memberCount })}
             ${statTile({ label: 'Gate kicks', value: s.total_kicks, tone: s.total_kicks > 0 ? 'warn' : '' })}
