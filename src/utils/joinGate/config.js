@@ -52,6 +52,8 @@ const LIMITS = {
     BURST_WINDOW_SECONDS: { min: 10, max: 3600 },
     SWEEP_WINDOW_HOURS: { min: 1, max: 168 },
     BAN_HOURS: { min: 1, max: 720 },
+    /** Discord's own ceiling on a timeout is 28 days; going past it just fails. */
+    TIMEOUT_MINUTES: { min: 1, max: 28 * DAY_MINUTES },
     DM_MESSAGE_LENGTH: 1800,
     EXEMPT_IDS: 200,
 };
@@ -106,6 +108,7 @@ const DEFAULTS = Object.freeze({
     watch_action_at: 100,
     watch_action: 'log',
     watch_ban_hours: 24,
+    watch_timeout_minutes: 60,
     dm_watch_message: DEFAULT_DM_WATCH_MESSAGE,
     // Invite attribution.
     invite_tracking_enabled: false,
@@ -115,8 +118,15 @@ const DEFAULTS = Object.freeze({
     total_flagged: 0,
 });
 
-/** What a suspicion tier is allowed to do. */
-const TIER_ACTIONS = Object.freeze(['log', 'kick', 'ban', 'none']);
+/**
+ * What a tier is allowed to do.
+ *
+ * 'timeout' exists for the behaviour watch window specifically: a borderline
+ * score from someone who just joined is far better answered by muting them for
+ * an hour, which a human can undo in one click, than by a kick or a ban that
+ * needs an invite and an apology to walk back.
+ */
+const TIER_ACTIONS = Object.freeze(['log', 'timeout', 'kick', 'ban', 'none']);
 
 /**
  * Columns the panel is allowed to write. Used as an allow-list when building
@@ -137,7 +147,7 @@ const WRITABLE_COLUMNS = new Set([
     'suspicion_log_channel_id', 'suspicion_log_enabled', 'suspicion_weights', 'suspicion_keywords',
     'suspicion_tenure_grace_days', 'suspicion_ban_hours', 'dm_suspicion_message',
     'watch_enabled', 'watch_window_minutes', 'watch_action_at', 'watch_action',
-    'watch_ban_hours', 'dm_watch_message',
+    'watch_ban_hours', 'watch_timeout_minutes', 'dm_watch_message',
     'invite_tracking_enabled',
 ]);
 
@@ -160,6 +170,7 @@ function ensureColumns() {
             ADD COLUMN IF NOT EXISTS suspicion_log_enabled BOOLEAN NOT NULL DEFAULT true,
             ADD COLUMN IF NOT EXISTS suspicion_ban_hours   INTEGER NOT NULL DEFAULT 24,
             ADD COLUMN IF NOT EXISTS watch_ban_hours       INTEGER NOT NULL DEFAULT 24,
+            ADD COLUMN IF NOT EXISTS watch_timeout_minutes INTEGER NOT NULL DEFAULT 60,
             ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
             ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT`
     ).catch(error => {

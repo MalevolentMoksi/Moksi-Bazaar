@@ -358,7 +358,10 @@ function logCategoryMeta(activeCategory) {
 }
 
 function renderSuspicion(settings) {
-    const actionLabel = a => ({ log: '📝 log only', kick: '👢 kick', ban: '🔨 temp-ban', none: '⚪ ignore' }[a] ?? a);
+    const actionLabel = a => ({
+        log: '📝 log only', timeout: '🔇 timeout', kick: '👢 kick',
+        ban: '🔨 temp-ban', none: '⚪ ignore',
+    }[a] ?? a);
     const overrides = Object.entries(settings.suspicion_weights ?? {});
     const keywords = settings.suspicion_keywords ?? DEFAULT_SCAM_KEYWORDS;
 
@@ -395,8 +398,9 @@ function renderSuspicion(settings) {
             {
                 name: 'Watch window (behaviour)',
                 value: settings.watch_enabled
-                    ? `🟢 first **${settings.watch_window_minutes} min** after joining · act at **${settings.watch_action_at}** → ${actionLabel(settings.watch_action)}\n`
-                      + `-# scam-domain list: ${phishingStats().domains || 'not loaded yet'} domains`
+                    ? `🟢 first **${settings.watch_window_minutes} min** after joining · act at **${settings.watch_action_at}** → ${actionLabel(settings.watch_action)}`
+                      + (settings.watch_action === 'timeout' ? ` for **${settings.watch_timeout_minutes} min**` : '')
+                      + `\n-# scam-domain list: ${phishingStats().domains || 'not loaded yet'} domains`
                     : '⚪ Off. Nothing is scored on what people post',
                 inline: false,
             },
@@ -1130,7 +1134,8 @@ module.exports = {
                         inputs: [
                             { id: 'minutes', label: 'Minutes to watch after joining', value: String(settings.watch_window_minutes), required: true, maxLength: 4 },
                             { id: 'at', label: 'Behaviour score that triggers an action', value: String(settings.watch_action_at), required: true, maxLength: 4 },
-                            { id: 'action', label: 'Action: log / kick / ban / none', value: settings.watch_action, required: true, maxLength: 5 },
+                            { id: 'action', label: 'log / timeout / kick / ban / none', value: settings.watch_action, required: true, maxLength: 7 },
+                            { id: 'timeout', label: 'If timeout: how many minutes', value: String(settings.watch_timeout_minutes), required: false, maxLength: 5 },
                         ],
                     });
                     if (!submitted) return;
@@ -1138,6 +1143,10 @@ module.exports = {
                     const minutes = clamp(Number(submitted.fields.getTextInputValue('minutes')), { min: 1, max: 1440 });
                     const at = clamp(Number(submitted.fields.getTextInputValue('at')), { min: 1, max: 500 });
                     const action = submitted.fields.getTextInputValue('action').trim().toLowerCase();
+                    const timeoutRaw = submitted.fields.getTextInputValue('timeout')?.trim();
+                    const timeoutMinutes = timeoutRaw
+                        ? clamp(Number(timeoutRaw), LIMITS.TIMEOUT_MINUTES)
+                        : Number(settings.watch_timeout_minutes);
 
                     if (!TIER_ACTIONS.includes(action)) {
                         return submitted.reply({
@@ -1154,10 +1163,24 @@ module.exports = {
                             });
                         }
                     }
+                    // Same check for timeouts: an action the bot cannot carry
+                    // out is worse than one that is switched off, because the
+                    // panel would claim the window is armed when it is not.
+                    if (action === 'timeout') {
+                        const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+                        if (!me?.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                            return submitted.reply({
+                                content: '⚠️ The watch action is set to **timeout** but the bot lacks **Timeout Members** here.',
+                                flags: MessageFlags.Ephemeral,
+                            });
+                        }
+                    }
 
                     return applyChange(submitted, {
                         watch_window_minutes: minutes, watch_action_at: at, watch_action: action,
-                    }, `Watch window: **${minutes} min**, act at **${at}** → **${action}**`);
+                        watch_timeout_minutes: timeoutMinutes,
+                    }, `Watch window: **${minutes} min**, act at **${at}** → **${action}**`
+                        + (action === 'timeout' ? ` for **${timeoutMinutes} min**` : ''));
                 }
 
                 if (id === 'jg_susp_tenure') {

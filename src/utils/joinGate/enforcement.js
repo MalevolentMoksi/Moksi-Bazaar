@@ -675,6 +675,32 @@ async function handleWatchedMessage(message) {
         };
 
         let actionOutcome = null;
+
+        // A timeout is not a removal, so it goes through member.timeout rather
+        // than the kick/ban path: no DM template, no pending unban row, nothing
+        // to walk back with an invite. It expires on its own and a moderator
+        // can lift it in one click.
+        if (!dryRun && action === 'timeout') {
+            const minutes = Math.max(1, Number(settings.watch_timeout_minutes) || 60);
+            try {
+                await member.timeout(
+                    minutes * 60_000,
+                    `Join gate: behaviour score ${score} within the watch window`
+                );
+                actionOutcome = { ok: true, action: 'timeout', minutes };
+                logger.info('[JOIN-GATE] Watch timeout applied', {
+                    guildId: message.guild.id, userId: member.id, minutes, score,
+                });
+            } catch (error) {
+                // Missing Moderate Members, or the member outranks the bot.
+                actionOutcome = { ok: false, action: 'timeout', error: error.message };
+                logger.error('[JOIN-GATE] Watch timeout failed', {
+                    guildId: message.guild.id, userId: member.id, error: error.message,
+                });
+                await incrementStat(message.guild.id, 'total_failures');
+            }
+        }
+
         if (!dryRun && (action === 'kick' || action === 'ban')) {
             const nowMs = Date.now();
             // Same honesty rule as the suspicion path: a behaviour ban is a
@@ -859,6 +885,8 @@ module.exports = {
     sweepGuild,
     backtestGuild,
     collectProtectedNames,
+    // Exported for /lookup, which reads the counter without touching it.
+    peekAttempt,
     getAttemptLeaderboard,
     clearAttempts,
     displayTag,

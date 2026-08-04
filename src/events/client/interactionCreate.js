@@ -9,7 +9,11 @@ const logger = require('../../utils/logger');
 module.exports = {
     name: 'interactionCreate',
     async execute(interaction, client) {
-        if (interaction.isChatInputCommand()) {
+        // Context-menu entries ("right click a user, Apps, Lookup") are
+        // commands too, but they are not chat input commands. Without this
+        // they fell past every branch below and the user was told the button
+        // had expired.
+        if (interaction.isChatInputCommand() || interaction.isContextMenuCommand()) {
             const { commands } = client;
             const { commandName } = interaction;
             const command = commands.get(commandName);

@@ -143,6 +143,28 @@ const init = async () => {
             best_streak  INTEGER NOT NULL DEFAULT 1,
             total_claims INTEGER NOT NULL DEFAULT 1
         );
+        -- A durable warn record.
+        --
+        -- The warn reminder scheduler only ever kept a row long enough to fire
+        -- one reminder and then deleted it, and it keyed on the display name
+        -- Dyno printed, so a rename fragmented someone's history and nothing
+        -- could ever be tied back to an account. This keeps both: the resolved
+        -- user id when it can be worked out, and the label as written.
+        CREATE TABLE IF NOT EXISTS warns (
+            id            SERIAL PRIMARY KEY,
+            guild_id      TEXT NOT NULL,
+            user_id       TEXT,
+            user_label    TEXT NOT NULL,
+            case_id       TEXT,
+            moderator     TEXT,
+            reason        TEXT,
+            source        TEXT NOT NULL DEFAULT 'dyno',
+            created_at_ms BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_warns_user ON warns(user_id, created_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_warns_label ON warns(guild_id, user_label);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_warns_case ON warns(guild_id, case_id)
+            WHERE case_id IS NOT NULL;
         -- Why an attitude moved, not just that it did. Capped per user by
         -- recordAttitudeChange; see the note there.
         CREATE TABLE IF NOT EXISTS attitude_ledger (
@@ -250,6 +272,9 @@ const init = async () => {
             ADD COLUMN IF NOT EXISTS watch_action_at       INTEGER NOT NULL DEFAULT 100,
             ADD COLUMN IF NOT EXISTS watch_action          TEXT NOT NULL DEFAULT 'log',
             ADD COLUMN IF NOT EXISTS invite_tracking_enabled BOOLEAN NOT NULL DEFAULT false,
+            -- How long a 'timeout' watch action mutes for. Never applied
+            -- unless watch_action is set to 'timeout', which is not a default.
+            ADD COLUMN IF NOT EXISTS watch_timeout_minutes INTEGER NOT NULL DEFAULT 60,
             ADD COLUMN IF NOT EXISTS suspicion_tenure_grace_days INTEGER NOT NULL DEFAULT 30;
         -- Rejoin tracking. Drives escalation and DM de-duplication.
         CREATE TABLE IF NOT EXISTS join_gate_attempts (
@@ -991,6 +1016,68 @@ async function updateUserAttitudeWithAI(userId, userMessage, conversationContext
     return { sentiment: newScore, originalSentiment: analysis.sentiment, reasoning: analysis.reasoning };
 }
 
+// ── WARNS ───────────────────────────────────────────────────────────────────
+
+/**
+ * Records a warning.
+ *
+ * Idempotent on the moderation bot's case number, because the listener can see
+ * the same embed twice (an edit, a resend) and a warn counted twice is worse
+ * than one counted late.
+ *
+ * @returns {Promise<boolean>} false when this case was already on file
+ */
+async function recordWarn({ guildId, userId, userLabel, caseId, moderator, reason, source = 'dyno' }) {
+    const { rowCount } = await pool.query(
+        `INSERT INTO warns (guild_id, user_id, user_label, case_id, moderator, reason, source, created_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT DO NOTHING`,
+        [
+            guildId, userId || null, String(userLabel).slice(0, 200), caseId || null,
+            moderator ? String(moderator).slice(0, 200) : null,
+            reason ? String(reason).slice(0, 1000) : null,
+            source, String(Date.now()),
+        ]
+    );
+    return rowCount > 0;
+}
+
+/**
+ * A user's warn history. Matches on the resolved id when there is one, and
+ * falls back to the label so warns recorded before an id could be worked out
+ * are not orphaned.
+ */
+async function getWarns(guildId, { userId = null, label = null } = {}, limit = 25) {
+    const { rows } = await pool.query(
+        `SELECT id, user_id, user_label, case_id, moderator, reason, source, created_at_ms
+         FROM warns
+         WHERE guild_id = $1
+           AND (($2::text IS NOT NULL AND user_id = $2)
+             OR ($3::text IS NOT NULL AND user_label ILIKE $3))
+         ORDER BY created_at_ms DESC LIMIT $4`,
+        [guildId, userId, label, limit]
+    );
+    return rows.map(r => ({
+        id: r.id,
+        userId: r.user_id,
+        userLabel: r.user_label,
+        caseId: r.case_id,
+        moderator: r.moderator,
+        reason: r.reason,
+        source: r.source,
+        createdAtMs: Number(r.created_at_ms),
+    }));
+}
+
+/** Backfills the id on rows recorded before the label could be resolved. */
+async function linkWarnsToUser(guildId, label, userId) {
+    const { rowCount } = await pool.query(
+        'UPDATE warns SET user_id = $3 WHERE guild_id = $1 AND user_label ILIKE $2 AND user_id IS NULL',
+        [guildId, label, userId]
+    );
+    return rowCount;
+}
+
 // ── ATTITUDE LEDGER ─────────────────────────────────────────────────────────
 
 /** Excerpts are for recognising the moment, not for re-reading the message. */
@@ -1655,4 +1742,8 @@ module.exports = {
     // Attitude ledger
     recordAttitudeChange,
     getAttitudeLedger,
+    // Warns
+    recordWarn,
+    getWarns,
+    linkWarnsToUser,
 };
