@@ -21,7 +21,7 @@
 const path = require('node:path');
 const express = require('express');
 const logger = require('../utils/logger');
-const { createAuth } = require('./auth');
+const { createAuth, rateLimited } = require('./auth');
 const { html, layout, doorPage, card } = require('./html');
 
 /** Reads and checks configuration; says exactly what is missing. */
@@ -63,7 +63,7 @@ function resolveGuildId(req, res, client) {
     const guilds = client.guilds.cache;
     const asked = typeof req.query.g === 'string' ? req.query.g : null;
     if (asked && guilds.has(asked)) {
-        res.append('Set-Cookie', `bazaar_guild=${asked}; Path=/; SameSite=Lax; Max-Age=31536000`);
+        res.append('Set-Cookie', `bazaar_guild=${asked}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`);
         return asked;
     }
     const remembered = /(?:^|;\s*)bazaar_guild=(\d+)/.exec(req.headers.cookie ?? '')?.[1];
@@ -73,6 +73,31 @@ function resolveGuildId(req, res, client) {
 
 /** async route -> express, without unhandled rejections. */
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+/**
+ * The backtest run fetches every guild member, and SameSite=Lax still sends
+ * the session cookie on top-level cross-site GETs, so a hostile page could
+ * navigate the owner's browser to ?run=1 and spend the bot's Discord API
+ * budget. A run must come from this site (or the address bar), and inside
+ * the same sliding window the login door uses; anything else degrades to
+ * the landing page with an explanation instead of a scan.
+ */
+function vetBacktestRun(req) {
+    if (req.query.run !== '1') return { query: req.query, notice: null };
+    if (req.get('sec-fetch-site') === 'cross-site') {
+        return {
+            query: { ...req.query, run: undefined },
+            notice: 'That run link came from another site, so nothing ran. Start it from the button below.',
+        };
+    }
+    if (rateLimited(`backtest:${req.ip}`)) {
+        return {
+            query: { ...req.query, run: undefined },
+            notice: 'Too many runs in a short window. Give the engine a few minutes to cool.',
+        };
+    }
+    return { query: req.query, notice: null };
+}
 
 function securityHeaders(req, res, next) {
     res.set({
@@ -231,7 +256,9 @@ function buildApp(client, config) {
 
     const backtest = require('./pages/backtest');
     app.get('/gate/backtest', wrap(async (req, res) => {
-        const model = await backtest.data(client, req.guildId, req.query);
+        const { query, notice } = vetBacktestRun(req);
+        const model = await backtest.data(client, req.guildId, query);
+        if (notice) model.notice = notice;
         respond(req, res, { title: 'Backtest', body: backtest.render(model) });
     }));
 
@@ -289,4 +316,4 @@ function startDashboard(client) {
     }
 }
 
-module.exports = { startDashboard, buildApp, dashboardConfig, guildChoices, resolveGuildId };
+module.exports = { startDashboard, buildApp, dashboardConfig, guildChoices, resolveGuildId, vetBacktestRun };

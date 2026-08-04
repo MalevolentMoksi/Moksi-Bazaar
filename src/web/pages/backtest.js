@@ -52,6 +52,7 @@ function renderLanding(model) {
     return card({
         title: 'Backtest the suspicion settings',
         body: html`
+            ${model.notice ? html`<p class="form-error">${model.notice}</p>` : ''}
             <p>Scores <strong>every current member</strong> with the live weights and thresholds,
             exactly as the join path would, and reports who would be flagged today. Nothing is
             actioned; this is a simulation with a report at the end.</p>

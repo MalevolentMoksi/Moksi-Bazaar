@@ -131,7 +131,7 @@ function createApi(client) {
     router.post('/guild/:g/settings', wrap(async (req, res) => {
         const patch = req.body?.patch;
         const keys = patch && typeof patch === 'object' ? Object.keys(patch) : [];
-        if (keys.length !== 1 || !(keys[0] in TOGGLES)) {
+        if (keys.length !== 1 || !Object.hasOwn(TOGGLES, keys[0])) {
             return res.status(400).json({ error: 'Only one known switch at a time.' });
         }
         const column = keys[0];

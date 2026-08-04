@@ -7,6 +7,7 @@
 
 const guardPage = require('../src/web/pages/guard');
 const backtestPage = require('../src/web/pages/backtest');
+const { vetBacktestRun } = require('../src/web/server');
 const { DEFAULTS } = require('../src/utils/joinGate/config');
 
 describe('the guard page', () => {
@@ -138,5 +139,47 @@ describe('the backtest page', () => {
         expect(backtestPage.fmtSpan(3 * 3_600_000 + 120_000)).toBe('3h 2m');
         expect(backtestPage.fmtSpan(2 * 86_400_000 + 5 * 3_600_000)).toBe('2d 5h');
         expect(backtestPage.fmtSpan(NaN)).toBe('0m');
+    });
+});
+
+describe('vetting a backtest run', () => {
+    // SameSite=Lax still sends the session cookie on top-level cross-site
+    // GETs, so ?run=1 must not be honored when another site navigated here.
+    const reqFor = ({ run, fetchSite, ip }) => ({
+        query: run ? { run: '1', n: '50' } : { n: '50' },
+        ip,
+        get: name => (name === 'sec-fetch-site' ? fetchSite : undefined),
+    });
+
+    test('a cross-site navigation is stripped of its run and told so', () => {
+        const { query, notice } = vetBacktestRun(reqFor({ run: true, fetchSite: 'cross-site', ip: '10.0.0.1' }));
+        expect(query.run).toBeUndefined();
+        expect(notice).toContain('another site');
+    });
+
+    test('a same-origin click runs; so does the address bar', () => {
+        expect(vetBacktestRun(reqFor({ run: true, fetchSite: 'same-origin', ip: '10.0.0.2' })).notice).toBeNull();
+        expect(vetBacktestRun(reqFor({ run: true, fetchSite: undefined, ip: '10.0.0.3' })).notice).toBeNull();
+    });
+
+    test('hammering the run burns out instead of hammering Discord', () => {
+        let last;
+        for (let i = 0; i < 11; i++) {
+            last = vetBacktestRun(reqFor({ run: true, fetchSite: 'same-origin', ip: '10.0.0.4' }));
+        }
+        expect(last.query.run).toBeUndefined();
+        expect(last.notice).toContain('cool');
+    });
+
+    test('without ?run=1 there is nothing to vet, wherever it came from', () => {
+        const { query, notice } = vetBacktestRun(reqFor({ run: false, fetchSite: 'cross-site', ip: '10.0.0.5' }));
+        expect(query).toEqual({ n: '50' });
+        expect(notice).toBeNull();
+    });
+
+    test('the landing page shows the notice where the run button is', () => {
+        const out = backtestPage.render({ ran: false, limit: 50, applyTenure: false, notice: 'Too many runs.' }).__raw;
+        expect(out).toContain('form-error');
+        expect(out).toContain('Too many runs.');
     });
 });
