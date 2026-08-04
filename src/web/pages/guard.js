@@ -73,7 +73,7 @@ function render(model) {
             <dt>Bot additions</dt><dd>${s.guard_watch_bots ? pill('on', 'reported alone') : pill('off', 'ignored')}</dd>
             <dt>Exempt</dt><dd>${fmtNumber(s.guard_exempt_user_ids.length)} user(s)</dd>
         </dl>`,
-        footer: html`Limits and exemptions are edited under <a href="/gate#guard">Join Gate &rarr; Guard</a>.`,
+        footer: html`Limits and exemptions are edited under <a href="/gate?s=guard">Join Gate &rarr; Guard</a>.`,
     });
 
     const watchesCard = card({
@@ -97,7 +97,7 @@ function render(model) {
                 ${model.snapshotHasDm ? pill('on', 'DM to you') : pill('warn', 'no DM copy')}
             </dd>
         </dl>
-        ${nowhere ? html`<p class="form-error">Nowhere to send one. Set a guard channel or turn the DM copy on under <a href="/gate#snapshot">Join Gate &rarr; Snapshot</a>.</p>` : ''}
+        ${nowhere ? html`<p class="form-error">Nowhere to send one. Set a guard channel or turn the DM copy on under <a href="/gate?s=snapshot">Join Gate &rarr; Snapshot</a>.</p>` : ''}
         ${!nowhere && !model.snapshotHasDm ? html`<p class="form-error">Without the DM copy, the only backup lives inside the server it backs up.</p>` : ''}
         <div class="form-actions">
             <button data-action="/api/guild/${model.guildId}/snapshot" data-busy="Building (fetching every member)..." ${nowhere ? raw('disabled') : ''}>Snapshot now</button>

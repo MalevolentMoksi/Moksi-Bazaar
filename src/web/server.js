@@ -194,7 +194,7 @@ function buildApp(client, config) {
 
     const gate = require('./pages/gate');
     app.get('/gate', wrap(async (req, res) => {
-        const model = await gate.data(client, req.guildId);
+        const model = await gate.data(client, req.guildId, req.query);
         respond(req, res, { title: 'Join Gate', body: gate.render(model) });
     }));
 

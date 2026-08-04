@@ -16,7 +16,7 @@ const { NUMERIC_FIELDS } = require('../../utils/joinGate/validate');
 const { DEFAULT_WEIGHTS } = require('../../utils/joinGate/suspicion');
 const { html, raw, card, pill } = require('../html');
 
-async function data(client, guildId) {
+async function data(client, guildId, query = {}) {
     const guild = client.guilds.cache.get(guildId);
     const settings = await getSettings(guildId, { fresh: true });
     const channels = guild
@@ -25,7 +25,8 @@ async function data(client, guildId) {
             .sort((a, b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))
             .map(c => ({ id: c.id, name: c.name }))
         : [];
-    return { settings, channels };
+    const section = SECTIONS.some(s => s.key === query.s) ? query.s : SECTIONS[0].key;
+    return { settings, channels, section };
 }
 
 // ── Form atoms ──────────────────────────────────────────────────────────────
@@ -306,27 +307,31 @@ function renderLogging(s, channels) {
     });
 }
 
+/**
+ * Real tabs, not scroll anchors. One section renders at a time, picked by
+ * ?s=, so switching sections is a navigation instead of a scroll hunt down
+ * a very long page.
+ */
 const SECTIONS = [
-    ['gate', 'The gate'], ['rules', 'Rules'], ['alerts', 'Alerts'],
-    ['messaging', 'Messaging'], ['suspicion', 'Suspicion'], ['watch', 'Watch'],
-    ['guard', 'Guard'], ['snapshot', 'Snapshot'], ['logging', 'Logging'],
+    { key: 'gate', label: 'The gate', section: (s) => renderMaster(s) },
+    { key: 'rules', label: 'Rules', section: (s) => renderRules(s) },
+    { key: 'alerts', label: 'Alerts', section: (s) => renderAlerts(s) },
+    { key: 'messaging', label: 'Messaging', section: (s) => renderMessaging(s) },
+    { key: 'suspicion', label: 'Suspicion', section: (s, ch) => renderSuspicion(s, ch) },
+    { key: 'watch', label: 'Watch', section: (s, ch) => renderWatch(s, ch) },
+    { key: 'guard', label: 'Guard', section: (s, ch) => renderGuard(s, ch) },
+    { key: 'snapshot', label: 'Snapshot', section: (s) => renderSnapshot(s) },
+    { key: 'logging', label: 'Logging', section: (s, ch) => renderLogging(s, ch) },
 ];
 
-function render({ settings: s, channels }) {
+function render({ settings: s, channels, section }) {
+    const active = SECTIONS.find(t => t.key === section) ?? SECTIONS[0];
     return html`
-        <nav class="anchor-nav">
-            ${SECTIONS.map(([id, label]) => html`<a href="#${id}">${label}</a>`)}
-            <span class="anchor-state">${s.enabled ? pill('on', 'gate on') : pill('off', 'gate off')}${s.dry_run ? pill('warn', 'dry run') : ''}</span>
+        <nav class="tab-bar">
+            ${SECTIONS.map(t => html`<a href="/gate?s=${t.key}" class="${t.key === active.key ? 'tab-active' : ''}">${t.label}</a>`)}
+            <span class="tab-state">${s.enabled ? pill('on', 'gate on') : pill('off', 'gate off')}${s.dry_run ? pill('warn', 'dry run') : ''}</span>
         </nav>
-        <div id="gate">${renderMaster(s)}</div>
-        <div id="rules">${renderRules(s)}</div>
-        <div id="alerts">${renderAlerts(s)}</div>
-        <div id="messaging">${renderMessaging(s)}</div>
-        <div id="suspicion">${renderSuspicion(s, channels)}</div>
-        <div id="watch">${renderWatch(s, channels)}</div>
-        <div id="guard">${renderGuard(s, channels)}</div>
-        <div id="snapshot">${renderSnapshot(s)}</div>
-        <div id="logging">${renderLogging(s, channels)}</div>`;
+        ${active.section(s, channels)}`;
 }
 
-module.exports = { data, render };
+module.exports = { data, render, SECTIONS };

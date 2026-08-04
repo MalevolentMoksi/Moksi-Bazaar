@@ -66,7 +66,7 @@ function renderLanding(model) {
                 <label class="toggle compact-label"><input type="checkbox" name="tenure" value="1" ${model.applyTenure ? raw('checked') : ''}><span class="track"></span>apply tenure forgiveness</label>
                 <button type="submit">Run the backtest</button>
             </form>`,
-        footer: html`<a href="/gate#suspicion">The settings it will use</a> are live and current.`,
+        footer: html`<a href="/gate?s=suspicion">The settings it will use</a> are live and current.`,
     });
 }
 

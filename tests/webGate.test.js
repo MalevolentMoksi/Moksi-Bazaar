@@ -34,10 +34,15 @@ const GROUPED_NUMERICS = new Set([
     'guard_perm_limit', 'guard_webhook_limit',
 ]);
 
-describe('the gate page covers everything', () => {
-    const out = gate.render(fixture()).__raw;
+/** All sections rendered and joined: coverage claims are about the union. */
+function renderAll(model) {
+    return gate.SECTIONS.map(t => gate.render({ ...model, section: t.key }).__raw).join('\n');
+}
 
-    test('every toggle the API accepts is on the page exactly once', () => {
+describe('the gate page covers everything', () => {
+    const out = renderAll(fixture());
+
+    test('every toggle the API accepts is in exactly one section', () => {
         for (const column of Object.keys(TOGGLES)) {
             const hits = out.split(`data-toggle="${column}"`).length - 1;
             expect(`${column}:${hits}`).toBe(`${column}:1`);
@@ -57,14 +62,28 @@ describe('the gate page covers everything', () => {
         }
     });
 
+    test('tabs render one section at a time, with the active tab marked', () => {
+        const page = gate.render({ ...fixture(), section: 'suspicion' }).__raw;
+        expect(page).toContain('data-api="thresholds"');
+        expect(page).not.toContain('data-api="guard-limits"');
+        const activeTab = page.slice(page.indexOf('tab-active') - 60, page.indexOf('tab-active') + 60);
+        expect(activeTab).toContain('?s=suspicion');
+    });
+
+    test('an unknown section falls back to the first tab', async () => {
+        // data() resolves the section; render never sees garbage, but must
+        // still not crash if handed some.
+        const page = gate.render({ ...fixture(), section: 'nonsense' }).__raw;
+        expect(page).toContain('data-toggle="enabled"');
+    });
+
     test('stored values prefill', () => {
         const model = fixture();
         model.settings.suspicion_suspect_at = 77;
         model.settings.dm_invite_url = 'https://discord.gg/festival';
-        const page = gate.render(model).__raw;
-        expect(page).toContain('value="77"');
-        expect(page).toContain('value="https://discord.gg/festival"');
-        expect(page).toContain('default_avatar = 25');
+        expect(gate.render({ ...model, section: 'suspicion' }).__raw).toContain('value="77"');
+        expect(gate.render({ ...model, section: 'suspicion' }).__raw).toContain('default_avatar = 25');
+        expect(gate.render({ ...model, section: 'messaging' }).__raw).toContain('value="https://discord.gg/festival"');
     });
 
     test('a hostile channel name cannot break out of an option tag', () => {
@@ -82,17 +101,17 @@ describe('the gate page covers everything', () => {
         const model = fixture();
         model.settings.snapshot_enabled = true;
         model.settings.snapshot_dm_owner = false;
-        expect(gate.render(model).__raw).toContain('inside the server it backs up');
+        expect(gate.render({ ...model, section: 'snapshot' }).__raw).toContain('inside the server it backs up');
         expect(out).not.toContain('inside the server it backs up');
     });
 
-    test('no inline style attributes: the CSP blocks them', () => {
+    test('no inline style attributes in any section: the CSP blocks them', () => {
         expect(out).not.toContain('style="');
     });
 
     test('minimum account age renders in days, not minutes', () => {
         const model = fixture();
         model.settings.min_account_age_minutes = 20160;
-        expect(gate.render(model).__raw).toContain('value="14"');
+        expect(gate.render({ ...model, section: 'rules' }).__raw).toContain('value="14"');
     });
 });
