@@ -143,25 +143,28 @@ function describeNonTextPayload(msg, charLimit) {
 }
 
 // Build a compact "reply to X" marker so the AI sees conversational threading
-function buildReplyMarker(msg, messagesMap) {
+function buildReplyMarker(msg, messagesMap, botId) {
   if (!msg.reference?.messageId) return '';
   const refMsg = messagesMap.get(msg.reference.messageId);
-  if (!refMsg) return ' [replying to an earlier message]';
+  if (!refMsg) return ' (in reply to an earlier message)';
 
-  const refName = refMsg.author?.bot
-    ? 'Cooler Moksi'
-    : (refMsg.member?.displayName || refMsg.author.username);
+  // Only OUR bot is "you". Calling every bot that used to collapse Dyno's
+  // words into the bot's own mouth, which is the same misattribution this
+  // whole function had to be reshaped to avoid.
+  const refName = refMsg.author?.id === botId
+    ? 'you'
+    : (refMsg.member?.displayName || refMsg.author?.username || 'someone');
 
   // Fall back to the embed/forward payload when there is no plain content.
   // Replying to a rich embed is common and used to quote an empty string.
   let raw = flatten(cleanBotOwnMessage(refMsg.content) || refMsg.content || '');
   if (!raw) raw = flatten(describeNonTextPayload(refMsg, 160));
 
-  if (!raw) return ` [replying to ${refName}]`;
+  if (!raw) return ` (in reply to ${refName})`;
 
   const snippet = raw.slice(0, 160);
   const ellipsis = raw.length > 160 ? '...' : '';
-  return ` [replying to ${refName}: "${snippet}${ellipsis}"]`;
+  return ` (in reply to ${refName}: "${snippet}${ellipsis}")`;
 }
 
 // ── CONTEXT BUILDER ─────────────────────────────────────────────────────────
@@ -212,8 +215,11 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set()) 
 
   const lines = await Promise.all(recent.map(async (msg) => {
     const isSelf = msg.author.id === botId;
+    // "You" rather than the bot's name: the owner's display name is "Moksi"
+    // and the bot's is "Cooler Moksi", close enough that a small model reading
+    // a third-person label about itself starts answering as a bystander.
     const name = isSelf
-      ? 'Cooler Moksi'
+      ? 'You (Cooler Moksi)'
       : (msg.member?.displayName || msg.author.username);
 
     let mediaContent = '';
@@ -231,13 +237,18 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set()) 
     // messages too: most of its rich output carries no plain content at all.
     const payload = describeNonTextPayload(msg, MEMORY_LIMITS.MESSAGE_CHAR_LIMIT);
 
-    const replyMarker = buildReplyMarker(msg, messages);
+    const replyMarker = buildReplyMarker(msg, messages, botId);
 
     let content = isSelf ? cleanBotOwnMessage(msg.content) : msg.content;
     content = flatten(content).slice(0, MEMORY_LIMITS.MESSAGE_CHAR_LIMIT);
     if (!content && (mediaContent || payload)) content = '[no text]';
 
-    return `${name}${replyMarker}: ${content}${payload}${mediaContent}`;
+    // Speaker, then a colon, then THEIR words, and only afterwards who they
+    // were answering. The reply note used to sit between the speaker and the
+    // colon, which put the quoted person's name directly against words they
+    // never said: "Moksi [replying to Cooler Moksi: "..."]: FUCK OFF" reads,
+    // to a cheap model, as Cooler Moksi being the one swearing.
+    return `${name}: ${content}${payload}${mediaContent}${replyMarker}`;
   }));
 
   return {
@@ -568,7 +579,7 @@ ${speakProfile.profile}
 OTHERS IN THE CONVERSATION (people from the chat log you already know):
 ${othersText}
 ` : ''}
-CHAT LOG (most recent last; "Cooler Moksi" entries are your own prior replies; [media] tags describe what was shared, treat them as if you saw it):
+CHAT LOG (most recent last). Each line is "speaker: exactly what that speaker said". Lines beginning "You (Cooler Moksi)" are your own prior replies. A trailing "(in reply to X: ...)" quotes what SOMEONE ELSE said earlier and is never the speaker's own words, so never attribute a quoted line to the person quoting it. [media] tags describe what was shared, treat them as if you saw it:
 ${conversationContext}
 
 STORED MEMORY (past exchanges with this user, oldest first, each dated):
@@ -693,3 +704,5 @@ ${memoryText}`;
 
 // Exported for tests only; the command loader ignores extra properties.
 module.exports.extractEmojiKey = extractEmojiKey;
+module.exports.buildReplyMarker = buildReplyMarker;
+module.exports.formatMemories = formatMemories;
