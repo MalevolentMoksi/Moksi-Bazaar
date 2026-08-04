@@ -43,27 +43,60 @@ async function data(client, guildId) {
         auditError = error.message;
     }
 
-    const channelName = id => guild?.channels.cache.get(id)?.name ?? null;
+    // Guard alerts are a per-guild setting, so this guild's cache is right
+    // for them. The archive is not: it is one destination for every server,
+    // and looking it up here is what made a channel in another server render
+    // as "not set" and made the picker able to erase it.
+    const localName = id => guild?.channels.cache.get(id)?.name ?? null;
+    const describe = (id) => {
+        const channel = id ? client.channels.cache.get(id) : null;
+        if (!channel) return null;
+        return {
+            id: channel.id,
+            name: channel.name,
+            guildName: channel.guild?.name ?? null,
+            elsewhere: channel.guild?.id !== guildId,
+        };
+    };
+
     const backupChannelId = await getBackupChannelId();
+    const archive = describe(backupChannelId);
     // The archive channel wins for both weekly files when one is set.
-    const snapshotChannelId = backupChannelId || resolveChannel(settings);
-    const channels = guild
-        ? [...guild.channels.cache.values()]
-            .filter(c => c.isTextBased?.() && !c.isThread?.())
-            .sort((a, b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))
-            .map(c => ({ id: c.id, name: c.name }))
-        : [];
+    const snapshotChannel = describe(backupChannelId || resolveChannel(settings));
+
+    // One global setting deserves one global picker: every server the bot is
+    // in, current one first, so the cross-server choice is a choice and not a
+    // guess about which page to be on when making it.
+    const channelGroups = [...client.guilds.cache.values()]
+        .sort((a, b) => {
+            if (a.id === guildId) return -1;
+            if (b.id === guildId) return 1;
+            return a.name.localeCompare(b.name);
+        })
+        .map(g => ({
+            guildName: g.name,
+            isCurrent: g.id === guildId,
+            channels: [...g.channels.cache.values()]
+                .filter(c => c.isTextBased?.() && !c.isThread?.())
+                .sort((a, b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0))
+                .map(c => ({ id: c.id, name: c.name })),
+        }))
+        .filter(g => g.channels.length);
 
     return {
         settings,
         guildId,
-        guardChannelName: channelName(settings.guard_channel_id),
-        snapshotChannelName: channelName(snapshotChannelId),
-        snapshotHasDm: Boolean(settings.snapshot_dm_owner),
-        backupChannelId,
-        backupChannelName: backupChannelId ? channelName(backupChannelId) : null,
+        guildName: guild?.name ?? null,
+        guardChannelName: localName(settings.guard_channel_id),
+        snapshotChannel,
+        // What will actually happen, not what the toggle says in isolation:
+        // an archive channel supersedes the DM copy, the same way it does for
+        // the database dump.
+        snapshotHasDm: Boolean(settings.snapshot_dm_owner) && !archive,
+        snapshotDmSetting: Boolean(settings.snapshot_dm_owner),
+        archive,
         backupLastMs: Number(await getSpeakConfigValue(LAST_RUN_KEY, 0)) || 0,
-        channels,
+        channelGroups,
         auditEntries,
         auditError,
         watchedNouns: [...new Set(Object.values(WATCHED).map(w => w.noun))],
@@ -100,19 +133,24 @@ function render(model) {
         moderation. Dyno at 3am trips nothing here.</p>`,
     });
 
-    const nowhere = !model.snapshotChannelName && !model.snapshotHasDm;
+    const snap = model.snapshotChannel;
+    const nowhere = !snap && !model.snapshotHasDm;
+    // Only a snapshot filed inside the very server it describes shares that
+    // server's fate; one sitting in another server is already safe.
+    const insideItself = Boolean(snap) && !snap.elsewhere;
     const snapshotCard = card({
         title: 'Structure snapshot',
         hint: 'channels, roles, overwrites, member roles, emoji, stickers',
         body: html`<dl class="kv">
             <dt>Weekly</dt><dd>${s.snapshot_enabled ? pill('on', 'on') : pill('off', 'off')}</dd>
             <dt>Copies</dt><dd>
-                ${model.snapshotChannelName ? html`#${model.snapshotChannelName} ` : ''}
-                ${model.snapshotHasDm ? pill('on', 'DM to you') : pill('warn', 'no DM copy')}
+                ${snap ? html`#${snap.name}${snap.elsewhere ? html` <span class="hint">in ${snap.guildName}</span>` : ''} ` : ''}
+                ${model.snapshotHasDm ? pill('on', 'DM to you') : ''}
+                ${!snap && !model.snapshotHasDm ? pill('warn', 'nowhere') : ''}
             </dd>
         </dl>
-        ${nowhere ? html`<p class="form-error">Nowhere to send one. Set a guard channel or turn the DM copy on under <a href="/gate?s=snapshot">Join Gate &rarr; Snapshot</a>.</p>` : ''}
-        ${!nowhere && !model.snapshotHasDm ? html`<p class="form-error">Without the DM copy, the only backup lives inside the server it backs up.</p>` : ''}
+        ${nowhere ? html`<p class="form-error">Nowhere to send one. Pick an archive channel beside this, or turn the DM copy on under <a href="/gate?s=snapshot">Join Gate &rarr; Snapshot</a>.</p>` : ''}
+        ${insideItself && !model.snapshotHasDm ? html`<p class="form-error">Without the DM copy, the only backup lives inside the server it backs up.</p>` : ''}
         <div class="form-actions">
             <button data-action="/api/guild/${model.guildId}/snapshot" data-busy="Building (fetching every member)..." ${nowhere ? raw('disabled') : ''}>Snapshot now</button>
         </div>`,
@@ -123,26 +161,33 @@ function render(model) {
         title: 'Archive',
         hint: 'the weekly database dump and structure snapshot, filed together',
         body: html`<dl class="kv">
-            <dt>Filed in</dt><dd>${model.backupChannelName
-                ? html`#${model.backupChannelName}`
+            <dt>Filed in</dt><dd>${model.archive
+                ? html`#${model.archive.name}${model.archive.elsewhere
+                    ? html` <span class="hint">in ${model.archive.guildName}</span>`
+                    : html` ${pill('warn', 'this server')}`}`
                 : html`${pill('warn', 'your DMs')} <span class="hint">no channel set, so it has to interrupt you</span>`}</dd>
             <dt>Last run</dt><dd>${model.backupLastMs
                 ? html`<span title="${fmtDateTime(model.backupLastMs)}">${fmtAgo(model.backupLastMs, model.now)}</span>`
                 : html`<span class="hint">never yet</span>`}</dd>
         </dl>
         <form data-api="backup-channel" class="field" data-reload>
-            <label for="bch">Archive channel</label>
+            <label for="bch">Archive channel <span class="hint">one destination, every server</span></label>
             <div class="inline-fields">
                 <select id="bch" name="channel">
                     <option value="">(none: DM me instead)</option>
-                    ${model.channels.map(c => html`<option value="${c.id}" ${c.id === model.backupChannelId ? raw('selected') : ''}>#${c.name}</option>`)}
+                    ${model.channelGroups.map(g => html`<optgroup label="${g.guildName}${g.isCurrent ? ' (this server)' : ''}">
+                        ${g.channels.map(c => html`<option value="${c.id}" ${model.archive && c.id === model.archive.id ? raw('selected') : ''}>#${c.name}</option>`)}
+                    </optgroup>`)}
                 </select>
                 <button type="submit" class="ghost">Save</button>
             </div>
         </form>
-        <p class="hint">Pick a quiet channel in a <strong>different server</strong> (switch servers with the picker
-        above, the choice is shared): a dump filed inside the server it backs up dies with it. Mute the channel and
-        forget it exists until the day you need it.</p>
+        <p class="hint">Every server's weekly files land here, wherever here is. Prefer a quiet channel in a
+        <strong>server other than the one being backed up</strong>: an archive filed inside the server it protects
+        dies with it. Mute it and forget it exists until the day you need it.</p>
+        ${model.archive && model.snapshotDmSetting ? html`<p class="hint">The DM copy under
+            <a href="/gate?s=snapshot">Join Gate &rarr; Snapshot</a> is on but no longer used for this server:
+            the archive channel supersedes it.</p>` : ''}
         <div class="form-actions">
             <button data-action="/api/guild/${model.guildId}/backup" data-busy="Dumping every table..." data-reload>Back up now</button>
         </div>`,

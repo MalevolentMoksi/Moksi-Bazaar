@@ -287,8 +287,13 @@ async function sendStructureSnapshots(client, channelId) {
             // The archive channel wins over the guard channel when one is set.
             // Guard alerts are things to react to; a weekly snapshot is a thing
             // to file, and mixing the two buries the alerts under paperwork.
+            // The DM copy exists because a snapshot needs somewhere outside the
+            // server it describes. An archive channel already is that, so it
+            // supersedes the DM rather than adding a second weekly interruption.
             const result = await snapshot(guild, channelId || resolveChannel(settings), {
-                dmUserId: settings.snapshot_dm_owner ? (process.env.OWNER_ID || null) : null,
+                dmUserId: (!channelId && settings.snapshot_dm_owner)
+                    ? (process.env.OWNER_ID || null)
+                    : null,
             });
             if (result.ok) logger.info('[SNAPSHOT] Posted', { guildId: guild.id, sentTo: result.sentTo, ...result.meta });
             else logger.warn('[SNAPSHOT] Did not post', { guildId: guild.id, error: result.error });

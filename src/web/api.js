@@ -294,8 +294,6 @@ function createApi(client) {
     // up is the whole idea, and the dashboard's server picker is how.
     router.post('/guild/:g/backup-channel', wrap(async (req, res) => {
         const { setBackupChannelId } = require('../utils/backup');
-        const guild = guildOf(req);
-        if (!guild) return res.status(404).json({ error: 'The bot is not in that server.' });
 
         const channelId = String(fieldsOf(req).channel ?? '').trim();
         if (channelId === '') {
@@ -304,13 +302,22 @@ function createApi(client) {
             return res.json({ ok: true, summary: 'Archive channel cleared. Weekly dumps will be DMed to you instead.' });
         }
 
-        const channel = guild.channels.cache.get(channelId);
+        // Resolved against every guild the bot is in, not the one whose page
+        // this was submitted from: the archive is deliberately allowed to live
+        // in another server, which is the entire point of it.
+        const channel = client.channels.cache.get(channelId);
         if (!channel?.isTextBased?.() || channel.isThread?.()) {
-            return res.status(400).json({ error: 'That is not a text channel in this server.' });
+            return res.status(400).json({ error: 'That is not a text channel the bot can see.' });
         }
         await setBackupChannelId(channelId);
-        logger.info('[DASHBOARD] Backup archive channel set', { channelId, by: req.owner.uid });
-        return res.json({ ok: true, summary: `Backups and snapshots will be filed in #${channel.name}` });
+        logger.info('[DASHBOARD] Backup archive channel set', {
+            channelId, guildId: channel.guild?.id, by: req.owner.uid,
+        });
+        return res.json({
+            ok: true,
+            summary: `Every server's weekly files will be filed in #${channel.name}`
+                + (channel.guild ? ` in ${channel.guild.name}` : ''),
+        });
     }));
 
     // ── Back up now ─────────────────────────────────────────────────────

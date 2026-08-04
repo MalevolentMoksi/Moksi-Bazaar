@@ -14,17 +14,26 @@ describe('the guard page', () => {
     const base = {
         settings: { ...DEFAULTS, guard_exempt_user_ids: [] },
         guildId: 'g1',
+        guildName: 'Festival Hub',
         guardChannelName: null,
-        snapshotChannelName: null,
+        snapshotChannel: null,
         snapshotHasDm: true,
-        backupChannelId: null,
-        backupChannelName: null,
+        snapshotDmSetting: true,
+        archive: null,
         backupLastMs: 0,
-        channels: [{ id: '1', name: 'general' }, { id: '9', name: 'the-vault' }],
+        channelGroups: [
+            { guildName: 'Festival Hub', isCurrent: true, channels: [{ id: '1', name: 'general' }] },
+            { guildName: 'Personal Bazaar', isCurrent: false, channels: [{ id: '9', name: 'claudecode' }] },
+        ],
         auditEntries: [],
         auditError: null,
         watchedNouns: ['channel deleted', 'role deleted', 'bot added'],
         now: Date.now(),
+    };
+
+    /** The archive as it appears when it lives in another server. */
+    const elsewhere = {
+        id: '9', name: 'claudecode', guildName: 'Personal Bazaar', elsewhere: true,
     };
 
     test('says plainly that moderation is not watched', () => {
@@ -45,9 +54,21 @@ describe('the guard page', () => {
         expect(out).toContain('disabled');
     });
 
-    test('a channel copy without a DM copy warns about where it lives', () => {
-        const out = guardPage.render({ ...base, snapshotChannelName: 'guard-alerts', snapshotHasDm: false }).__raw;
+    test('a copy inside this server, with no DM, warns about where it lives', () => {
+        const out = guardPage.render({
+            ...base,
+            snapshotChannel: { id: '1', name: 'guard-alerts', guildName: 'Festival Hub', elsewhere: false },
+            snapshotHasDm: false,
+        }).__raw;
         expect(out).toContain('inside the server it backs up');
+    });
+
+    test('a copy in another server needs no such warning: it is already safe', () => {
+        const out = guardPage.render({
+            ...base, snapshotChannel: elsewhere, snapshotHasDm: false,
+        }).__raw;
+        expect(out).not.toContain('inside the server it backs up');
+        expect(out).toContain('in Personal Bazaar');
     });
 
     test('the archive card offers the button, and is honest about never', () => {
@@ -63,15 +84,38 @@ describe('the guard page', () => {
         expect(out).toContain('interrupt you');
     });
 
-    test('a configured archive channel is named, preselected, and stops the DM warning', () => {
+    test('an archive in another server is named with that server, not hidden', () => {
         const out = guardPage.render({
-            ...base, backupChannelId: '9', backupChannelName: 'the-vault', backupLastMs: base.now - 3 * 86_400_000,
+            ...base, archive: elsewhere, backupLastMs: base.now - 3 * 86_400_000,
         }).__raw;
-        expect(out).toContain('#the-vault');
+        expect(out).toContain('#claudecode');
+        expect(out).toContain('in Personal Bazaar');
         expect(out).not.toContain('interrupt you');
         expect(out).not.toContain('never yet');
+    });
+
+    // The bug this replaces: the archive lived in another server, the picker
+    // only listed this one, so the stored choice looked unset and saving the
+    // form would have quietly erased it.
+    test('the picker spans every server and preselects a channel from any of them', () => {
+        const out = guardPage.render({ ...base, archive: elsewhere }).__raw;
         const select = out.slice(out.indexOf('id="bch"'), out.indexOf('</select>', out.indexOf('id="bch"')));
+        expect(select).toContain('<optgroup label="Festival Hub (this server)">');
+        expect(select).toContain('<optgroup label="Personal Bazaar">');
         expect(select).toContain('value="9" selected');
+        expect(select).toContain('value="1" >');
+    });
+
+    test('an archive inside the server it protects is flagged as such', () => {
+        const out = guardPage.render({
+            ...base, archive: { id: '1', name: 'general', guildName: 'Festival Hub', elsewhere: false },
+        }).__raw;
+        expect(out).toContain('this server');
+    });
+
+    test('a live archive says the snapshot DM toggle is now redundant', () => {
+        const out = guardPage.render({ ...base, archive: elsewhere, snapshotHasDm: false }).__raw;
+        expect(out).toContain('supersedes it');
     });
 
     test('the archive picker posts to its own endpoint', () => {
