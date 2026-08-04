@@ -47,6 +47,7 @@ const DEFAULT_WEIGHTS = Object.freeze({
     invisible_chars: 32,
     mixed_script: 30,
     digit_suffix: 12,
+    suggested_name: 16,
     gibberish_name: 20,
     symbol_spam: 8,
     scam_keyword: 22,
@@ -118,6 +119,38 @@ const TENURE_BANDS = Object.freeze([
  */
 const DEFAULT_TENURE_GRACE_DAYS = 365;
 
+/** Messages that buy the whole of the tenure forgiveness. */
+const MESSAGES_FOR_FULL_TENURE = 15;
+/**
+ * How long activity has to have been observable before anyone is called quiet.
+ * Counting started when the feature shipped, so until a member has been watched
+ * for this long, "no messages recorded" means "not watched yet".
+ */
+const MIN_OBSERVED_DAYS = 30;
+
+/**
+ * How much of the tenure forgiveness a member has actually earned, 0 to 1.
+ *
+ * Deliberately generous. The interesting gap is between nobody and somebody: a
+ * member who has said anything at all is a different proposition from one who
+ * has said nothing in months, and by fifteen messages the question is settled.
+ * A square root gives that shape, so a single message is already worth a
+ * quarter of the forgiveness and four are worth half.
+ *
+ * Returns 1 whenever the answer is not knowable, so missing data never costs
+ * anybody a point.
+ */
+function participationFactor(participation) {
+    if (!participation) return 1;
+
+    const observed = Number(participation.observedDays);
+    if (!Number.isFinite(observed) || observed < MIN_OBSERVED_DAYS) return 1;
+
+    const messages = Math.max(0, Number(participation.messages) || 0);
+    if (messages >= MESSAGES_FOR_FULL_TENURE) return 1;
+    return Math.sqrt(messages / MESSAGES_FOR_FULL_TENURE);
+}
+
 const DEFAULT_SCAM_KEYWORDS = Object.freeze([
     'free nitro', 'nitro free', 'discord nitro', 'steam gift', 'free gift',
     'airdrop', 'giveaway bot', 'moderator', 'admin', 'support team',
@@ -171,6 +204,21 @@ function hasMixedScriptToken(name) {
 
 function hasDigitSuffix(name) {
     return /\d{4,}$/.test(String(name ?? ''));
+}
+
+/**
+ * The username Discord offers at signup when the one you asked for is taken:
+ * a stem, an underscore, then a block of digits. `harry_59338`, `caio_13697`.
+ *
+ * Accepting it means nobody cared what the account was called, which is weak
+ * evidence on its own (real people take the suggestion all the time) and much
+ * stronger in a group: fourteen of them in one member list is a batch.
+ *
+ * Strictly narrower than hasDigitSuffix, and reported instead of it rather than
+ * on top, since the two would otherwise charge twice for one observation.
+ */
+function looksAutoSuggested(name) {
+    return /^[a-z0-9._]*[a-z][a-z0-9._]*_\d{4,6}$/.test(String(name ?? '').toLowerCase());
 }
 
 /** Longest run of consecutive consonants, treating y as a vowel. */
@@ -356,6 +404,9 @@ function scoreAccount(user, options = {}) {
         member = null,
         applyTenure = true,
         tenureGraceDays = DEFAULT_TENURE_GRACE_DAYS,
+        // {messages, observedDays}, or null when activity is not known. Null
+        // means full forgiveness: this can only ever withhold, never accuse.
+        participation = null,
         thresholds = DEFAULT_THRESHOLDS,
         now = Date.now(),
     } = options;
@@ -438,6 +489,7 @@ function scoreAccount(user, options = {}) {
 
     const gibberish = looksRandom(name) && !transliterated;
     const digitSuffix = hasDigitSuffix(name);
+    const autoSuggested = looksAutoSuggested(name);
 
     if (hasInvisibleChars(name)) {
         addSus('invisible_chars', 'Hidden characters', weightOf(weights, 'invisible_chars'), 'zero-width or bidi control chars');
@@ -445,7 +497,10 @@ function scoreAccount(user, options = {}) {
     if (hasMixedScriptToken(name)) {
         addSus('mixed_script', 'Mixed-script name', weightOf(weights, 'mixed_script'), 'one word mixes lookalike alphabets');
     }
-    if (digitSuffix) {
+    if (autoSuggested) {
+        addSus('suggested_name', 'Signup-suggested name', weightOf(weights, 'suggested_name'),
+            'the shape Discord offers when the name you wanted is taken');
+    } else if (digitSuffix) {
         addSus('digit_suffix', 'Digit suffix', weightOf(weights, 'digit_suffix'), 'name ends in 4+ digits');
     }
     if (gibberish) {
@@ -533,10 +588,29 @@ function scoreAccount(user, options = {}) {
                 : (Number.isFinite(tBand.maxDays)
                     ? `forgiveness band under ${Math.round(tBand.maxDays * scale)}d`
                     : 'full tenure forgiveness');
-            tenureSignal = {
-                id: 'membership_tenure', label: 'Long-standing member',
-                points: tBand.points, detail: `${tenureDays.toFixed(0)}d in the server (${bandDesc})`,
-            };
+
+            // Presence is not participation. Time served used to be the whole
+            // input, so an account that joined, went quiet and never came back
+            // earned the same forgiveness as a regular, which is exactly what a
+            // sleeper is counting on.
+            //
+            // This only ever WITHHOLDS forgiveness. It never adds a point, and
+            // it touches nothing else on the profile: a quiet member with a
+            // clean profile still scores clear, because there was nothing to
+            // forgive. All it stops is a bad profile hiding behind a join date.
+            const earned = participationFactor(participation);
+            const points = Math.round(tBand.points * earned);
+            if (points) {
+                tenureSignal = {
+                    id: 'membership_tenure',
+                    label: earned >= 1 ? 'Long-standing member' : 'Long-standing but quiet',
+                    points,
+                    detail: earned >= 1
+                        ? `${tenureDays.toFixed(0)}d in the server (${bandDesc})`
+                        : `${tenureDays.toFixed(0)}d in the server (${bandDesc}), `
+                          + `${participation.messages} message(s) seen: ${Math.round(earned * 100)}% of the forgiveness`,
+                };
+            }
         }
     }
 
@@ -643,6 +717,10 @@ module.exports = {
     hasInvisibleChars,
     hasMixedScriptToken,
     hasDigitSuffix,
+    looksAutoSuggested,
+    participationFactor,
+    MESSAGES_FOR_FULL_TENURE,
+    MIN_OBSERVED_DAYS,
     looksRandom,
     maxConsonantRun,
     isMostlyNonLatin,

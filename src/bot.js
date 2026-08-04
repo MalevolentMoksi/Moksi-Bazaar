@@ -11,6 +11,7 @@ const logger = require('./utils/logger');
 const { validateEnvironmentVars } = require('./utils/validateEnvironment');
 const { pool } = require('./utils/db');
 const { stopJanitor } = require('./utils/janitor');
+const { flush: activityFlush, stopAutoFlush: stopActivityFlush } = require('./utils/joinGate/activity');
 
 /** Railway allows roughly 10s between SIGTERM and SIGKILL; stay inside it. */
 const SHUTDOWN_TIMEOUT_MS = 8000;
@@ -131,6 +132,15 @@ function initializeBot() {
     deadline.unref();
 
     try { stopJanitor(); } catch { /* nothing worth reporting at this point */ }
+
+    // Before the pool closes: a minute of buffered message counts is cheap to
+    // write and annoying to lose on every deploy.
+    try {
+      stopActivityFlush();
+      await activityFlush();
+    } catch (error) {
+      logger.warn('Activity flush on shutdown failed', { error: error.message });
+    }
 
     try {
       await client.destroy();

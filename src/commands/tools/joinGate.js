@@ -29,6 +29,7 @@ const {
 const {
     scoreAccount, explain, DEFAULT_WEIGHTS, DEFAULT_SCAM_KEYWORDS,
 } = require('../../utils/joinGate/suspicion');
+const { describeShape } = require('../../utils/joinGate/cohorts');
 const { stats: phishingStats, startAutoRefresh: startPhishingRefresh } = require('../../utils/joinGate/phishing');
 const { syncGuild: syncInvites, canRead: canReadInvites } = require('../../utils/joinGate/invites');
 const { describeRouting, logConfigChange, logTest, CATEGORIES } = require('../../utils/joinGate/logging');
@@ -91,6 +92,15 @@ async function promptModal(componentInteraction, { title, inputs }) {
 }
 
 // ── Section renderers ───────────────────────────────────────────────────────
+
+/** "3d 4h", for cohort spans. Rounded, since nobody needs the seconds. */
+function formatSpan(ms) {
+    const minutes = Math.round(Number(ms ?? 0) / 60_000);
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) return `${hours}h`;
+    return `${Math.round(hours / 24)}d`;
+}
 
 function sectionRow(active) {
     return new ActionRowBuilder().addComponents(
@@ -1491,6 +1501,33 @@ module.exports = {
                         });
                     }
 
+                    // Batches. Scores judge one account at a time and cannot see
+                    // that fourteen of them share a shape and a registration
+                    // week, which is the thing a person spots instantly.
+                    if (report.cohorts.length) {
+                        embed.addFields({
+                            name: `🧬 Batches found (${report.cohorts.length})`,
+                            value: truncate(report.cohorts.slice(0, 4).map((c, n) =>
+                                `**${n + 1}.** **${c.size}** members · ${describeShape(c.shape)}\n`
+                                + `-# ${c.basis === 'creation' ? 'registered' : 'joined'} within `
+                                + `${formatSpan(c.basis === 'creation' ? c.creationSpanMs : c.joinSpanMs)}`
+                                + ` · ${c.defaultAvatars}/${c.size} default avatar`
+                                + (report.activityTracked ? ` · ${c.silent}/${c.size} never spoke` : '')
+                            ).join('\n'), 1000),
+                            inline: false,
+                        });
+                    }
+
+                    if (!report.activityTracked) {
+                        embed.addFields({
+                            name: 'Participation',
+                            value: 'Message counting has not started yet, so tenure still forgives on presence '
+                                + 'alone. It begins on the next deploy and needs **30 days** of observation '
+                                + 'before it withholds anything from anybody.',
+                            inline: false,
+                        });
+                    }
+
                     // Picker for the full arithmetic behind any one entry.
                     const picker = report.flagged.slice(0, 25).map(f => ({
                         label: truncate(`${f.score} · ${f.tag}`, 100),
@@ -1499,14 +1536,28 @@ module.exports = {
                         emoji: TIER_ICON[f.tier],
                     }));
 
-                    const components = picker.length
-                        ? [new ActionRowBuilder().addComponents(
+                    const components = [];
+                    if (picker.length) {
+                        components.push(new ActionRowBuilder().addComponents(
                             new StringSelectMenuBuilder()
                                 .setCustomId('jg_backtest_detail')
                                 .setPlaceholder('Show the full breakdown for...')
                                 .addOptions(picker)
-                        )]
-                        : [];
+                        ));
+                    }
+                    if (report.cohorts.length) {
+                        components.push(new ActionRowBuilder().addComponents(
+                            new StringSelectMenuBuilder()
+                                .setCustomId('jg_backtest_cohort')
+                                .setPlaceholder('List a batch, with ban commands to paste...')
+                                .addOptions(report.cohorts.slice(0, 25).map((c, n) => ({
+                                    label: truncate(`Batch ${n + 1}: ${c.size} members`, 100),
+                                    value: String(n),
+                                    description: truncate(describeShape(c.shape), 100),
+                                    emoji: '🧬',
+                                })))
+                        ));
+                    }
 
                     const reportMessage = await i.editReply({ embeds: [embed], components });
                     if (!components.length) return;
@@ -1520,6 +1571,44 @@ module.exports = {
 
                     detailCollector.on('collect', async sel => {
                         try {
+                            if (sel.customId === 'jg_backtest_cohort') {
+                                const cluster = report.cohorts[Number(sel.values[0])];
+                                if (!cluster) {
+                                    return sel.reply({ content: '⚠️ That batch is no longer available.', flags: MessageFlags.Ephemeral });
+                                }
+
+                                const roster = cluster.members
+                                    .map(m => `${m.username}  ${m.defaultAvatar ? '(no avatar)' : ''}`.trim())
+                                    .join('\n');
+                                // Commands rather than an action. A ban this bot
+                                // issues is attributed to this bot, and would
+                                // never reach Dyno's ?modstats; pasted by you,
+                                // it counts as yours.
+                                const commands = cluster.members
+                                    .map(m => `?ban ${m.id} Suspected Bot`)
+                                    .join('\n');
+
+                                return sel.reply({
+                                    content: truncate(
+                                        `🧬 **${cluster.size} members** · ${describeShape(cluster.shape)}\n`
+                                        + `-# ${cluster.basis === 'creation' ? 'registered' : 'joined'} within `
+                                        + `${formatSpan(cluster.basis === 'creation' ? cluster.creationSpanMs : cluster.joinSpanMs)}`
+                                        + ` · ${cluster.defaultAvatars}/${cluster.size} default avatar`
+                                        + (report.activityTracked ? ` · ${cluster.silent}/${cluster.size} never spoke` : '')
+                                        + `\n\`\`\`\n${roster}\n\`\`\`\n`
+                                        + `Paste into Dyno's channel, so the bans are attributed to you:\n`
+                                        + `\`\`\`\n${commands}\n\`\`\``,
+                                        1900
+                                    ),
+                                    flags: MessageFlags.Ephemeral,
+                                });
+                            }
+
+                            // Named rather than left as the fallthrough, so a
+                            // future select on this message cannot silently
+                            // land in the breakdown branch.
+                            if (sel.customId !== 'jg_backtest_detail') return;
+
                             const picked = report.flagged.find(f => f.id === sel.values[0]);
                             if (!picked) {
                                 return sel.reply({ content: '⚠️ That entry is no longer available.', flags: MessageFlags.Ephemeral });

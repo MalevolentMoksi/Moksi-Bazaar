@@ -37,8 +37,10 @@ describe('the reported false positive', () => {
         expect(idsFor(reported)).not.toContain('generated_name');
     });
 
-    test('the digit suffix is still reported, because that part was true', () => {
-        expect(idsFor(reported)).toContain('digit_suffix');
+    test('the digit block is still reported, because that part was true', () => {
+        // Reported as suggested_name rather than digit_suffix: the username is
+        // stem-underscore-five-digits, which is the narrower signal.
+        expect(idsFor(reported)).toContain('suggested_name');
     });
 
     test('and the score drops below the watch tier', () => {

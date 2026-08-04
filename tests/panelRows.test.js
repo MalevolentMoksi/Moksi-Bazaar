@@ -88,6 +88,32 @@ describe('the watch window controls exist where they are reachable', () => {
     });
 });
 
+describe('every control is wired to something', () => {
+    // A button whose custom id no handler matches is a dead button: it renders,
+    // it clicks, and nothing happens until the collector times out. Cheap to
+    // ship and invisible without a check like this one.
+    const source = require('fs').readFileSync(
+        require('path').join(__dirname, '..', 'src', 'commands', 'tools', 'joinGate.js'), 'utf8');
+
+    const declared = new Set([...source.matchAll(/setCustomId\('(\w+)'\)/g)].map(m => m[1]));
+    const handled = new Set([
+        ...[...source.matchAll(/id === '(\w+)'/g)].map(m => m[1]),
+        ...[...source.matchAll(/customId [!=]== '(\w+)'/g)].map(m => m[1]),
+        ...[...source.matchAll(/^\s{20}(jg_\w+):/gm)].map(m => m[1]),
+    ]);
+
+    test('no component is left without a handler', () => {
+        // jg_modal* ids are generated per interaction and answered by await,
+        // not by the collector.
+        const orphans = [...declared].filter(id => !handled.has(id) && !id.startsWith('jg_modal'));
+        expect(orphans).toEqual([]);
+    });
+
+    test('no handler waits on a component that no longer exists', () => {
+        expect([...handled].filter(id => !declared.has(id))).toEqual([]);
+    });
+});
+
 describe('fitRows', () => {
     const row = id => ({ components: [{ data: { custom_id: id } }] });
 

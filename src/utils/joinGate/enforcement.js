@@ -29,6 +29,8 @@ const { insertPendingUnban, scheduleNext } = require('./unbanScheduler');
 const suspicion = require('./suspicion');
 const watch = require('./watch');
 const invites = require('./invites');
+const activity = require('./activity');
+const { findCohorts } = require('./cohorts');
 
 /**
  * Removals are serialised globally rather than per guild. The bottleneck is
@@ -905,12 +907,43 @@ async function backtestGuild(guild, settings, { limit = 25, applyTenure = false 
     const protectedNames = collectProtectedNames(guild);
     const distribution = { clear: 0, watch: 0, suspect: 0, malicious: 0 };
     const flagged = [];
+
+    // Participation, so tenure forgiveness reflects taking part rather than
+    // merely persisting. One query for the whole guild, not one per member.
+    const now = Date.now();
+    const [messageCounts, activitySince] = await Promise.all([
+        activity.countsForGuild(guild.id).catch(() => new Map()),
+        activity.trackingSince().catch(() => 0),
+    ]);
+    const participationFor = (member) => {
+        if (!activitySince) return null; // counting has not started; judge nobody
+        const watchedFrom = Math.max(activitySince, Number(member.joinedTimestamp) || 0);
+        return {
+            messages: messageCounts.get(member.id) ?? 0,
+            observedDays: (now - watchedFrom) / suspicion.DAY_MS,
+        };
+    };
+
+    // Everything the cohort scan needs, collected in the same pass.
+    const roster = [];
     // Tenure would clear almost everyone here, which is correct in production
     // but useless for tuning. Score both ways and report both.
     let stillFlaggedWithTenure = 0;
 
     for (const member of members.values()) {
         if (member.user.bot) continue;
+
+        roster.push({
+            id: member.id,
+            username: String(member.user.username ?? ''),
+            tag: displayTag(member.user),
+            createdTimestamp: Number(member.user.createdTimestamp
+                ?? SnowflakeUtil.timestampFrom(member.id)),
+            joinedTimestamp: Number(member.joinedTimestamp) || 0,
+            defaultAvatar: !member.user.avatar,
+            messages: messageCounts.get(member.id) ?? 0,
+        });
+
         const common = {
             weights: settings.suspicion_weights,
             keywords: settings.suspicion_keywords ?? suspicion.DEFAULT_SCAM_KEYWORDS,
@@ -918,6 +951,7 @@ async function backtestGuild(guild, settings, { limit = 25, applyTenure = false 
             correlation: null,
             inBurst: false,
             tenureGraceDays: Number(settings.suspicion_tenure_grace_days),
+            participation: participationFor(member),
             thresholds,
         };
 
@@ -954,6 +988,12 @@ async function backtestGuild(guild, settings, { limit = 25, applyTenure = false 
         totalFlagged: flagged.length,
         stillFlaggedWithTenure,
         appliedTenure: applyTenure,
+        // Reported alongside the scores, never folded into them. The backtest
+        // has to stay an honest simulation of what live scoring would do, and
+        // live scoring does not know about cohorts.
+        cohorts: findCohorts(roster),
+        activityTracked: Boolean(activitySince),
+        activitySince,
     };
 }
 

@@ -22,6 +22,7 @@ const {
 const { getSettings } = require('../../utils/joinGate/config');
 const suspicion = require('../../utils/joinGate/suspicion');
 const { collectProtectedNames, peekAttempt } = require('../../utils/joinGate/enforcement');
+const activity = require('../../utils/joinGate/activity');
 const { getPendingUnbans } = require('../../utils/joinGate/unbanScheduler');
 const { bestTitle } = require('../../utils/shopCatalogue');
 const { trendDirection } = require('../../utils/trend');
@@ -49,13 +50,14 @@ const TIER_COLOR = Object.freeze({
  * weights and thresholds rather than the defaults. A dossier that disagrees
  * with the thing making the decisions is worse than no dossier.
  */
-function scoreNow(user, member, settings, guild) {
+function scoreNow(user, member, settings, guild, participation = null) {
     try {
         return suspicion.scoreAccount(user, {
             weights: settings.suspicion_weights,
             keywords: settings.suspicion_keywords ?? suspicion.DEFAULT_SCAM_KEYWORDS,
             protectedNames: guild ? collectProtectedNames(guild) : [],
             member,
+            participation,
             tenureGraceDays: Number(settings.suspicion_tenure_grace_days),
             thresholds: {
                 watch: Number(settings.suspicion_watch_at),
@@ -89,7 +91,22 @@ async function buildDossier(interaction, target) {
         isUserBlacklisted(target.id).catch(() => false),
     ]);
 
-    const scored = settings ? scoreNow(target, member, settings, guild) : null;
+    // Participation, so the dossier's number matches what the backtest shows.
+    let participation = null;
+    if (guild && member) {
+        const [messages, since] = await Promise.all([
+            activity.countFor(guild.id, target.id).catch(() => 0),
+            activity.trackingSince().catch(() => 0),
+        ]);
+        if (since) {
+            participation = {
+                messages,
+                observedDays: (Date.now() - Math.max(since, Number(member.joinedTimestamp) || 0)) / suspicion.DAY_MS,
+            };
+        }
+    }
+
+    const scored = settings ? scoreNow(target, member, settings, guild, participation) : null;
     const embed = new EmbedBuilder()
         .setColor(TIER_COLOR[scored?.tier] ?? EMBED_COLORS.INFO)
         .setTitle(`Dossier: ${target.username}`)

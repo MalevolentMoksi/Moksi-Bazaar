@@ -212,6 +212,20 @@ const init = async () => {
             count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, user_id)
         );
+        -- How much each member has actually said. Membership tenure used to
+        -- forgive on presence alone, so an account that joined and sat still
+        -- became invisible to scoring once the grace window passed, which is
+        -- precisely the sleeper strategy. This is the participation half.
+        --
+        -- Counts only, never content: nothing here identifies what was said.
+        CREATE TABLE IF NOT EXISTS member_activity (
+            guild_id        TEXT NOT NULL,
+            user_id         TEXT NOT NULL,
+            message_count   INTEGER NOT NULL DEFAULT 0,
+            first_message_ms BIGINT NOT NULL,
+            last_message_ms BIGINT NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        );
         -- ── JOIN GATE (account-age auto-kicker) ─────────────────────────────
         -- One row per guild. A guild with no row is implicitly disabled, so the
         -- gate is opt-in and can never act on a server it was never set up for.

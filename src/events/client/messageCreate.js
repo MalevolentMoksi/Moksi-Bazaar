@@ -1,6 +1,7 @@
 // src/events/client/messageCreate.js
 const logger = require('../../utils/logger');
 const { handleWatchedMessage } = require('../../utils/joinGate/enforcement');
+const { noteMessage } = require('../../utils/joinGate/activity');
 const { getSpeakConfigValue } = require('../../utils/db');
 const { passesBouncer } = require('../../utils/interjectionBouncer');
 
@@ -65,6 +66,11 @@ module.exports = {
   async execute(message, client) {
     if (message.author.bot) return;
     if (!message.guild) return; // Ignore DMs
+
+    // Participation, which membership tenure needs so that sitting still stops
+    // counting as belonging. A Map write and nothing else; the database sees a
+    // batch once a minute.
+    noteMessage(message.guild.id, message.author.id);
 
     // Join-gate behaviour window. Runs before the mention check because it
     // applies to every message from a recently joined member, not just ones
