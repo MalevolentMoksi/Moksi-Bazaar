@@ -13,7 +13,12 @@ const { pool } = require('./db');
 function validateEnvironmentVars() {
   const errors = [];
   const required = ['TOKEN', 'DATABASE_URL'];
-  const optional = ['CLIENT_ID', 'OPENROUTER_API_KEY', 'OWNER_ID', 'NODE_ENV', 'LOG_LEVEL'];
+  const optional = [
+    'CLIENT_ID', 'OPENROUTER_API_KEY', 'OWNER_ID', 'NODE_ENV', 'LOG_LEVEL',
+    // The owner dashboard. All three (plus CLIENT_ID) must be set for it to
+    // start; with any missing it logs one line and the bot runs unchanged.
+    'DISCORD_CLIENT_SECRET', 'SESSION_SECRET', 'DASHBOARD_BASE_URL',
+  ];
 
   logger.info('Validating environment variables...');
 
