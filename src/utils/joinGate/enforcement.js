@@ -517,6 +517,13 @@ async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
     });
 
     if (inviteInfo?.known) result.inviteInfo = inviteInfo;
+
+    // Hand the verdict to the behaviour window whatever it was. A member who
+    // looked wrong on arrival needs less evidence of misbehaviour afterwards,
+    // and a clear one carries nothing, which is what stops this from being a
+    // blanket increase in sensitivity.
+    watch.setJoinScore(guild.id, member.id, result.score, result.tier);
+
     if (result.tier === 'clear') return;
 
     const action = {
@@ -657,13 +664,17 @@ async function handleWatchedMessage(message) {
         const windowMs = Number(settings.watch_window_minutes) * 60_000;
         if (!watch.isWatched(message.guild.id, message.author.id, windowMs)) return;
 
-        const { score, signals } = watch.inspectMessage(message.guild.id, message, { windowMs });
-        if (score <= 0) return;
+        const threshold = Number(settings.watch_action_at);
+        const { score, signals, report } = watch.inspectMessage(message.guild.id, message, {
+            windowMs, threshold,
+        });
+        // `report` is false for a member already reported at the same level:
+        // the score keeps accumulating quietly and only speaks up again when it
+        // crosses the action bar or gets materially worse.
+        if (score <= 0 || !report) return;
 
         const member = message.member ?? await message.guild.members.fetch(message.author.id).catch(() => null);
         if (!member) return;
-
-        const threshold = Number(settings.watch_action_at);
         const action = score >= threshold ? settings.watch_action : 'log';
         const dryRun = Boolean(settings.dry_run);
 
@@ -728,8 +739,15 @@ async function handleWatchedMessage(message) {
             }
         }
 
-        // One report per member: stop re-reporting every subsequent message.
-        watch.forget(message.guild.id, member.id);
+        // Keep watching. Dropping the member here was what stopped a sweep
+        // across channels from ever being seen as a sweep: the first flagged
+        // message ended the watch, so every later copy scored nothing and the
+        // cross-channel and duplicate weights could not fire. Only a member who
+        // is actually gone stops being watched.
+        watch.markReported(message.guild.id, member.id, score);
+        if (actionOutcome?.ok && (action === 'kick' || action === 'ban')) {
+            watch.forget(message.guild.id, member.id);
+        }
 
         await logSuspicion(message.guild, settings, {
             user: member.user, result, action, actionOutcome, dryRun,

@@ -56,6 +56,7 @@ const DEFAULT_WEIGHTS = Object.freeze({
     invite_flood: 22,
     // Combinations
     bulk_signature: 25,
+    generated_name: 15,
     fresh_throwaway: 18,
     barren_profile: 10,
     // Trust (negative, and collectively capped by TRUST_CAP)
@@ -447,6 +448,15 @@ function scoreAccount(user, options = {}) {
     if (defaultAvatar && (gibberish || digitSuffix) && noTrustAtAll) {
         addSus('bulk_signature', 'Bulk-registration signature', weightOf(weights, 'bulk_signature'),
             'default avatar + generated-looking name + nothing else on the profile');
+    }
+    // The name signature on its own, without needing a default avatar.
+    // Every combination here used to require one, so uploading any picture at
+    // all bought a generated account out of all three. An avatar is a
+    // five-second upload; a name that is both unpronounceable AND suffixed
+    // with a block of digits is what a registration script produces.
+    else if (gibberish && digitSuffix) {
+        addSus('generated_name', 'Generated-looking name', weightOf(weights, 'generated_name'),
+            'consonant runs and a digit block, the shape a name generator makes');
     }
     if (defaultAvatar && ageDays < 7 && noTrustAtAll) {
         addSus('fresh_throwaway', 'Fresh throwaway', weightOf(weights, 'fresh_throwaway'),
