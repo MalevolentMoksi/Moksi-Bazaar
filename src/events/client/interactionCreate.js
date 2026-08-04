@@ -103,7 +103,12 @@ module.exports = {
                 if (interaction.replied || interaction.deferred) return;
                 try {
                     await interaction.reply({
-                        content: 'That one\'s dead. Whatever you just pressed expired a while ago; run the command again.',
+                        // Do not assert it expired: collectors live in memory,
+                        // so a deploy kills every live game mid-hand and the
+                        // button dies seconds old. Claiming it timed out sends
+                        // the owner hunting a cooldown bug that is not there.
+                        content: 'That one\'s dead. Either it timed out, or the bot restarted and forgot '
+                            + 'the game (a deploy does that). Run the command again.',
                         flags: MessageFlags.Ephemeral,
                     });
                 } catch {
