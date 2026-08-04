@@ -84,8 +84,11 @@ async function recentWarns(guildId, { limit = 25, offset = 0, userId = null, sea
     return { rows, total: rows[0]?.total ?? 0 };
 }
 
-/** Member activity, sortable, searchable by ID. */
-async function memberActivity(guildId, { limit = 50, offset = 0, sort = 'last', userId = null } = {}) {
+/** Member activity, sortable, searchable by one ID or a name-matched set. */
+async function memberActivity(guildId, { limit = 50, offset = 0, sort = 'last', userId = null, userIds = null } = {}) {
+    // A name search that matched nobody is an empty answer, not a full table.
+    if (Array.isArray(userIds) && userIds.length === 0) return { rows: [], total: 0 };
+
     const ORDER = {
         last: 'last_message_ms DESC',
         first: 'first_message_ms ASC',
@@ -95,6 +98,10 @@ async function memberActivity(guildId, { limit = 50, offset = 0, sort = 'last', 
     const values = [guildId];
     let where = 'guild_id = $1';
     if (userId) { values.push(userId); where += ` AND user_id = $${values.length}`; }
+    if (Array.isArray(userIds) && userIds.length) {
+        values.push(userIds);
+        where += ` AND user_id = ANY($${values.length})`;
+    }
     values.push(clampLimit(limit), clampOffset(offset));
     const { rows } = await pool.query(
         `SELECT user_id, message_count, first_message_ms, last_message_ms,

@@ -198,11 +198,35 @@ function buildApp(client, config) {
         respond(req, res, { title: 'Join Gate', body: gate.render(model) });
     }));
 
+    const modlog = require('./pages/modlog');
+    app.get('/modlog', wrap(async (req, res) => {
+        const model = await modlog.data(client, req.guildId, req.query);
+        respond(req, res, { title: 'Mod History', body: modlog.render(model) });
+    }));
+
+    const members = require('./pages/members');
+    app.get('/members', wrap(async (req, res) => {
+        const model = await members.data(client, req.guildId, req.query);
+        respond(req, res, { title: 'Members', body: members.render(model) });
+    }));
+
+    const member = require('./pages/member');
+    app.get('/members/:id', wrap(async (req, res) => {
+        if (!/^\d{17,20}$/.test(req.params.id)) {
+            return respond(req, res, {
+                title: 'Members',
+                body: card({ title: 'Not an ID', body: html`<p class="empty">That is not a Discord user ID.</p>` }),
+            });
+        }
+        const model = await member.data(client, req.guildId, req.params.id);
+        const name = model.user ? (model.user.globalName ?? model.user.username) : 'Unknown';
+        respond(req, res, { title: name, body: member.render(model) });
+    }));
+
     // Stubs keep the nav honest while later stages land: a page you can reach
     // that says it is coming beats a 404 that looks like a bug.
     for (const [route, title] of [
-        ['/modlog', 'Mod History'],
-        ['/members', 'Members'], ['/guard', 'Guard'],
+        ['/guard', 'Guard'],
     ]) {
         app.get(route, (req, res) => {
             respond(req, res, {
