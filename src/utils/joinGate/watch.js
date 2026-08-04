@@ -24,6 +24,15 @@ const BEHAVIOUR_WEIGHTS = Object.freeze({
     cross_channel_spam: 45,
     duplicate_spam: 30,
     link_in_first_message: 12,
+    // Discord's own verdicts, for members inside the window. Only the two
+    // machine-shaped trigger types are scored: the SPAM classifier and mention
+    // spam. Keyword rules are a server's own list of words it does not want
+    // said, which is a human misbehaving, not a bot, and is scored at 0 unless
+    // the owner deliberately raises it.
+    automod_spam: 45,
+    automod_mention_spam: 35,
+    automod_keyword: 0,
+    automod_profile: 20,
 });
 
 /**
@@ -293,11 +302,24 @@ function inspectMessage(guildId, message, { windowMs, threshold = Infinity, now 
         }
     }
 
-    // Fold this message into everything already seen in the window. Highest
-    // points win for a repeated signal, so a later mass mention of 40 replaces
-    // an earlier one of 6 rather than stacking with it.
+    return fold(entry, signals, { guildId, userId: message.author.id, threshold });
+}
+
+/**
+ * Folds freshly observed signals into everything already seen in the window and
+ * recomputes the total.
+ *
+ * Shared by inspectMessage and noteExternalSignal, so a verdict handed to us by
+ * Discord's own AutoMod goes through exactly the same arithmetic, combinations
+ * and reporting rules as one this bot worked out for itself. Two scoring paths
+ * that drift apart would be a worse bug than either of them being wrong.
+ */
+function fold(entry, signals, { guildId, userId, threshold = Infinity }) {
+    // Highest points win for a repeated signal, so a later mass mention of 40
+    // replaces an earlier one of 6 rather than stacking with it.
     const fresh = [];
     for (const signal of signals) {
+        if (!signal || !signal.points) continue;
         const prior = entry.seen.get(signal.id);
         if (!prior) fresh.push(signal.id);
         if (!prior || signal.points > prior.points) entry.seen.set(signal.id, signal);
@@ -335,11 +357,30 @@ function inspectMessage(guildId, message, { windowMs, threshold = Infinity, now 
 
     if (score > 0) {
         logger.debug('[JOIN-GATE] Watch-window signals', {
-            guildId, userId: message.author.id, score, report,
-            signals: all.map(s => s.id),
+            guildId, userId, score, report, signals: all.map(s => s.id),
         });
     }
     return { score, signals: all, report, fresh };
+}
+
+/**
+ * Scores something observed about a watched member that did not arrive as a
+ * message this bot can read: currently, a verdict from Discord's own AutoMod.
+ *
+ * AutoMod blocks the message before anything else sees it, so without this the
+ * strongest evidence a new account can produce (Discord's spam classifier
+ * firing on them) would be invisible to the watch window precisely because the
+ * platform dealt with it well.
+ */
+function noteExternalSignal(guildId, userId, signal, { windowMs, threshold = Infinity, now = Date.now() } = {}) {
+    const empty = { score: 0, signals: [], report: false, fresh: [] };
+    const entry = watched.get(guildId)?.get(userId);
+    if (!entry) return empty;
+    if (now - entry.joinedAt > windowMs) {
+        forget(guildId, userId);
+        return empty;
+    }
+    return fold(entry, [signal], { guildId, userId, threshold });
 }
 
 function watchedCount(guildId) {
@@ -362,6 +403,7 @@ module.exports = {
     evidenceFor,
     isWatched,
     inspectMessage,
+    noteExternalSignal,
     forget,
     prune,
     pruneAll,

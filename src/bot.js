@@ -59,6 +59,13 @@ function initializeBot() {
       GatewayIntentBits.GuildPresences,
       // Needed to diff invite use counts for join attribution.
       GatewayIntentBits.GuildInvites,
+      // Discord's own AutoMod telling us what it blocked. Not privileged, and
+      // it grants no ability to change a rule: this bot only ever listens.
+      GatewayIntentBits.AutoModerationExecution,
+      // Carries guildAuditLogEntryCreate, which the audit-log guard reads.
+      // The audit log is a record of what already happened, so this intent
+      // buys the ability to notice a nuke, never to intercept one.
+      GatewayIntentBits.GuildModeration,
     ],
   });
 

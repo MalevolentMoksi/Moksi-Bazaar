@@ -524,6 +524,14 @@ function renderWatch(settings, guild) {
                 value: phishingStats().domains
                     ? `**${phishingStats().domains}** domains loaded`
                     : '*not loaded yet*: it is fetched when the window is switched on',
+                inline: true,
+            },
+            {
+                name: 'Discord AutoMod',
+                value: settings.watch_automod_enabled
+                    ? '🟢 Counts your **spam** and **mention-spam** rules as evidence\n'
+                      + '-# keyword rules (slurs, politics, profanity) are ignored: those are people, not bots'
+                    : '⚪ Off. What AutoMod blocks does not feed the score',
                 inline: false,
             },
         );
@@ -543,6 +551,10 @@ function renderWatch(settings, guild) {
                 .setLabel(settings.watch_enabled ? 'Disable watch window' : 'Enable watch window')
                 .setStyle(settings.watch_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
             new ButtonBuilder().setCustomId('jg_watch_edit').setLabel('Window & action').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId('jg_watch_automod')
+                .setLabel(settings.watch_automod_enabled ? 'Ignore AutoMod' : 'Count AutoMod')
+                .setStyle(settings.watch_automod_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
             new ButtonBuilder()
                 .setCustomId('jg_watch_exempt_clear')
                 .setLabel('Clear ignored channels')
@@ -1314,6 +1326,14 @@ module.exports = {
                     // you see on submit is what you get.
                     return applyChange(i, { watch_exempt_channel_ids: i.values },
                         `The watch window now ignores ${i.values.map(channelRef).join(' ')}`);
+                }
+
+                if (id === 'jg_watch_automod') {
+                    const turningOn = !settings.watch_automod_enabled;
+                    return applyChange(i, { watch_automod_enabled: turningOn },
+                        turningOn
+                            ? 'Watch window now counts Discord **AutoMod spam** verdicts'
+                            : 'Watch window ignores Discord AutoMod');
                 }
 
                 if (id === 'jg_watch_exempt_clear') {

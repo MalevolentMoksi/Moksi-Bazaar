@@ -729,103 +729,201 @@ async function handleWatchedMessage(message) {
 
         const member = message.member ?? await message.guild.members.fetch(message.author.id).catch(() => null);
         if (!member) return;
-        const action = score >= threshold ? settings.watch_action : 'log';
-        const dryRun = Boolean(settings.dry_run);
 
-        const result = {
-            score,
-            tier: score >= threshold ? 'malicious' : 'watch',
-            signals,
-            source: 'behaviour',
-        };
-
-        let actionOutcome = null;
-        // Captured before anything acts: a ban removes the member, and with
-        // them the ability to look up what they posted.
-        const evidence = watch.evidenceFor(message.guild.id, member.id);
-
-        // A timeout is not a removal, so it goes through member.timeout rather
-        // than the kick/ban path: no DM template, no pending unban row, nothing
-        // to walk back with an invite. It expires on its own and a moderator
-        // can lift it in one click.
-        if (!dryRun && action === 'timeout') {
-            const minutes = Math.max(1, Number(settings.watch_timeout_minutes) || 60);
-            try {
-                await member.timeout(
-                    minutes * 60_000,
-                    `Join gate: behaviour score ${score} within the watch window`
-                );
-                actionOutcome = { ok: true, action: 'timeout', minutes };
-                logger.info('[JOIN-GATE] Watch timeout applied', {
-                    guildId: message.guild.id, userId: member.id, minutes, score,
-                });
-            } catch (error) {
-                // Missing Moderate Members, or the member outranks the bot.
-                actionOutcome = { ok: false, action: 'timeout', error: error.message };
-                logger.error('[JOIN-GATE] Watch timeout failed', {
-                    guildId: message.guild.id, userId: member.id, error: error.message,
-                });
-                await incrementStat(message.guild.id, 'total_failures');
-            }
-        }
-
-        if (!dryRun && (action === 'kick' || action === 'ban')) {
-            const nowMs = Date.now();
-            // Same honesty rule as the suspicion path: a behaviour ban is a
-            // cooldown from now, never "creation + threshold", which is
-            // already in the past for anyone who got past the age gate.
-            const unbanAt = nowMs + Number(settings.watch_ban_hours) * 3_600_000;
-            const decision = {
-                action: 'gate',
-                reason: `behaviour score ${score} within the watch window`,
-                ageMs: nowMs - Number(member.user.createdTimestamp),
-                thresholdMs: thresholdMs(settings),
-                eligibleAt: action === 'ban' ? unbanAt : nowMs,
-                // Fixed cooldown: age-threshold edits must never recompute it.
-                unbanKind: 'timed',
-            };
-            const attempts = await peekAttempt(message.guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
-            const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts, 'behaviour');
-            actionOutcome = await removeMember(member, settings, decision, action);
-            actionOutcome.dm = dm.note;
-
-            if (actionOutcome.ok) {
-                await incrementStat(message.guild.id, action === 'ban' ? 'total_bans' : 'total_kicks');
-            } else if (!actionOutcome.benign) {
-                await incrementStat(message.guild.id, 'total_failures');
-            }
-        }
-
-        // Clean up after any real action. Removing the person who posted a wall
-        // of scam links and leaving the links up is half a job, and a kick and
-        // a timeout have no equivalent of the ban endpoint's message sweep.
-        if (!dryRun && actionOutcome?.ok && evidence.length) {
-            actionOutcome.deleted = await purgeEvidence(message.guild, evidence);
-        }
-
-        // Keep watching. Dropping the member here was what stopped a sweep
-        // across channels from ever being seen as a sweep: the first flagged
-        // message ended the watch, so every later copy scored nothing and the
-        // cross-channel and duplicate weights could not fire. Only a member who
-        // is actually gone stops being watched.
-        watch.markReported(message.guild.id, member.id, score);
-        if (actionOutcome?.ok && (action === 'kick' || action === 'ban')) {
-            watch.forget(message.guild.id, member.id);
-        }
-
-        await logSuspicion(message.guild, settings, {
-            user: member.user, result, action, actionOutcome, dryRun,
-            channelId: message.channelId,
-            evidence,
-        });
-        if (!dryRun) await incrementStat(message.guild.id, 'total_flagged');
-
-        logger.info('[JOIN-GATE] Watch-window flag', {
-            guildId: message.guild.id, userId: member.id, score, action, dryRun,
-            signals: signals.map(s => s.id),
+        await enforceBehaviour(message.guild, member, settings, {
+            score, signals, channelId: message.channelId,
         });
     } catch (error) {
         logger.error('[JOIN-GATE] handleWatchedMessage crashed', { error: error.message, stack: error.stack });
+    }
+}
+
+/**
+ * Acts on a behaviour score, whatever produced it.
+ *
+ * Extracted so the AutoMod path and the message path cannot drift. Two copies
+ * of enforcement logic is how a timeout ends up logged as a kick in one of
+ * them and not the other, which has already happened once here.
+ */
+async function enforceBehaviour(guild, member, settings, { score, signals, channelId }) {
+    const threshold = Number(settings.watch_action_at);
+    const action = score >= threshold ? settings.watch_action : 'log';
+    const dryRun = Boolean(settings.dry_run);
+
+    const result = {
+        score,
+        tier: score >= threshold ? 'malicious' : 'watch',
+        signals,
+        source: 'behaviour',
+    };
+
+    let actionOutcome = null;
+    // Captured before anything acts: a ban removes the member, and with
+    // them the ability to look up what they posted.
+    const evidence = watch.evidenceFor(guild.id, member.id);
+
+    // A timeout is not a removal, so it goes through member.timeout rather
+    // than the kick/ban path: no DM template, no pending unban row, nothing
+    // to walk back with an invite. It expires on its own and a moderator
+    // can lift it in one click.
+    if (!dryRun && action === 'timeout') {
+        const minutes = Math.max(1, Number(settings.watch_timeout_minutes) || 60);
+        try {
+            await member.timeout(
+                minutes * 60_000,
+                `Join gate: behaviour score ${score} within the watch window`
+            );
+            actionOutcome = { ok: true, action: 'timeout', minutes };
+            logger.info('[JOIN-GATE] Watch timeout applied', {
+                guildId: guild.id, userId: member.id, minutes, score,
+            });
+        } catch (error) {
+            // Missing Moderate Members, or the member outranks the bot.
+            actionOutcome = { ok: false, action: 'timeout', error: error.message };
+            logger.error('[JOIN-GATE] Watch timeout failed', {
+                guildId: guild.id, userId: member.id, error: error.message,
+            });
+            await incrementStat(guild.id, 'total_failures');
+        }
+    }
+
+    if (!dryRun && (action === 'kick' || action === 'ban')) {
+        const nowMs = Date.now();
+        // Same honesty rule as the suspicion path: a behaviour ban is a
+        // cooldown from now, never "creation + threshold", which is
+        // already in the past for anyone who got past the age gate.
+        const unbanAt = nowMs + Number(settings.watch_ban_hours) * 3_600_000;
+        const decision = {
+            action: 'gate',
+            reason: `behaviour score ${score} within the watch window`,
+            ageMs: nowMs - Number(member.user.createdTimestamp),
+            thresholdMs: thresholdMs(settings),
+            eligibleAt: action === 'ban' ? unbanAt : nowMs,
+            // Fixed cooldown: age-threshold edits must never recompute it.
+            unbanKind: 'timed',
+        };
+        const attempts = await peekAttempt(guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
+        const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts, 'behaviour');
+        actionOutcome = await removeMember(member, settings, decision, action);
+        actionOutcome.dm = dm.note;
+
+        if (actionOutcome.ok) {
+            await incrementStat(guild.id, action === 'ban' ? 'total_bans' : 'total_kicks');
+        } else if (!actionOutcome.benign) {
+            await incrementStat(guild.id, 'total_failures');
+        }
+    }
+
+    // Clean up after any real action. Removing the person who posted a wall
+    // of scam links and leaving the links up is half a job, and a kick and
+    // a timeout have no equivalent of the ban endpoint's message sweep.
+    if (!dryRun && actionOutcome?.ok && evidence.length) {
+        actionOutcome.deleted = await purgeEvidence(guild, evidence);
+    }
+
+    // Keep watching. Dropping the member here was what stopped a sweep
+    // across channels from ever being seen as a sweep: the first flagged
+    // message ended the watch, so every later copy scored nothing and the
+    // cross-channel and duplicate weights could not fire. Only a member who
+    // is actually gone stops being watched.
+    watch.markReported(guild.id, member.id, score);
+    if (actionOutcome?.ok && (action === 'kick' || action === 'ban')) {
+        watch.forget(guild.id, member.id);
+    }
+
+    await logSuspicion(guild, settings, {
+        user: member.user, result, action, actionOutcome, dryRun,
+        channelId,
+        evidence,
+    });
+    if (!dryRun) await incrementStat(guild.id, 'total_flagged');
+
+    logger.info('[JOIN-GATE] Watch-window flag', {
+        guildId: guild.id, userId: member.id, score, action, dryRun,
+        signals: signals.map(s => s.id),
+    });
+}
+
+/**
+ * Discord AutoMod trigger types, and what a hit from each is worth as evidence
+ * that an account is automated.
+ *
+ * The distinction that matters is who wrote the rule. SPAM and MENTION_SPAM are
+ * Discord's own classifiers: they fire on machine-shaped behaviour, and a hit
+ * on a member six minutes into the server is strong evidence. MEMBER_PROFILE
+ * catches a name a server has banned, which bulk accounts do trip.
+ *
+ * KEYWORD and KEYWORD_PRESET are a server's own list of words it does not want
+ * said. That is a person misbehaving, not a bot, and scoring it here would
+ * quietly turn a swearing filter into grounds for removal. Weighted 0 by
+ * default; the weight exists so an owner can raise it deliberately, not so it
+ * happens by accident.
+ */
+const AUTOMOD_TRIGGERS = Object.freeze({
+    1: { id: 'automod_keyword', label: 'Tripped a keyword rule', weight: 'automod_keyword' },
+    3: { id: 'automod_spam', label: 'Discord flagged this as spam', weight: 'automod_spam' },
+    4: { id: 'automod_keyword', label: 'Tripped a preset word filter', weight: 'automod_keyword' },
+    5: { id: 'automod_mention_spam', label: 'Discord blocked mention spam', weight: 'automod_mention_spam' },
+    6: { id: 'automod_profile', label: 'Blocked profile name', weight: 'automod_profile' },
+});
+
+/**
+ * Scores a verdict from Discord's own AutoMod against a member still inside
+ * their join watch window.
+ *
+ * AutoMod blocks the message before any bot sees it, so the strongest thing a
+ * new account can do (trip Discord's spam classifier) was invisible here
+ * precisely because the platform handled it well. This does not create, read or
+ * modify any AutoMod rule: it only listens to what the owner's own rules did.
+ */
+async function handleAutoModAction(execution) {
+    try {
+        const guild = execution?.guild;
+        const userId = execution?.userId;
+        if (!guild || !userId) return;
+
+        // Cheapest possible gate, same as the message path: an in-memory
+        // lookup, no config read when nobody is being watched.
+        if (watch.watchedCount(guild.id) === 0) return;
+
+        let settings;
+        try {
+            settings = await getSettings(guild.id);
+        } catch {
+            return; // fail open
+        }
+        if (!settings.enabled || !settings.watch_enabled || !settings.watch_automod_enabled) return;
+
+        const exemptChannels = settings.watch_exempt_channel_ids;
+        if (execution.channelId && exemptChannels?.length && exemptChannels.includes(execution.channelId)) return;
+
+        const trigger = AUTOMOD_TRIGGERS[execution.ruleTriggerType];
+        if (!trigger) return;
+        const points = Number(watch.BEHAVIOUR_WEIGHTS[trigger.weight] ?? 0);
+        if (points <= 0) return; // keyword rules, unless deliberately weighted up
+
+        const windowMs = Number(settings.watch_window_minutes) * 60_000;
+        if (!watch.isWatched(guild.id, userId, windowMs)) return;
+
+        const matched = String(execution.matchedKeyword ?? execution.matchedContent ?? '').slice(0, 60);
+        const threshold = Number(settings.watch_action_at);
+        const { score, signals, report } = watch.noteExternalSignal(guild.id, userId, {
+            id: trigger.id,
+            label: trigger.label,
+            points,
+            detail: matched ? `AutoMod matched "${matched}"` : 'blocked by your AutoMod rules',
+        }, { windowMs, threshold });
+
+        if (score <= 0 || !report) return;
+
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member) return;
+
+        await enforceBehaviour(guild, member, settings, {
+            score, signals, channelId: execution.channelId,
+        });
+    } catch (error) {
+        logger.error('[JOIN-GATE] handleAutoModAction crashed', { error: error.message, stack: error.stack });
     }
 }
 
@@ -1003,6 +1101,7 @@ module.exports = {
     renderDm,
     handleMemberJoin,
     handleWatchedMessage,
+    handleAutoModAction,
     sweepGuild,
     backtestGuild,
     collectProtectedNames,

@@ -118,6 +118,25 @@ const DEFAULTS = Object.freeze({
      * before the setting existed.
      */
     watch_exempt_channel_ids: [],
+    watch_automod_enabled: false,
+
+    // ── Audit-log guard ─────────────────────────────────────────────────────
+    // Watch-only. Nothing here calls a moderation endpoint: the audit log is a
+    // record of what already happened, so this can notice and report and can
+    // never intercept, block or undo an action by anyone.
+    guard_enabled: false,
+    guard_channel_id: null,
+    guard_dm_owner: true,
+    guard_window_seconds: 60,
+    guard_delete_limit: 4,
+    guard_create_limit: 6,
+    guard_perm_limit: 2,
+    guard_webhook_limit: 3,
+    guard_watch_identity: true,
+    guard_watch_bots: true,
+    guard_exempt_user_ids: [],
+
+    snapshot_enabled: false,
     dm_watch_message: DEFAULT_DM_WATCH_MESSAGE,
     // Invite attribution.
     invite_tracking_enabled: false,
@@ -157,6 +176,10 @@ const WRITABLE_COLUMNS = new Set([
     'suspicion_tenure_grace_days', 'suspicion_ban_hours', 'dm_suspicion_message',
     'watch_enabled', 'watch_window_minutes', 'watch_action_at', 'watch_action',
     'watch_ban_hours', 'watch_timeout_minutes', 'watch_exempt_channel_ids', 'dm_watch_message',
+    'watch_automod_enabled',
+    'guard_enabled', 'guard_channel_id', 'guard_dm_owner', 'guard_window_seconds',
+    'guard_delete_limit', 'guard_create_limit', 'guard_perm_limit', 'guard_webhook_limit',
+    'guard_watch_identity', 'guard_watch_bots', 'guard_exempt_user_ids', 'snapshot_enabled',
     'invite_tracking_enabled',
 ]);
 
@@ -181,6 +204,19 @@ function ensureColumns() {
             ADD COLUMN IF NOT EXISTS watch_ban_hours       INTEGER NOT NULL DEFAULT 24,
             ADD COLUMN IF NOT EXISTS watch_timeout_minutes INTEGER NOT NULL DEFAULT 60,
             ADD COLUMN IF NOT EXISTS watch_exempt_channel_ids TEXT[],
+            ADD COLUMN IF NOT EXISTS watch_automod_enabled BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS guard_enabled         BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS guard_channel_id      TEXT,
+            ADD COLUMN IF NOT EXISTS guard_dm_owner        BOOLEAN NOT NULL DEFAULT true,
+            ADD COLUMN IF NOT EXISTS guard_window_seconds  INTEGER NOT NULL DEFAULT 60,
+            ADD COLUMN IF NOT EXISTS guard_delete_limit    INTEGER NOT NULL DEFAULT 4,
+            ADD COLUMN IF NOT EXISTS guard_create_limit    INTEGER NOT NULL DEFAULT 6,
+            ADD COLUMN IF NOT EXISTS guard_perm_limit      INTEGER NOT NULL DEFAULT 2,
+            ADD COLUMN IF NOT EXISTS guard_webhook_limit   INTEGER NOT NULL DEFAULT 3,
+            ADD COLUMN IF NOT EXISTS guard_watch_identity  BOOLEAN NOT NULL DEFAULT true,
+            ADD COLUMN IF NOT EXISTS guard_watch_bots      BOOLEAN NOT NULL DEFAULT true,
+            ADD COLUMN IF NOT EXISTS guard_exempt_user_ids TEXT[],
+            ADD COLUMN IF NOT EXISTS snapshot_enabled      BOOLEAN NOT NULL DEFAULT false,
             ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
             ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT`
     ).catch(error => {
@@ -215,6 +251,8 @@ function normalise(row) {
         exempt_user_ids: Array.isArray(row.exempt_user_ids) ? row.exempt_user_ids : [],
         watch_exempt_channel_ids: Array.isArray(row.watch_exempt_channel_ids)
             ? row.watch_exempt_channel_ids : [],
+        guard_exempt_user_ids: Array.isArray(row.guard_exempt_user_ids)
+            ? row.guard_exempt_user_ids : [],
         dm_message: row.dm_message ?? DEFAULT_DM_MESSAGE,
         dm_ban_message: row.dm_ban_message ?? DEFAULT_DM_BAN_MESSAGE,
         dm_suspicion_message: row.dm_suspicion_message ?? DEFAULT_DM_SUSPICION_MESSAGE,
