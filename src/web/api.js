@@ -288,6 +288,30 @@ function createApi(client) {
         });
     }));
 
+    // ── Back up now ─────────────────────────────────────────────────────
+    // The whole database, not one guild's slice; the :g in the route only
+    // keeps the client-side plumbing uniform. Sends wherever the weekly run
+    // would: the owner's DMs always, plus the /backup channel if one is set.
+    router.post('/guild/:g/backup', wrap(async (req, res) => {
+        const { sendBackup, getBackupChannelId, LAST_RUN_KEY } = require('../utils/backup');
+        const { setSpeakConfigValue } = require('../utils/db');
+        const { OWNER_ID } = require('../utils/constants');
+
+        const channelId = await getBackupChannelId();
+        const result = await sendBackup(client, { channelId, dmUserId: OWNER_ID });
+        if (!result.ok) return res.status(502).json({ error: result.errors.join(' ') });
+
+        // Stamped so the weekly slot does not double up right after a manual run.
+        await setSpeakConfigValue(LAST_RUN_KEY, Date.now());
+        logger.info('[DASHBOARD] Backup sent', { sentTo: result.sentTo, by: req.owner.uid });
+        return res.json({
+            ok: true,
+            summary: `Backup sent (${result.sentTo.join(' and ')}): `
+                + `${result.meta.totalRows.toLocaleString()} rows, ${(result.meta.bytes / 1024).toFixed(0)} KB`
+                + (result.errors.length ? `. But: ${result.errors.join(' ')}` : ''),
+        });
+    }));
+
     // ── Watch-window channel exemptions ─────────────────────────────────
     router.post('/guild/:g/watch-exempt-channels', wrap(async (req, res) => {
         const guild = guildOf(req);

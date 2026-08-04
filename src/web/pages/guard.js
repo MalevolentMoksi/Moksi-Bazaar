@@ -13,6 +13,8 @@ const { AuditLogEvent } = require('discord.js');
 const { getSettings } = require('../../utils/joinGate/config');
 const { WATCHED } = require('../../utils/joinGate/guard');
 const { resolveChannel } = require('../../utils/joinGate/snapshot');
+const { getBackupChannelId, LAST_RUN_KEY } = require('../../utils/backup');
+const { getSpeakConfigValue } = require('../../utils/db');
 const { html, raw, card, pill, table, fmtNumber, fmtAgo, fmtDateTime } = require('../html');
 
 /** discord.js enums have no reverse index; build one once. */
@@ -43,6 +45,7 @@ async function data(client, guildId) {
 
     const channelName = id => guild?.channels.cache.get(id)?.name ?? null;
     const snapshotChannelId = resolveChannel(settings);
+    const backupChannelId = await getBackupChannelId();
 
     return {
         settings,
@@ -50,6 +53,8 @@ async function data(client, guildId) {
         guardChannelName: channelName(settings.guard_channel_id),
         snapshotChannelName: channelName(snapshotChannelId),
         snapshotHasDm: Boolean(settings.snapshot_dm_owner),
+        backupChannelName: backupChannelId ? channelName(backupChannelId) : null,
+        backupLastMs: Number(await getSpeakConfigValue(LAST_RUN_KEY, 0)) || 0,
         auditEntries,
         auditError,
         watchedNouns: [...new Set(Object.values(WATCHED).map(w => w.noun))],
@@ -105,6 +110,22 @@ function render(model) {
         footer: html`Built in memory and sent as a file; nothing is stored on the server running the bot.`,
     });
 
+    const backupCard = card({
+        title: 'Database backup',
+        hint: 'balances, warns, mod history, settings; everything the bot knows',
+        body: html`<dl class="kv">
+            <dt>Weekly</dt><dd>${pill('on', 'DMed to you')}
+                ${model.backupChannelName ? html` + #${model.backupChannelName}` : html` <span class="hint">(no channel copy; /backup here adds one)</span>`}</dd>
+            <dt>Last run</dt><dd>${model.backupLastMs
+                ? html`<span title="${fmtDateTime(model.backupLastMs)}">${fmtAgo(model.backupLastMs, model.now)}</span>`
+                : html`<span class="hint">never yet</span>`}</dd>
+        </dl>
+        <div class="form-actions">
+            <button data-action="/api/guild/${model.guildId}/backup" data-busy="Dumping every table..." data-reload>Back up now</button>
+        </div>`,
+        footer: html`A gzipped dump of every table, restored with <span class="mono">scripts/restore-backup.js</span>. A backup nobody has restored is a rumour; the script dry-runs by default.`,
+    });
+
     const auditCard = card({
         title: 'Audit log, live',
         hint: 'the last 20 entries, straight from Discord',
@@ -134,7 +155,7 @@ function render(model) {
     return html`
         <div class="row-cards">${guardCard}${watchesCard}</div>
         <div class="spacer"></div>
-        <div class="row-cards">${snapshotCard}</div>
+        <div class="row-cards">${snapshotCard}${backupCard}</div>
         <div class="spacer"></div>
         ${auditCard}`;
 }

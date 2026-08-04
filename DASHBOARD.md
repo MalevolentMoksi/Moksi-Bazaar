@@ -70,6 +70,15 @@ dev portal's General Information page; the bot most likely has it already).
 Railway redeploys on its own when variables change. When the deploy finishes,
 open your domain in a browser, click **Log in with Discord**, and you are in.
 
+### Step 5 (optional, recommended): the deploy healthcheck
+
+The dashboard answers `GET /healthz` with no login: 200 once the bot is
+connected to Discord, 503 before that. In the bot service's **Settings**,
+under **Deploy**, set **Healthcheck Path** to `/healthz`. From then on Railway
+only switches a deploy live when the bot is actually up, instead of the moment
+the process starts. If the dashboard variables ever go missing, a bare server
+still answers `/healthz`, so the healthcheck cannot strand a deploy.
+
 ## Why it is only you
 
 - Logging in is Discord's own OAuth; the dashboard never sees a password.

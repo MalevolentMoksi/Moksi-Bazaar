@@ -17,6 +17,8 @@ describe('the guard page', () => {
         guardChannelName: null,
         snapshotChannelName: null,
         snapshotHasDm: true,
+        backupChannelName: null,
+        backupLastMs: 0,
         auditEntries: [],
         auditError: null,
         watchedNouns: ['channel deleted', 'role deleted', 'bot added'],
@@ -44,6 +46,22 @@ describe('the guard page', () => {
     test('a channel copy without a DM copy warns about where it lives', () => {
         const out = guardPage.render({ ...base, snapshotChannelName: 'guard-alerts', snapshotHasDm: false }).__raw;
         expect(out).toContain('inside the server it backs up');
+    });
+
+    test('the backup card always offers the button, and is honest about never', () => {
+        const out = guardPage.render(base).__raw;
+        expect(out).toContain('/api/guild/g1/backup');
+        expect(out).toContain('Back up now');
+        expect(out).toContain('never yet');
+        expect(out).toContain('DMed to you');
+    });
+
+    test('a configured channel copy and a past run both show', () => {
+        const out = guardPage.render({
+            ...base, backupChannelName: 'the-vault', backupLastMs: base.now - 3 * 86_400_000,
+        }).__raw;
+        expect(out).toContain('#the-vault');
+        expect(out).not.toContain('never yet');
     });
 
     test('an unreadable audit log names the missing permission', () => {

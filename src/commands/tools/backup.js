@@ -34,8 +34,8 @@ module.exports = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         if (sub === 'now') {
-            const result = await sendBackup(interaction.client, interaction.channelId);
-            if (!result.ok) return interaction.editReply(`Backup failed: ${result.error}`);
+            const result = await sendBackup(interaction.client, { channelId: interaction.channelId });
+            if (!result.ok) return interaction.editReply(`Backup failed: ${result.errors.join(' ')}`);
             await setSpeakConfigValue(LAST_RUN_KEY, Date.now());
             return interaction.editReply(
                 `Posted: ${result.meta.totalRows.toLocaleString()} rows across `
@@ -46,7 +46,8 @@ module.exports = {
         if (sub === 'here') {
             await setBackupChannelId(interaction.channelId);
             return interaction.editReply(
-                `Weekly backups will go to ${interaction.channel}. The first one lands within six hours.`
+                `Weekly backups will go to ${interaction.channel}, on top of the DM copy. `
+                + 'The first one lands within six hours.'
             );
         }
 
@@ -54,7 +55,9 @@ module.exports = {
             const had = await getBackupChannelId();
             await setBackupChannelId(null);
             return interaction.editReply(
-                had ? 'Weekly backups are off. `/backup now` still works.' : 'They were already off.'
+                had
+                    ? 'The channel copy is off. Weekly dumps still land in your DMs, and `/backup now` still works.'
+                    : 'There was no channel copy to turn off. Weekly dumps still land in your DMs.'
             );
         }
 
@@ -63,9 +66,10 @@ module.exports = {
         const last = Number(await getSpeakConfigValue(LAST_RUN_KEY, 0)) || 0;
         const lastText = last ? `<t:${Math.floor(last / 1000)}:R>` : 'never';
         return interaction.editReply(
-            channelId
-                ? `Weekly backups go to <#${channelId}>. Last run: ${lastText}.`
-                : `Weekly backups are off. Last manual run: ${lastText}.`
+            (channelId
+                ? `Weekly backups go to <#${channelId}> and your DMs.`
+                : 'Weekly backups go to your DMs.')
+            + ` Last run: ${lastText}.`
         );
     },
 };

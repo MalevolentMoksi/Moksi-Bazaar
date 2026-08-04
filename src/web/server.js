@@ -137,6 +137,14 @@ function buildApp(client, config) {
         immutable: false,
     }));
 
+    // Railway's healthcheck (and nothing else) gets in without a session: a
+    // deploy should go live when the bot is actually connected to Discord,
+    // not merely when the process starts. Says nothing but yes or not-yet.
+    app.get('/healthz', (req, res) => {
+        const ready = client.isReady();
+        res.status(ready ? 200 : 503).json({ ok: ready });
+    });
+
     // ── The door ────────────────────────────────────────────────────────
     app.get('/login', (req, res) => {
         if (auth.readSession(req)) return res.redirect('/');
@@ -290,6 +298,34 @@ function buildApp(client, config) {
 }
 
 /**
+ * With the Railway healthcheck pointed at /healthz, "dashboard env missing"
+ * must not mean "no HTTP at all", or one deleted variable would fail every
+ * future deploy. The fallback serves the health endpoint and nothing else.
+ */
+function startHealthOnly(client) {
+    try {
+        const app = express();
+        app.disable('x-powered-by');
+        app.get('/healthz', (req, res) => {
+            const ready = client.isReady();
+            res.status(ready ? 200 : 503).json({ ok: ready });
+        });
+        app.use((req, res) => res.status(404).send('The dashboard is not configured on this deployment.'));
+        const port = Number(process.env.PORT) || 3000;
+        const server = app.listen(port, () => {
+            logger.info('[DASHBOARD] Health-only server (dashboard env missing)', { port });
+        });
+        server.on('error', (error) => {
+            logger.error('[DASHBOARD] Server error', { error: error.message });
+        });
+        return server;
+    } catch (error) {
+        logger.error('[DASHBOARD] Health-only server failed; the bot continues', { error: error.message });
+        return null;
+    }
+}
+
+/**
  * Starts the dashboard if configured; returns the http.Server or null.
  * Never throws: a broken dashboard must never cost a working bot.
  */
@@ -298,7 +334,7 @@ function startDashboard(client) {
         const config = dashboardConfig();
         if (!config.enabled) {
             logger.info('[DASHBOARD] Disabled (missing env)', { missing: config.missing });
-            return null;
+            return startHealthOnly(client);
         }
         const { app } = buildApp(client, config);
         const server = app.listen(config.port, () => {

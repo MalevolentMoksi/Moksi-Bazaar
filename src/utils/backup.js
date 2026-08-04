@@ -11,14 +11,16 @@
  * container has no postgres client binaries and pulling one in for this is not
  * worth it. scripts/restore-backup.js reads the format back.
  *
- * Nothing runs until a destination channel is set (`/backup here`), so this is
- * off by default like every other addition in this pass.
+ * The weekly run always DMs the owner a copy; `/backup here` adds a channel
+ * copy on top. The DM is the backbone on purpose: a dump that only lives in a
+ * channel of the server it protects burns down with the server.
  */
 
 const zlib = require('zlib');
 const { promisify } = require('util');
 const { AttachmentBuilder } = require('discord.js');
 const { pool, getSpeakConfigValue, setSpeakConfigValue } = require('./db');
+const { OWNER_ID } = require('./constants');
 const logger = require('./logger');
 
 const gzip = promisify(zlib.gzip);
@@ -110,46 +112,84 @@ function backupFilename(date = new Date()) {
 }
 
 /**
- * Builds a dump and posts it to a channel.
- * @returns {Promise<{ok: boolean, meta?: object, error?: string}>}
+ * Builds one dump and delivers it everywhere asked: a channel, the owner's
+ * DMs, or both. One build, then independent sends; a dead destination never
+ * blocks a live one, because the DM copy is the one that must survive the
+ * server burning down.
+ *
+ * `build` is injectable so tests can exercise delivery without a database.
+ *
+ * @returns {Promise<{ok: boolean, sentTo: string[], errors: string[], meta?: object}>}
  */
-async function sendBackup(client, channelId) {
-    try {
-        const channel = await client.channels.fetch(channelId).catch(() => null);
-        if (!channel?.isTextBased?.()) {
-            return { ok: false, error: 'The backup channel is gone or is not a text channel.' };
-        }
+async function sendBackup(client, destinations = {}, { build = buildBackup } = {}) {
+    const { channelId = null, dmUserId = null } = destinations;
+    const sentTo = [];
+    const errors = [];
 
-        const { buffer, meta } = await buildBackup();
-        if (buffer.length > MAX_ATTACHMENT_BYTES) {
-            return {
-                ok: false,
-                error: `Dump is ${(buffer.length / 1048576).toFixed(1)} MB, over the `
-                    + `${(MAX_ATTACHMENT_BYTES / 1048576).toFixed(0)} MB upload limit. `
-                    + 'Nothing was posted.',
-                meta,
-            };
-        }
-
-        const lines = Object.entries(meta.counts)
-            .sort((a, b) => b[1] - a[1])
-            .map(([t, n]) => `${t}: ${n.toLocaleString()}`)
-            .join(', ');
-
-        await channel.send({
-            content: `**Database backup** ${new Date().toISOString().slice(0, 10)}\n`
-                + `${meta.totalRows.toLocaleString()} rows across ${meta.tables} tables, `
-                + `${(meta.bytes / 1024).toFixed(0)} KB gzipped.\n`
-                + `-# ${lines}`
-                + (meta.truncated.length ? `\n-# truncated: ${meta.truncated.join(', ')}` : ''),
-            files: [new AttachmentBuilder(buffer, { name: backupFilename() })],
-        });
-
-        return { ok: true, meta };
-    } catch (error) {
-        logger.error('[BACKUP] Failed', { error: error.message, stack: error.stack });
-        return { ok: false, error: error.message };
+    if (!channelId && !dmUserId) {
+        return { ok: false, sentTo, errors: ['Nowhere to send the backup.'] };
     }
+
+    let buffer;
+    let meta;
+    try {
+        ({ buffer, meta } = await build());
+    } catch (error) {
+        logger.error('[BACKUP] Dump failed to build', { error: error.message, stack: error.stack });
+        return { ok: false, sentTo, errors: [`Building the dump failed: ${error.message}`] };
+    }
+
+    if (buffer.length > MAX_ATTACHMENT_BYTES) {
+        return {
+            ok: false, sentTo, meta,
+            errors: [`Dump is ${(buffer.length / 1048576).toFixed(1)} MB, over the `
+                + `${(MAX_ATTACHMENT_BYTES / 1048576).toFixed(0)} MB upload limit. Nothing was sent.`],
+        };
+    }
+
+    const lines = Object.entries(meta.counts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `${t}: ${n.toLocaleString()}`)
+        .join(', ');
+    const content = `**Database backup** ${new Date().toISOString().slice(0, 10)}\n`
+        + `${meta.totalRows.toLocaleString()} rows across ${meta.tables} tables, `
+        + `${(meta.bytes / 1024).toFixed(0)} KB gzipped.\n`
+        + `-# ${lines}`
+        + (meta.truncated.length ? `\n-# truncated: ${meta.truncated.join(', ')}` : '');
+    // A fresh attachment per send; sharing one across sends is asking discord.js
+    // to reuse a consumed stream someday.
+    const payload = () => ({
+        content,
+        files: [new AttachmentBuilder(buffer, { name: backupFilename() })],
+    });
+
+    if (channelId) {
+        try {
+            const channel = await client.channels.fetch(channelId).catch(() => null);
+            if (!channel?.isTextBased?.()) {
+                throw new Error('the backup channel is gone or is not a text channel');
+            }
+            await channel.send(payload());
+            sentTo.push('channel');
+        } catch (error) {
+            errors.push(`Channel copy failed: ${error.message}`);
+        }
+    }
+
+    if (dmUserId) {
+        try {
+            const user = await client.users.fetch(dmUserId);
+            await user.send(payload());
+            sentTo.push('DM');
+        } catch (error) {
+            errors.push(`DM copy failed: ${error.message}`);
+        }
+    }
+
+    if (errors.length) {
+        logger.warn('[BACKUP] Delivery incomplete', { sentTo, errors });
+    }
+    return { ok: sentTo.length > 0, sentTo, errors, meta };
 }
 
 // ── Scheduling ──────────────────────────────────────────────────────────────
@@ -164,7 +204,6 @@ async function setBackupChannelId(channelId) {
 
 async function checkAndRun(client) {
     const channelId = await getBackupChannelId();
-    if (!channelId) return;
 
     const last = Number(await getSpeakConfigValue(LAST_RUN_KEY, 0)) || 0;
     if (Date.now() - last < WEEK_MS) return;
@@ -174,11 +213,12 @@ async function checkAndRun(client) {
     // forever, and the owner would learn about it as a flood.
     await setSpeakConfigValue(LAST_RUN_KEY, Date.now());
 
-    const result = await sendBackup(client, channelId);
+    // The DM copy is unconditional; the channel copy rides along if configured.
+    const result = await sendBackup(client, { channelId, dmUserId: OWNER_ID });
     if (result.ok) {
-        logger.info('[BACKUP] Weekly backup posted', result.meta);
+        logger.info('[BACKUP] Weekly backup sent', { sentTo: result.sentTo, ...result.meta });
     } else {
-        logger.warn('[BACKUP] Weekly backup did not post', { error: result.error });
+        logger.warn('[BACKUP] Weekly backup did not send', { errors: result.errors });
     }
 
     await sendStructureSnapshots(client, channelId);
