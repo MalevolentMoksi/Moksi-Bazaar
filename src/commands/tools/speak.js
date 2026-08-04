@@ -706,3 +706,4 @@ ${memoryText}`;
 module.exports.extractEmojiKey = extractEmojiKey;
 module.exports.buildReplyMarker = buildReplyMarker;
 module.exports.formatMemories = formatMemories;
+module.exports.describeNonTextPayload = describeNonTextPayload;

@@ -8,7 +8,7 @@
 // answered "cooler moksi already told me that" about a line it had just been
 // sworn at with.
 
-const { buildReplyMarker } = require('../src/commands/tools/speak');
+const { buildReplyMarker, describeNonTextPayload } = require('../src/commands/tools/speak');
 
 const BOT = 'bot-1';
 
@@ -60,6 +60,30 @@ describe('reply markers', () => {
         // was assembled, sat immediately before the replier's own words.
         expect(marker).not.toContain('[replying to');
         expect(marker.startsWith(' (in reply to Ada:')).toBe(true);
+    });
+
+    test('a blackjack hand is legible to the model, not just to a human', () => {
+        // The bot's own game output carries no message content at all; it is
+        // entirely embed. If this stops rendering, the bot reacts to a hand it
+        // cannot actually see, which reads as it being obtuse rather than blind.
+        const hand = {
+            embeds: [{
+                title: 'Blackjack',
+                description: '**-$120,000** on this hand.',
+                fields: [
+                    { name: 'Dealer (9)', value: '5S 4D' },
+                    { name: 'Your hand (23)', value: '5D 6D 2D JC\nBust' },
+                    { name: 'Balance', value: '$566' },
+                ],
+                footer: { text: 'This session: -$30,000' },
+            }],
+            attachments: new Map(),
+        };
+        const seen = describeNonTextPayload(hand, 600);
+
+        for (const fact of ['-$120,000', 'Bust', 'Balance: $566', 'This session: -$30,000']) {
+            expect(seen).toContain(fact);
+        }
     });
 
     test('a long quote is truncated rather than swallowing the line', () => {
