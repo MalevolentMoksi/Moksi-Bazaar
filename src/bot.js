@@ -12,6 +12,7 @@ const { validateEnvironmentVars } = require('./utils/validateEnvironment');
 const { pool } = require('./utils/db');
 const { stopJanitor } = require('./utils/janitor');
 const { flush: activityFlush, stopAutoFlush: stopActivityFlush } = require('./utils/joinGate/activity');
+const { startDashboard } = require('./web/server');
 
 /** Railway allows roughly 10s between SIGTERM and SIGKILL; stay inside it. */
 const SHUTDOWN_TIMEOUT_MS = 8000;
@@ -88,6 +89,11 @@ function initializeBot() {
   client.handleEvents();
   client.handleCommands();
 
+  // The owner dashboard, sharing this process. startDashboard() returns null
+  // (and the bot runs exactly as before) unless its env vars are all set; it
+  // catches its own failures, so nothing on this path can prevent login.
+  const dashboard = startDashboard(client);
+
   // Login with token from environment.
   // A rejected login used to surface only as an unhandled rejection, which left
   // the process alive and silent. Now that a privileged intent is in the list,
@@ -139,6 +145,18 @@ function initializeBot() {
     deadline.unref();
 
     try { stopJanitor(); } catch { /* nothing worth reporting at this point */ }
+
+    // The dashboard goes first: stop accepting requests while the gateway and
+    // the pool are still alive to finish the ones in flight. Not awaited: a
+    // browser holding a keep-alive socket must not spend the 8s budget that
+    // the activity flush and the pool close actually need.
+    if (dashboard) {
+      try {
+        dashboard.close();
+        dashboard.closeIdleConnections?.();
+        logger.info('Dashboard closed to new connections');
+      } catch { /* already down is fine */ }
+    }
 
     // Before the pool closes: a minute of buffered message counts is cheap to
     // write and annoying to lose on every deploy.

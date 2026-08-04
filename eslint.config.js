@@ -65,4 +65,13 @@ module.exports = [
             globals: { ...globals.jest },
         },
     },
+
+    // The dashboard's client script runs in a browser, not in Node.
+    {
+        files: ['src/web/assets/**/*.js'],
+        languageOptions: {
+            sourceType: 'script',
+            globals: { ...globals.browser },
+        },
+    },
 ];
