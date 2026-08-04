@@ -105,6 +105,10 @@ async function runJanitorCycle() {
             const { removed, bytes } = await sweepTempFiles();
             return removed ? `${removed} (${(bytes / 1048576).toFixed(1)} MB)` : 0;
         }],
+        // The guard keeps a per-actor counter in memory. Anyone who touched the
+        // server once and never again would otherwise sit there for the life of
+        // the process.
+        ['guardCounters', async () => require('./joinGate/guard').prune()],
     ];
 
     for (const [name, step] of steps) {

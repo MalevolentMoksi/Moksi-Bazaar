@@ -38,6 +38,7 @@ const SECTIONS = {
     messaging: () => __renderers.renderMessaging(settings),
     escalation: () => __renderers.renderEscalation(settings, []),
     suspicion: () => __renderers.renderSuspicion(settings),
+    guard: () => __renderers.renderGuard(settings),
     watch: () => __renderers.renderWatch(settings, guild),
     logging: () => __renderers.renderLogging(settings, routing, 'default'),
     advanced: () => __renderers.renderAdvanced(settings),

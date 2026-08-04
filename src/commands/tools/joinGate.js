@@ -30,6 +30,7 @@ const {
     scoreAccount, explain, DEFAULT_WEIGHTS, DEFAULT_SCAM_KEYWORDS,
 } = require('../../utils/joinGate/suspicion');
 const { describeShape } = require('../../utils/joinGate/cohorts');
+const { sendSnapshot } = require('../../utils/joinGate/snapshot');
 const { stats: phishingStats, startAutoRefresh: startPhishingRefresh } = require('../../utils/joinGate/phishing');
 const { syncGuild: syncInvites, canRead: canReadInvites } = require('../../utils/joinGate/invites');
 const { describeRouting, logConfigChange, logTest, CATEGORIES } = require('../../utils/joinGate/logging');
@@ -50,6 +51,7 @@ const SECTIONS = [
     { value: 'messaging', label: 'Messaging', emoji: '✉️', description: 'DM text, invite, preview & test' },
     { value: 'escalation', label: 'Escalation', emoji: '🔨', description: 'Temp-bans for repeat rejoiners' },
     { value: 'suspicion', label: 'Suspicion', emoji: '🕵️', description: 'Score joiners on more than age' },
+    { value: 'guard', label: 'Guard', emoji: '🛰️', description: 'Watch staff and bots for nuke patterns' },
     { value: 'logging', label: 'Logging', emoji: '📓', description: 'Where each kind of event is written' },
     { value: 'advanced', label: 'Advanced', emoji: '⚙️', description: 'Burst alerts, downtime catch-up' },
     { value: 'diagnostics', label: 'Diagnostics', emoji: '🩺', description: 'Health check, stats, ID tester' },
@@ -568,6 +570,103 @@ function renderWatch(settings, guild) {
     return { embed, rows };
 }
 
+function renderGuard(settings) {
+    const embed = new EmbedBuilder()
+        .setTitle('🛰️ Join Gate: Audit-log guard')
+        .setColor(settings.guard_enabled ? EMBED_COLORS.WARNING : EMBED_COLORS.NEUTRAL)
+        .setDescription(
+            'Everything else here watches people arriving. This watches people already trusted: '
+            + 'a moderator whose account was taken, a bot with a leaked token, a staff member '
+            + 'having a very bad day.\n\n'
+            + '**It reports and never acts.** Discord writes an audit-log entry *after* carrying '
+            + 'an action out, so this cannot intercept, block or undo anything, by anyone. There '
+            + 'is no ban, kick or timeout call anywhere in it.\n\n'
+            + '**Bans, kicks and timeouts are not watched at all.** That is deliberate: a nuke '
+            + 'destroys structure, while bans are reversible and routine. Clear out fifty accounts '
+            + 'through Dyno and nothing here so much as blinks.'
+        )
+        .addFields(
+            { name: 'Guard', value: onOff(settings.guard_enabled), inline: true },
+            { name: 'Alerts to', value: channelRef(settings.guard_channel_id || settings.log_channel_id), inline: true },
+            { name: 'DM the owner', value: onOff(settings.guard_dm_owner), inline: true },
+            {
+                name: `Limits (per ${settings.guard_window_seconds}s, per person)`,
+                value: `🗑️ channels/roles deleted **${settings.guard_delete_limit}**\n`
+                    + `➕ channels/roles created **${settings.guard_create_limit}**\n`
+                    + `🔑 dangerous permission grants **${settings.guard_perm_limit}**\n`
+                    + `🪝 webhooks created **${settings.guard_webhook_limit}**`,
+                inline: false,
+            },
+            {
+                name: 'Reported on sight, no threshold',
+                value: `${settings.guard_watch_identity ? '🟢' : '⚪'} vanity URL, server name and icon changes\n`
+                    + `${settings.guard_watch_bots ? '🟢' : '⚪'} a bot being added, and who added it`,
+                inline: false,
+            },
+            {
+                name: 'Weekly structure snapshot',
+                value: settings.snapshot_enabled
+                    ? '🟢 On. Channels, roles, permission overwrites, who holds which role, settings and emoji, '
+                      + 'posted alongside the database backup.\n'
+                      + '-# Capture only: there is no restore button, here or anywhere'
+                    : '⚪ Off. The database backup holds nothing about the server itself',
+                inline: false,
+            },
+            {
+                name: `Exempt (${settings.guard_exempt_user_ids?.length ?? 0})`,
+                value: settings.guard_exempt_user_ids?.length
+                    ? truncate(settings.guard_exempt_user_ids.map(id => `<@${id}>`).join(', '), 1000)
+                    : '*nobody*',
+                inline: false,
+            },
+        );
+
+    const rows = [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('jg_guard_toggle')
+                .setLabel(settings.guard_enabled ? 'Disable guard' : 'Enable guard')
+                .setStyle(settings.guard_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('jg_guard_dm')
+                .setLabel(settings.guard_dm_owner ? 'Stop DMing me' : 'DM me alerts')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('jg_guard_identity')
+                .setLabel(settings.guard_watch_identity ? 'Ignore identity' : 'Watch identity')
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('jg_guard_bots')
+                .setLabel(settings.guard_watch_bots ? 'Ignore bot adds' : 'Watch bot adds')
+                .setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('jg_guard_limits').setLabel('Set limits').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('jg_guard_exempt').setLabel('Exempt someone').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('jg_guard_exempt_clear')
+                .setLabel('Clear exemptions')
+                .setStyle(ButtonStyle.Danger)
+                .setDisabled(!settings.guard_exempt_user_ids?.length),
+            new ButtonBuilder()
+                .setCustomId('jg_guard_snapshot')
+                .setLabel(settings.snapshot_enabled ? 'Stop snapshots' : 'Weekly snapshot')
+                .setStyle(settings.snapshot_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('jg_guard_snapshot_now').setLabel('Snapshot now').setStyle(ButtonStyle.Primary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ChannelSelectMenuBuilder()
+                .setCustomId('jg_guard_channel')
+                .setPlaceholder('Where should guard alerts go?')
+                .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+                .setMinValues(1)
+                .setMaxValues(1)
+        ),
+    ];
+
+    return { embed, rows };
+}
+
 function renderLogging(settings, routing, activeCategory) {
     const meta = logCategoryMeta(activeCategory);
     const rows = [];
@@ -746,6 +845,9 @@ async function buildPanel(guild, state) {
             break;
         case 'suspicion':
             built = state.watchDetail ? renderWatch(settings, guild) : renderSuspicion(settings);
+            break;
+        case 'guard':
+            built = renderGuard(settings);
             break;
         case 'logging':
             built = renderLogging(settings, await describeRouting(guild, settings), state.logCategory);
@@ -1328,6 +1430,109 @@ module.exports = {
                         `The watch window now ignores ${i.values.map(channelRef).join(' ')}`);
                 }
 
+                // ── Audit-log guard ─────────────────────────────────────────
+                if (id === 'jg_guard_toggle') {
+                    const turningOn = !settings.guard_enabled;
+                    if (turningOn) {
+                        const me = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+                        if (!me?.permissions.has(PermissionFlagsBits.ViewAuditLog)) {
+                            return i.reply({
+                                content: '⚠️ The guard reads the audit log, which needs the **View Audit Log** '
+                                    + 'permission. Without it Discord sends nothing and the guard would sit there '
+                                    + 'looking armed while seeing nothing at all.',
+                                flags: MessageFlags.Ephemeral,
+                            });
+                        }
+                    }
+                    return applyChange(i, { guard_enabled: turningOn },
+                        `Audit-log guard **${turningOn ? 'enabled' : 'disabled'}** (watch-only)`);
+                }
+                if (id === 'jg_guard_dm') {
+                    return applyChange(i, { guard_dm_owner: !settings.guard_dm_owner },
+                        `Guard DMs ${settings.guard_dm_owner ? 'off' : 'on'}`);
+                }
+                if (id === 'jg_guard_identity') {
+                    return applyChange(i, { guard_watch_identity: !settings.guard_watch_identity },
+                        `Identity changes ${settings.guard_watch_identity ? 'ignored' : 'watched'}`);
+                }
+                if (id === 'jg_guard_bots') {
+                    return applyChange(i, { guard_watch_bots: !settings.guard_watch_bots },
+                        `Bot additions ${settings.guard_watch_bots ? 'ignored' : 'watched'}`);
+                }
+                if (id === 'jg_guard_channel') {
+                    return applyChange(i, { guard_channel_id: i.values[0] },
+                        `Guard alerts → <#${i.values[0]}>`);
+                }
+                if (id === 'jg_guard_snapshot') {
+                    return applyChange(i, { snapshot_enabled: !settings.snapshot_enabled },
+                        `Weekly structure snapshot **${settings.snapshot_enabled ? 'off' : 'on'}**`);
+                }
+                if (id === 'jg_guard_snapshot_now') {
+                    const target = settings.guard_channel_id || settings.log_channel_id;
+                    if (!target) {
+                        return i.reply({
+                            content: '⚠️ Set a guard alert channel first: that is where the snapshot goes.',
+                            flags: MessageFlags.Ephemeral,
+                        });
+                    }
+                    await i.deferReply({ flags: MessageFlags.Ephemeral });
+                    const result = await sendSnapshot(guild, target);
+                    return i.editReply({
+                        content: result.ok
+                            ? `📸 Snapshot posted to <#${target}>: **${result.meta.channels}** channels, `
+                              + `**${result.meta.roles}** roles, **${result.meta.overwrites}** permission overwrites, `
+                              + `**${result.meta.membersWithRoles}** members with roles, `
+                              + `${(result.meta.bytes / 1024).toFixed(0)} KB.`
+                            : `⚠️ Snapshot failed: ${result.error}`,
+                    });
+                }
+
+                if (id === 'jg_guard_exempt_clear') {
+                    return applyChange(i, { guard_exempt_user_ids: [] }, 'Guard exemptions cleared');
+                }
+                if (id === 'jg_guard_limits') {
+                    const submitted = await promptModal(i, {
+                        title: 'Guard limits',
+                        inputs: [
+                            { id: 'window', label: 'Window in seconds', value: String(settings.guard_window_seconds), required: true, maxLength: 5 },
+                            { id: 'del', label: 'Channels/roles deleted', value: String(settings.guard_delete_limit), required: true, maxLength: 4 },
+                            { id: 'cre', label: 'Channels/roles created', value: String(settings.guard_create_limit), required: true, maxLength: 4 },
+                            { id: 'perm', label: 'Dangerous permission grants', value: String(settings.guard_perm_limit), required: true, maxLength: 4 },
+                            { id: 'hook', label: 'Webhooks created', value: String(settings.guard_webhook_limit), required: true, maxLength: 4 },
+                        ],
+                    });
+                    if (!submitted) return;
+                    const patch = {
+                        guard_window_seconds: clamp(Number(submitted.fields.getTextInputValue('window')), { min: 5, max: 3600 }),
+                        guard_delete_limit: clamp(Number(submitted.fields.getTextInputValue('del')), { min: 1, max: 100 }),
+                        guard_create_limit: clamp(Number(submitted.fields.getTextInputValue('cre')), { min: 1, max: 100 }),
+                        guard_perm_limit: clamp(Number(submitted.fields.getTextInputValue('perm')), { min: 1, max: 100 }),
+                        guard_webhook_limit: clamp(Number(submitted.fields.getTextInputValue('hook')), { min: 1, max: 100 }),
+                    };
+                    return applyChange(submitted, patch,
+                        `Guard limits: **${patch.guard_delete_limit}** deleted, **${patch.guard_create_limit}** created, `
+                        + `**${patch.guard_perm_limit}** permission grants, **${patch.guard_webhook_limit}** webhooks `
+                        + `per **${patch.guard_window_seconds}s**`);
+                }
+                if (id === 'jg_guard_exempt') {
+                    const submitted = await promptModal(i, {
+                        title: 'Exempt from the guard',
+                        inputs: [{
+                            id: 'ids',
+                            label: 'User IDs, one per line',
+                            value: (settings.guard_exempt_user_ids ?? []).join('\n'),
+                            paragraph: true,
+                            required: false,
+                            maxLength: 900,
+                        }],
+                    });
+                    if (!submitted) return;
+                    const ids = submitted.fields.getTextInputValue('ids')
+                        .split(/[\s,]+/).map(s => s.trim()).filter(s => SNOWFLAKE_RE.test(s));
+                    return applyChange(submitted, { guard_exempt_user_ids: [...new Set(ids)] },
+                        `Guard exemptions: **${new Set(ids).size}** user(s)`);
+                }
+
                 if (id === 'jg_watch_automod') {
                     const turningOn = !settings.watch_automod_enabled;
                     return applyChange(i, { watch_automod_enabled: turningOn },
@@ -1866,5 +2071,5 @@ module.exports = {
  */
 module.exports.__renderers = {
     sectionRow, renderOverview, renderRules, renderMessaging,
-    renderEscalation, renderSuspicion, renderWatch, renderLogging, renderAdvanced,
+    renderEscalation, renderSuspicion, renderWatch, renderGuard, renderLogging, renderAdvanced,
 };

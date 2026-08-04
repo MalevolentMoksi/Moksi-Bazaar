@@ -180,6 +180,44 @@ async function checkAndRun(client) {
     } else {
         logger.warn('[BACKUP] Weekly backup did not post', { error: result.error });
     }
+
+    await sendStructureSnapshots(client, channelId);
+}
+
+/**
+ * Rides the same weekly slot as the database dump.
+ *
+ * The dump holds everything this bot knows and nothing about the server it runs
+ * in. A snapshot is the other half: if the channel tree were deleted tomorrow,
+ * the dump would restore the balances of people who could no longer see a
+ * channel to spend them in.
+ *
+ * Required lazily, and failure is swallowed per guild: a snapshot is insurance,
+ * and insurance must never be the reason the actual backup run falls over.
+ */
+async function sendStructureSnapshots(client, channelId) {
+    let snapshot;
+    let getSettings;
+    try {
+        ({ sendSnapshot: snapshot } = require('./joinGate/snapshot'));
+        ({ getSettings } = require('./joinGate/config'));
+    } catch (error) {
+        logger.warn('[SNAPSHOT] Module unavailable', { error: error.message });
+        return;
+    }
+
+    for (const guild of client.guilds.cache.values()) {
+        try {
+            const settings = await getSettings(guild.id);
+            if (!settings.snapshot_enabled) continue;
+
+            const result = await snapshot(guild, settings.guard_channel_id || channelId);
+            if (result.ok) logger.info('[SNAPSHOT] Posted', { guildId: guild.id, ...result.meta });
+            else logger.warn('[SNAPSHOT] Did not post', { guildId: guild.id, error: result.error });
+        } catch (error) {
+            logger.warn('[SNAPSHOT] Guild failed', { guildId: guild.id, error: error.message });
+        }
+    }
 }
 
 function startBackupScheduler(client) {

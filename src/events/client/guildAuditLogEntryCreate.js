@@ -1,0 +1,101 @@
+// src/events/client/guildAuditLogEntryCreate.js
+/**
+ * The audit-log guard's ear.
+ *
+ * Discord writes an audit-log entry AFTER carrying an action out, so everything
+ * downstream of here is observation. Nothing in this path can block, undo or
+ * intercept anything: not a ban through Dyno, not a channel delete by the
+ * owner, not another bot's work. It reads, it counts, and when a count looks
+ * like an attack it says so.
+ */
+
+const { EmbedBuilder } = require('discord.js');
+const logger = require('../../utils/logger');
+const guard = require('../../utils/joinGate/guard');
+const { getSettings } = require('../../utils/joinGate/config');
+
+const ALERT_COLOR = 0xd64545;
+
+async function alert(guild, settings, verdict, client) {
+    const actor = await client.users.fetch(verdict.actorId).catch(() => null);
+    const who = actor ? `${actor.username} (<@${verdict.actorId}>)` : `<@${verdict.actorId}>`;
+
+    let detail;
+    if (verdict.bucket === guard.BUCKETS.BOT) {
+        detail = verdict.targetId
+            ? `Added <@${verdict.targetId}> (\`${verdict.targetId}\`).`
+            : 'Added a bot.';
+    } else if (verdict.identity) {
+        detail = `Changed **${verdict.identity.join('**, **')}**.`;
+    } else {
+        detail = `**${verdict.count}** ${verdict.actions[0]} in ${verdict.windowSeconds}s `
+            + `(limit is ${verdict.limit}).`;
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle(`🚨 ${verdict.label}`)
+        .setColor(ALERT_COLOR)
+        .setDescription(
+            `${who} tripped the audit-log guard.\n\n${detail}\n\n`
+            + 'This is a **report, not an action**: nothing has been undone and nobody has been '
+            + 'touched. If this is an attack, the fastest response is `?lockdown` and removing '
+            + 'their roles.'
+        )
+        .addFields(
+            { name: 'Who', value: `<@${verdict.actorId}>\n\`${verdict.actorId}\``, inline: true },
+            { name: 'What', value: verdict.actions.join('\n'), inline: true },
+            { name: 'Server', value: guild.name, inline: true },
+        )
+        .setTimestamp();
+
+    // The log channel, if one is set.
+    const channelId = settings.guard_channel_id || settings.log_channel_id;
+    if (channelId) {
+        const channel = guild.channels.cache.get(channelId)
+            ?? await guild.channels.fetch(channelId).catch(() => null);
+        if (channel?.isTextBased()) {
+            await channel.send({ embeds: [embed] }).catch(error =>
+                logger.warn('[GUARD] Could not post alert', { error: error.message }));
+        }
+    }
+
+    // And the owner directly. A nuke usually starts by making the log channel
+    // unreadable, so the DM is the copy that actually arrives.
+    if (settings.guard_dm_owner && process.env.OWNER_ID) {
+        const owner = await client.users.fetch(process.env.OWNER_ID).catch(() => null);
+        await owner?.send({ embeds: [embed] }).catch(() => { /* DMs closed */ });
+    }
+}
+
+module.exports = {
+    name: 'guildAuditLogEntryCreate',
+    async execute(entry, guild, client) {
+        try {
+            if (!guild) return;
+
+            // Never react to our own actions. The join gate kicks and bans, and
+            // a guard that alerted on its own work would be pure noise.
+            if (entry.executorId && entry.executorId === client?.user?.id) return;
+
+            let settings;
+            try {
+                settings = await getSettings(guild.id);
+            } catch {
+                return; // fail open, same as every other gate path
+            }
+            if (!settings.enabled || !settings.guard_enabled) return;
+
+            const verdict = guard.record(guild.id, entry, settings);
+            if (!verdict) return;
+
+            logger.warn('[GUARD] Threshold crossed', {
+                guildId: guild.id, actorId: verdict.actorId,
+                bucket: verdict.bucket, count: verdict.count, limit: verdict.limit,
+            });
+
+            await alert(guild, settings, verdict, client);
+        } catch (error) {
+            logger.error('Audit-log guard failed', { error: error.message, stack: error.stack });
+        }
+    },
+};
