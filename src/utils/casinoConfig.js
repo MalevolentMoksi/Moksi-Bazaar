@@ -23,7 +23,7 @@ const DEFAULTS = Object.freeze({
     daily_streak_cap: 30,
     /** Live heckling is a new automatic behaviour, so it starts off. */
     heckle_enabled: false,
-    /** Minimum seconds between two spoken heckles, anywhere. */
+    /** Minimum seconds between two spoken heckles, anywhere. 0 means none. */
     heckle_cooldown_seconds: 1800,
     /** A round has to move at least this much before it is worth remarking on. */
     heckle_threshold: 5000,
@@ -37,7 +37,9 @@ const LIMITS = Object.freeze({
     daily_base: { min: 0, max: 1_000_000 },
     daily_streak_bonus: { min: 0, max: 100_000 },
     daily_streak_cap: { min: 1, max: 3650 },
-    heckle_cooldown_seconds: { min: 60, max: 86_400 },
+    // 0 is allowed and means no cooldown at all: with a threshold doing the
+    // gatekeeping, "react to every swing worth reacting to" is a valid taste.
+    heckle_cooldown_seconds: { min: 0, max: 86_400 },
     heckle_threshold: { min: 1, max: 100_000_000 },
 });
 

@@ -17,6 +17,7 @@ const {
 } = require('../../utils/db');
 const { bestTitle } = require('../../utils/shopCatalogue');
 const { getAllSettings, setSetting, DEFAULTS, LIMITS } = require('../../utils/casinoConfig');
+const { lastHeckleResult } = require('../../utils/casinoHeckle');
 const { promptModal } = require('../../utils/panelHelpers');
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
@@ -124,7 +125,28 @@ async function renderLeaderboard(interaction, direction) {
 
 // ── Owner config panel ──────────────────────────────────────────────────────
 
-function configEmbed(settings) {
+/** "at most once per 5 min" reads wrong when the answer is "always". */
+function describeCooldown(seconds) {
+    if (!seconds) return 'on **every** qualifying swing';
+    if (seconds < 60) return `at most once per **${seconds}s**`;
+    return `at most once per **${Math.round(seconds / 60)} min**`;
+}
+
+/**
+ * Silence has several honest causes and they all look the same from a chair
+ * in the channel, so the panel says which one it was.
+ */
+function describeResult(result) {
+    const when = `<t:${Math.floor(Number(result.at) / 1000)}:R>`;
+    if (result.reason === 'spoke') return `spoke ${when}`;
+    if (result.reason === 'cooling down') {
+        return `stayed quiet ${when} (cooling down${result.readyInSeconds ? `, ${result.readyInSeconds}s left` : ''})`;
+    }
+    if (result.reason === 'failed') return `failed ${when}: ${result.error ?? 'unknown error'}`;
+    return `${result.reason} ${when}`;
+}
+
+function configEmbed(settings, lastResult = null) {
     const maxBet = settings.max_bet > 0 ? money(settings.max_bet) : 'no limit';
     const dailyMin = settings.daily_base + settings.daily_streak_bonus;
     const dailyMax = settings.daily_base + settings.daily_streak_cap * settings.daily_streak_bonus;
@@ -149,10 +171,11 @@ function configEmbed(settings) {
             {
                 name: 'Heckling',
                 value: `${settings.heckle_enabled ? '**on**' : '**off**'}: `
-                    + `at most once per **${Math.round(settings.heckle_cooldown_seconds / 60)} min**, `
+                    + `${describeCooldown(settings.heckle_cooldown_seconds)}, `
                     + `only for swings over **${money(settings.heckle_threshold)}**\n`
                     + '-# on: Moksi remembers notable wins and busts, and occasionally says '
-                    + 'something about one out loud. Off: neither.',
+                    + 'something about one out loud. Off: neither.'
+                    + (lastResult ? `\n-# last swing worth remarking on: ${describeResult(lastResult)}` : ''),
                 inline: false,
             },
         )
@@ -176,8 +199,9 @@ const range = key => `${LIMITS[key].min} to ${LIMITS[key].max}`;
 
 async function renderConfig(interaction) {
     let settings = await getAllSettings();
+    let lastResult = await lastHeckleResult().catch(() => null);
     const message = await interaction.editReply({
-        embeds: [configEmbed(settings)],
+        embeds: [configEmbed(settings, lastResult)],
         components: configRows(settings),
     });
 
@@ -188,7 +212,8 @@ async function renderConfig(interaction) {
 
     const refresh = async (source) => {
         settings = await getAllSettings();
-        const payload = { embeds: [configEmbed(settings)], components: configRows(settings) };
+        lastResult = await lastHeckleResult().catch(() => null);
+        const payload = { embeds: [configEmbed(settings, lastResult)], components: configRows(settings) };
         // A modal submission has its own token and has to answer itself; a
         // plain button press edits the panel it came from.
         if (source?.isModalSubmit?.()) return source.update(payload);
