@@ -11,11 +11,38 @@
 const {
     ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
 } = require('discord.js');
+const logger = require('./logger');
 
 /** Discord rejects an over-long label outright, so clip rather than throw. */
 function truncate(text, max) {
     const s = String(text ?? '');
     return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/** Discord accepts at most five action rows on one message. */
+const MAX_ACTION_ROWS = 5;
+
+/**
+ * Clips a panel's rows to Discord's ceiling, loudly.
+ *
+ * A sixth row is rejected outright, so something has to give; clipping is the
+ * only safe answer. Doing it *silently* is how a control ships invisible: the
+ * builder sits right there in the source, the handler is wired up and correct,
+ * and the panel simply never draws it. Nothing errors, nothing logs, and the
+ * feature is finished everywhere except on screen.
+ *
+ * @param {import('discord.js').ActionRowBuilder[]} rows
+ * @param {string} label which panel/section, for the warning
+ */
+function fitRows(rows, label = 'panel') {
+    if (rows.length <= MAX_ACTION_ROWS) return rows;
+
+    const dropped = rows.slice(MAX_ACTION_ROWS).flatMap(row =>
+        (row?.components ?? []).map(c => c?.data?.custom_id ?? '(unnamed)'));
+    logger.warn('[PANEL] Too many action rows, controls dropped', {
+        panel: label, rows: rows.length, limit: MAX_ACTION_ROWS, dropped,
+    });
+    return rows.slice(0, MAX_ACTION_ROWS);
 }
 
 /**
@@ -54,4 +81,4 @@ async function promptModal(componentInteraction, { title, inputs, idPrefix = 'pa
     }
 }
 
-module.exports = { promptModal, truncate };
+module.exports = { promptModal, truncate, fitRows, MAX_ACTION_ROWS };

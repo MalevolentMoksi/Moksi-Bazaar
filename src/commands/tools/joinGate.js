@@ -14,7 +14,7 @@ const {
 } = require('discord.js');
 
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
-const { promptModal: sharedPromptModal } = require('../../utils/panelHelpers');
+const { promptModal: sharedPromptModal, fitRows } = require('../../utils/panelHelpers');
 const logger = require('../../utils/logger');
 const {
     getSettings, updateSettings, resetStats, invalidate,
@@ -397,14 +397,14 @@ function renderSuspicion(settings) {
             { name: `Scam keywords (${keywords.length})`, value: truncate(keywords.join(', '), 1000), inline: false },
             {
                 name: 'Watch window (behaviour)',
-                value: settings.watch_enabled
+                value: (settings.watch_enabled
                     ? `🟢 first **${settings.watch_window_minutes} min** after joining · act at **${settings.watch_action_at}** → ${actionLabel(settings.watch_action)}`
                       + (settings.watch_action === 'timeout' ? ` for **${settings.watch_timeout_minutes} min**` : '')
                       + (settings.watch_exempt_channel_ids?.length
                           ? `\n-# ignores ${settings.watch_exempt_channel_ids.map(channelRef).join(' ')}`
                           : '')
-                      + `\n-# scam-domain list: ${phishingStats().domains || 'not loaded yet'} domains`
-                    : '⚪ Off. Nothing is scored on what people post',
+                    : '⚪ Off. Nothing is scored on what people post')
+                    + '\n-# **Watch settings** below opens its own page',
                 inline: false,
             },
             {
@@ -458,14 +458,89 @@ function renderSuspicion(settings) {
                 .setMinValues(1)
                 .setMaxValues(1)
         ),
+    ];
+
+    // Four rows, plus the section picker the panel adds, is exactly Discord's
+    // five. There is no room here for anything else, which is why the watch
+    // window has its own page below rather than one more control bolted on.
+    return { embed, rows };
+}
+
+/**
+ * The watch window's own page, reached from "Watch settings".
+ *
+ * Everything watch-related was competing for space in the suspicion section,
+ * which was already full. The channel exemption in particular has to be a
+ * select menu, and a select menu costs a whole row.
+ */
+function renderWatch(settings, guild) {
+    const actionLabel = a => ({
+        log: '📝 log only', timeout: '🔇 timeout', kick: '👢 kick',
+        ban: '🔨 temp-ban', none: '⚪ ignore',
+    }[a] ?? a);
+    const exempt = settings.watch_exempt_channel_ids ?? [];
+    // Pre-selecting a channel Discord cannot resolve is rejected for the whole
+    // message, which would take the page down over a channel someone deleted
+    // months ago. The embed field below still lists whatever is stored.
+    const exemptLive = exempt.filter(id => guild?.channels?.cache?.has(id));
+
+    const embed = new EmbedBuilder()
+        .setTitle('👁️ Join Gate: Watch window')
+        .setColor(settings.watch_enabled ? EMBED_COLORS.WARNING : EMBED_COLORS.NEUTRAL)
+        .setDescription(
+            'Profile scoring judges an account the moment it joins. This judges what it then **does**: '
+            + 'known scam domains, the same message sprayed across channels, mass pings, invite links.\n\n'
+            + 'Only members inside the window are ever watched, so regulars are never scored on their posts.'
+        )
+        .addFields(
+            { name: 'Watch window', value: onOff(settings.watch_enabled), inline: true },
+            { name: 'Window length', value: `**${settings.watch_window_minutes} min** after joining`, inline: true },
+            {
+                name: 'Acts at',
+                value: `**${settings.watch_action_at}** → ${actionLabel(settings.watch_action)}`
+                    + (settings.watch_action === 'timeout' ? ` for **${settings.watch_timeout_minutes} min**` : '')
+                    + (settings.watch_action === 'ban' ? ` for **${settings.watch_ban_hours}h**` : ''),
+                inline: true,
+            },
+            {
+                name: `Ignored channels (${exempt.length})`,
+                value: exempt.length
+                    ? `${exempt.map(channelRef).join(' ')}\n-# nothing posted here is scored at all`
+                    : '*none: every channel is scored*',
+                inline: false,
+            },
+            {
+                name: 'Scam-domain list',
+                value: phishingStats().domains
+                    ? `**${phishingStats().domains}** domains loaded`
+                    : '*not loaded yet*: it is fetched when the window is switched on',
+                inline: false,
+            },
+        );
+
+    const exemptPicker = new ChannelSelectMenuBuilder()
+        .setCustomId('jg_watch_exempt')
+        .setPlaceholder('Channels the watch window ignores (replaces the list)')
+        .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum)
+        .setMinValues(1)
+        .setMaxValues(10);
+    if (exemptLive.length) exemptPicker.setDefaultChannels(...exemptLive);
+
+    const rows = [
         new ActionRowBuilder().addComponents(
-            new ChannelSelectMenuBuilder()
-                .setCustomId('jg_watch_exempt')
-                .setPlaceholder('Channels the watch window ignores (replaces the list)')
-                .setChannelTypes(ChannelType.GuildText)
-                .setMinValues(0)
-                .setMaxValues(10)
+            new ButtonBuilder()
+                .setCustomId('jg_watch_toggle')
+                .setLabel(settings.watch_enabled ? 'Disable watch window' : 'Enable watch window')
+                .setStyle(settings.watch_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('jg_watch_edit').setLabel('Window & action').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+                .setCustomId('jg_watch_exempt_clear')
+                .setLabel('Clear ignored channels')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(exempt.length === 0),
+            new ButtonBuilder().setCustomId('jg_watch_back').setLabel('← Back to suspicion').setStyle(ButtonStyle.Secondary)
         ),
+        new ActionRowBuilder().addComponents(exemptPicker),
     ];
 
     return { embed, rows };
@@ -648,7 +723,7 @@ async function buildPanel(guild, state) {
             built = renderEscalation(settings, await getPendingUnbans(guild.id));
             break;
         case 'suspicion':
-            built = renderSuspicion(settings);
+            built = state.watchDetail ? renderWatch(settings, guild) : renderSuspicion(settings);
             break;
         case 'logging':
             built = renderLogging(settings, await describeRouting(guild, settings), state.logCategory);
@@ -668,7 +743,7 @@ async function buildPanel(guild, state) {
         payload: {
             content: '',
             embeds: [built.embed],
-            components: [sectionRow(state.section), ...built.rows].slice(0, 5),
+            components: fitRows([sectionRow(state.section), ...built.rows], `joingate:${state.section}`),
         },
     };
 }
@@ -699,7 +774,7 @@ module.exports = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const guild = interaction.guild;
-        const state = { section: 'overview', logCategory: 'default' };
+        const state = { section: 'overview', logCategory: 'default', watchDetail: false };
 
         const { payload } = await buildPanel(guild, state);
         const message = await interaction.editReply(payload);
@@ -762,6 +837,12 @@ module.exports = {
                 // ── Navigation ──────────────────────────────────────────────
                 if (id === 'jg_section') {
                     state.section = i.values[0];
+                    state.watchDetail = false; // leaving suspicion closes its sub-page
+                    return refresh(i);
+                }
+                if (id === 'jg_susp_watchcfg' || id === 'jg_watch_back') {
+                    state.section = 'suspicion';
+                    state.watchDetail = id === 'jg_susp_watchcfg';
                     return refresh(i);
                 }
                 if (id === 'jg_log_category') {
@@ -1139,7 +1220,7 @@ module.exports = {
                         `Invite tracking **${turningOn ? 'enabled' : 'disabled'}**`);
                 }
 
-                if (id === 'jg_susp_watchcfg') {
+                if (id === 'jg_watch_edit') {
                     const submitted = await promptModal(i, {
                         title: 'Watch window settings',
                         inputs: [
@@ -1218,12 +1299,16 @@ module.exports = {
                 }
 
                 if (id === 'jg_watch_exempt') {
-                    // Replaces the list, including with nothing: picking no
-                    // channels is how you clear it, which is why minValues is 0.
+                    // Replaces the list rather than adding to it: the picker
+                    // opens with the current channels already selected, so what
+                    // you see on submit is what you get.
                     return applyChange(i, { watch_exempt_channel_ids: i.values },
-                        i.values.length
-                            ? `The watch window now ignores ${i.values.map(channelRef).join(' ')}`
-                            : 'The watch window now scores every channel');
+                        `The watch window now ignores ${i.values.map(channelRef).join(' ')}`);
+                }
+
+                if (id === 'jg_watch_exempt_clear') {
+                    return applyChange(i, { watch_exempt_channel_ids: [] },
+                        'The watch window now scores every channel');
                 }
 
                 if (id === 'jg_susp_channel') {
@@ -1660,4 +1745,17 @@ module.exports = {
             }).catch(() => {});
         });
     },
+};
+
+/**
+ * Test seam. The section renderers are pure functions of the settings row, and
+ * tests/panelRows.test.js walks them to prove no section outgrows Discord's
+ * five-row ceiling: the watch-window channel picker shipped complete and
+ * invisible because the sixth row was being sliced off in silence.
+ *
+ * Safe to hang here: the command loader only ever reads `data` and `execute`.
+ */
+module.exports.__renderers = {
+    sectionRow, renderOverview, renderRules, renderMessaging,
+    renderEscalation, renderSuspicion, renderWatch, renderLogging, renderAdvanced,
 };

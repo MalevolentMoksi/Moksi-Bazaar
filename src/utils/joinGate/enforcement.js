@@ -702,7 +702,16 @@ async function handleWatchedMessage(message) {
         // #self-promotion channel an invite link is the reason the channel
         // exists, so scoring it as advertising would punish people for using
         // the server correctly.
-        if (settings.watch_exempt_channel_ids?.includes(message.channelId)) return;
+        //
+        // The parent is checked too, so exempting a channel exempts its
+        // threads. A thread carries its own id, so without this a #self-promo
+        // thread would be scored while the channel it lives in was not, and a
+        // forum channel could never be exempted at all: every message in one is
+        // in a thread.
+        const exemptChannels = settings.watch_exempt_channel_ids;
+        if (exemptChannels?.length
+            && (exemptChannels.includes(message.channelId)
+                || (message.channel?.parentId && exemptChannels.includes(message.channel.parentId)))) return;
 
         const windowMs = Number(settings.watch_window_minutes) * 60_000;
         if (!watch.isWatched(message.guild.id, message.author.id, windowMs)) return;
