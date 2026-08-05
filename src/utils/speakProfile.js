@@ -32,7 +32,7 @@ const MAX_PROFILE_CHARS = 600;
 /** In-flight guard so overlapping speak calls cannot double-distill a user. */
 const inFlight = new Set();
 
-const DISTILL_PROMPT = `You maintain a compact fact sheet about one Discord user, written from the perspective of "Cooler Moksi", a dry cynical goat AI who talks with them.
+const DISTILL_PROMPT = `You maintain a compact fact sheet about one Discord user, written from the perspective of "Cooler Moksi", a dry cynical AI who talks with them.
 
 CURRENT FACT SHEET (may be empty):
 {profile}

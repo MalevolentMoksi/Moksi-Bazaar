@@ -35,7 +35,7 @@ Interactions: ${userContext.interactionCount || 0}`;
     contextStr += `\nRecent exchanges:\n${recentMemories.map(m => `"${m.user_message}" -> "${m.bot_response}"`).join('\n')}`;
   }
 
-  const prompt = `You are Cooler Moksi, a cynical goat AI. How do you feel about ${userName}?
+  const prompt = `You are Cooler Moksi, a dry cynical AI. How do you feel about ${userName}?
 
 DATA:
 ${contextStr}

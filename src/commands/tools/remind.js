@@ -75,7 +75,7 @@ async function sendReminderMessage(client, reminder) {
     const suffix = reminder.reason ? ` ${reminder.reason}` : '';
     const epoch = Math.floor(Number(reminder.due_at_utc_ms) / 1000);
 
-    await channel.send(`${userMention}, the Goat apprises you.${suffix} (scheduled for <t:${epoch}:F>)`);
+    await channel.send(`${userMention}, consider yourself reminded.${suffix} (scheduled for <t:${epoch}:F>)`);
 }
 
 // ---------- scheduler (single timer with safe timeout handling) ----------
@@ -386,7 +386,7 @@ module.exports = {
 
                 const epoch = Math.floor(dueAt / 1000);
                 return interaction.editReply(
-                    `Understood. The Goat will forewarn you\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
+                    `Understood. You will be reminded.\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
                 );
             }
 
@@ -416,7 +416,7 @@ module.exports = {
 
                 const epoch = Math.floor(dueAt / 1000);
                 return interaction.editReply(
-                    `Understood. The Goat will forewarn you\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
+                    `Understood. You will be reminded.\n-# At <t:${epoch}:F> • <t:${epoch}:R>`
                 );
             }
 
