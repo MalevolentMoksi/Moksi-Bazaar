@@ -26,6 +26,7 @@
  */
 
 const { callOpenRouterAPI } = require('./apiHelpers');
+const { BOT_IDENTITY, SPEAK_MODELS } = require('./constants');
 const logger = require('./logger');
 
 const FLASH = 'deepseek/deepseek-v4-flash-0731';
@@ -116,6 +117,44 @@ function normalisePipeline(raw) {
     return cfg;
 }
 
+/**
+ * The model every small job runs on: sentiment, profile distillation, casino
+ * heckles, relationship summaries, the scout, the pre-pass and the judge.
+ *
+ * They each used to name their own, and two of those ids were delisted from
+ * OpenRouter without anything noticing, because every one of these paths
+ * degrades quietly by design. Profile distillation and heckling had a dead
+ * primary AND a dead fallback, so both had simply stopped happening. One id,
+ * editable from /speak_settings, is one id to keep alive.
+ *
+ * db.js is required lazily: it reads config through this module's caller and
+ * requiring it at load time would close a cycle.
+ */
+async function getUtilityModel() {
+    try {
+        const { getSpeakConfigValue } = require('./db');
+        return normalisePipeline(await getSpeakConfigValue('pipeline', null)).utilityModel;
+    } catch {
+        return DEFAULT_PIPELINE.utilityModel;
+    }
+}
+
+/** Every model id the bot is currently configured to call. */
+async function configuredModels() {
+    const cfg = normalisePipeline(await (async () => {
+        try {
+            const { getSpeakConfigValue } = require('./db');
+            return await getSpeakConfigValue('pipeline', null);
+        } catch { return null; }
+    })());
+    return [...new Set([
+        ...cfg.writers,
+        ...cfg.interjection.writers,
+        cfg.utilityModel,
+        ...Object.values(SPEAK_MODELS),
+    ])];
+}
+
 // ── READ THE ROOM ───────────────────────────────────────────────────────────
 
 const READ_MODES = {
@@ -154,7 +193,7 @@ async function readRoom({ conversationContext, askerName, userRequest, isInterje
         ? '(nobody addressed the bot; it is deciding whether the tail of this chat deserves an unprompted remark)'
         : (userRequest ? `${askerName} said to the bot: "${String(userRequest).slice(0, 400)}"` : `${askerName} pinged the bot without saying anything`);
 
-    const prompt = `Below is the tail of a Discord conversation. Lines starting "You (Cooler Moksi)" are a bot's own replies. The bot is about to reply.
+    const prompt = `Below is the tail of a Discord conversation. Lines starting "${BOT_IDENTITY.ownLineLabel}" are a bot's own replies. The bot is about to reply.
 
 CONVERSATION:
 ${conversationContext}
@@ -198,11 +237,12 @@ function readBlock(read) {
 
 /** The bot's own recent lines, for the shape-variety criterion. */
 function recentOwnReplies(conversationContext, count = 2) {
+    const label = `${BOT_IDENTITY.ownLineLabel}:`;
     return String(conversationContext ?? '')
         .split('\n')
-        .filter(l => l.startsWith('You (Cooler Moksi):'))
+        .filter(l => l.startsWith(label))
         .slice(-count)
-        .map(l => l.slice('You (Cooler Moksi):'.length).trim());
+        .map(l => l.slice(label.length).trim());
 }
 
 /**
@@ -318,6 +358,8 @@ module.exports = {
     DEFAULT_PIPELINE,
     DEFAULT_INTERJECTION_PROFILE,
     normalisePipeline,
+    getUtilityModel,
+    configuredModels,
     readRoom,
     readBlock,
     modeSentence,

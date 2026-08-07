@@ -6,7 +6,8 @@ const {
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { createRelationshipEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
-const { isOwner, ATTITUDE_INSTRUCTIONS } = require('../../utils/constants');
+const { isOwner, ATTITUDE_INSTRUCTIONS, BOT_IDENTITY, SPEAK_MODELS } = require('../../utils/constants');
+const { getUtilityModel } = require('../../utils/speakPipeline');
 const { trendDirection } = require('../../utils/trend');
 const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
@@ -36,7 +37,7 @@ Interactions: ${userContext.interactionCount || 0}`;
     contextStr += `\nRecent exchanges:\n${recentMemories.map(m => `"${m.user_message}" -> "${m.bot_response}"`).join('\n')}`;
   }
 
-  const prompt = `You are Cooler Moksi, a dry cynical AI. How do you feel about ${userName}?
+  const prompt = `${BOT_IDENTITY.line} How do you feel about ${userName}?
 
 DATA:
 ${contextStr}
@@ -51,13 +52,13 @@ INSTRUCTIONS:
 - If Creator: affectionately annoyed or loyal.`;
 
   const response = await callOpenRouterAPI(
-    'xiaomi/mimo-v2-flash',
+    await getUtilityModel(),
     [{ role: 'user', content: prompt }],
     {
       maxTokens: 150,
       temperature: 0.8,
       timeout: 10000,
-      fallbackModel: 'google/gemma-4-31b-it'
+      fallbackModel: SPEAK_MODELS.LEGACY_WRITER
     }
   ).catch(e => {
     logger.error('Relationship analysis generation failed', { error: e.message });

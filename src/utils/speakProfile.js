@@ -21,18 +21,18 @@ const {
     getSpeakConfigValue,
 } = require('./db');
 const { callOpenRouterAPI } = require('./apiHelpers');
+const { getUtilityModel } = require('./speakPipeline');
+const { BOT_IDENTITY, SPEAK_MODELS } = require('./constants');
 const logger = require('./logger');
 
 const DISTILL_EVERY_N = 12;
 const DISTILL_MIN_GAP_MS = 60 * 60_000;
-const DISTILL_MODEL = 'xiaomi/mimo-v2-flash';
-const FALLBACK_MODEL = 'meta-llama/llama-3.3-8b-instruct';
 const MAX_PROFILE_CHARS = 600;
 
 /** In-flight guard so overlapping speak calls cannot double-distill a user. */
 const inFlight = new Set();
 
-const DISTILL_PROMPT = `You maintain a compact fact sheet about one Discord user, written from the perspective of "Cooler Moksi", a dry cynical AI who talks with them.
+const DISTILL_PROMPT = `You maintain a compact fact sheet about one Discord user, written from the perspective of "${BOT_IDENTITY.shortName}", a dry cynical Discord bot who talks with them.
 
 CURRENT FACT SHEET (may be empty):
 {profile}
@@ -90,13 +90,17 @@ async function maybeDistillProfile(userId) {
                 .replace('{profile}', profileRow?.profile || '(empty)')
                 .replace('{exchanges}', exchangeText);
 
-            const result = await callOpenRouterAPI(DISTILL_MODEL, [
+            // Both this model and its fallback had been delisted, so no
+            // profile had been written since: the long-term memory the reply
+            // prompt reads from was empty by accident, not by design.
+            const result = await callOpenRouterAPI(await getUtilityModel(), [
                 { role: 'user', content: prompt },
             ], {
                 maxTokens: 200,
                 temperature: 0.2,
                 timeout: 12_000,
-                fallbackModel: FALLBACK_MODEL,
+                fallbackModel: SPEAK_MODELS.LEGACY_WRITER,
+                telemetry: { kind: 'distill' },
             });
 
             if (!result) return 'failed';

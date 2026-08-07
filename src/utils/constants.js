@@ -5,6 +5,72 @@
 const OWNER_ID = '619637817294848012';
 const DEFAULT_TIMEOUT = 60000; // 1 minute for button collectors
 
+// ── WHO THE BOT IS ──────────────────────────────────────────────────────────
+/**
+ * One source of truth for the bot's own identity.
+ *
+ * It used to be written out by hand in five prompts across five files, in four
+ * different wordings: the reply prompt called it "a bot Moksi built and
+ * modelled on himself", three others called it "a dry cynical AI", and the
+ * casino heckler was forbidden from acknowledging what it was at all. None of
+ * them used its actual Discord name. Renaming it meant finding eight strings.
+ */
+const BOT_IDENTITY = Object.freeze({
+    /** Exactly as the display name reads in Discord. */
+    name: 'The Cooler Moksi',
+    /** What everyone actually calls it, itself included. */
+    shortName: 'Cooler Moksi',
+    creator: 'Moksi',
+    /**
+     * The one-line version, for the small prompts that only need to know who
+     * is speaking (heckles, relationship summaries, profile distillation).
+     */
+    line: 'You are The Cooler Moksi, usually just "Cooler Moksi": a dry, cynical Discord bot '
+        + 'that Moksi built and modelled on himself.',
+    /**
+     * How its own prior lines are labelled in the chat log it reads. Three
+     * separate places parse this string, so it lives here rather than being
+     * retyped and silently drifting apart.
+     */
+    ownLineLabel: 'You (Cooler Moksi)',
+});
+
+/**
+ * Every model id that is not chosen from /speak_settings.
+ *
+ * They were scattered across db.js and speak.js as bare strings, which is how
+ * a delisted vision fallback survived for months: nothing enumerated what the
+ * bot was configured to call, so nothing could check it. utils/modelCheck.js
+ * verifies this list plus the configurable ones against OpenRouter at boot.
+ */
+const SPEAK_MODELS = Object.freeze({
+    /** The pre-pipeline writer, still used whenever drafts are switched off. */
+    LEGACY_WRITER: 'deepseek/deepseek-chat',
+    VISION: 'google/gemini-3.1-flash-lite',
+    VISION_FALLBACK: 'qwen/qwen3-vl-8b-instruct',
+    /** Last resort under the sentiment cascade; deliberately a different family. */
+    SENTIMENT_SAFETY_NET: 'deepseek/deepseek-chat',
+});
+
+/**
+ * What the bot can actually do, in its own words.
+ *
+ * It ships as part of the static prompt prefix, so it costs nothing after the
+ * first cache hit. Deliberately a summary rather than the generated command
+ * list: the point is that it stops inventing features and recognises its own
+ * commands when somebody types one in the chat log, not that it can recite a
+ * manual. Command names are named exactly so that "/bj" in a message is
+ * something it knows rather than noise.
+ */
+const BOT_CAPABILITIES = `- What you can actually do, so you never invent a feature or deny a real one. `
+    + `You run this server's casino on a fake currency: /bj (blackjack), /slots, /roulette, /craps, `
+    + `/highlow, /duel, /tetris, /shop, /gacha, /daily, /pay, /currency, /casino. You edit media people `
+    + `post: /caption, /uncaption, /speechbubble, /blur, /hue, /reverse, /volume, /topng, /magick, `
+    + `/videodl. And the rest: /remind, /mystats, /checkrelation, /lookup, /randomyt, /sleepy, /say, `
+    + `/shh. You also quietly guard the door against sketchy new accounts, and Moksi runs you from `
+    + `/speak_settings. When someone names one of those in chat, you know what they mean. Never recite `
+    + `this list, never advertise it, and if something is not on it, you cannot do it.`
+
 // Sleepy command allowed guilds
 const SLEEPY_GUILDS = ['1217066705537204325', '1347922267853553806'];
 
@@ -314,6 +380,9 @@ module.exports = {
     OWNER_ID,
     DEFAULT_TIMEOUT,
     SLEEPY_GUILDS,
+    BOT_IDENTITY,
+    BOT_CAPABILITIES,
+    SPEAK_MODELS,
     
     // Game Configuration
     GAME_CONFIG,

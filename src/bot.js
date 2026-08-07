@@ -96,6 +96,12 @@ function initializeBot() {
   client.handleEvents();
   client.handleCommands();
 
+  // Every model id the bot is configured to call, against the live catalogue.
+  // Three have been found delisted, all of them on paths that degrade
+  // silently, so a dead model looked exactly like a feature that never fired.
+  require('./utils/modelCheck').verifyModels()
+    .catch(error => logger.warn('Model verification failed to run', { error: error.message }));
+
   // Anything a previous process took and never resolved. The shutdown hook
   // below covers clean deploys; this covers the crashes and hard kills it
   // cannot, and the staleness bound keeps it off games another container may

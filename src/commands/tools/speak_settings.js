@@ -26,6 +26,7 @@ const {
 } = require('../../utils/db.js');
 const { DISTILL_EVERY_N } = require('../../utils/speakProfile');
 const { normalisePipeline } = require('../../utils/speakPipeline');
+const { lastModelCheck } = require('../../utils/modelCheck');
 const telemetry = require('../../utils/telemetry');
 const zlib = require('node:zlib');
 const { OWNER_REJECTION_JOKES, isOwner, EMBED_COLORS } = require('../../utils/constants');
@@ -276,6 +277,40 @@ function renderInterjections(interjections, pipeline) {
     return { embed, rows };
 }
 
+/**
+ * Whether every configured model still exists on OpenRouter, checked at boot.
+ * Three ids in this bot have been found delisted, each on a path that fails
+ * quietly, so this is the difference between a dead feature being logged and
+ * a dead feature being seen.
+ */
+function modelHealthField() {
+    const check = lastModelCheck();
+    if (!check) {
+        return { name: 'Model health', value: '⚪ not checked yet this boot', inline: false };
+    }
+    if (!check.checked) {
+        return {
+            name: 'Model health',
+            value: `⚠️ could not reach OpenRouter to check\n-# ${truncate(check.error ?? 'unknown error', 200)}`,
+            inline: false,
+        };
+    }
+    if (check.missing.length > 0) {
+        return {
+            name: '🚨 Model health',
+            value: `**${check.missing.length} configured model(s) do not exist on OpenRouter.** `
+                + 'Whatever uses them is failing silently right now:\n'
+                + check.missing.map(m => `\`${m}\``).join('\n'),
+            inline: false,
+        };
+    }
+    return {
+        name: 'Model health',
+        value: `🟢 all ${check.total} configured models live at boot`,
+        inline: false,
+    };
+}
+
 function renderBrain(pipeline) {
     const cfg = pipeline;
     const anyOn = cfg.prepass || cfg.drafts || cfg.memory || cfg.attitude;
@@ -305,7 +340,12 @@ function renderBrain(pipeline) {
             { name: 'Memory v2', value: onOff(cfg.memory), inline: true },
             { name: 'Attitude v2', value: onOff(cfg.attitude), inline: true },
             { name: `Writers (${cfg.writers.length} drafts)`, value: cfg.writers.map(w => `\`${w}\``).join('\n'), inline: false },
-            { name: 'Utility model (read + judge)', value: `\`${cfg.utilityModel}\``, inline: false },
+            {
+                name: 'Utility model',
+                value: `\`${cfg.utilityModel}\`\n-# room read, judge, scout, sentiment, distillation, heckles`,
+                inline: false,
+            },
+            modelHealthField(),
         )
         .setFooter({ text: 'Rough cost with everything on: ~$0.002 per reply. Legacy path: ~$0.0008.' });
 

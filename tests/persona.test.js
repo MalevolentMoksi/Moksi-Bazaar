@@ -78,11 +78,70 @@ describe('the bot has to actually say something', () => {
     test('it knows it is a bot version of Moksi, and that they are two people', () => {
         const source = speak();
         expect(source).toContain('Know who you are');
-        expect(source).toMatch(/a bot Moksi built and modelled on himself/);
+        expect(source).toMatch(/a Discord bot \$\{BOT_IDENTITY\.creator\} wrote and modelled on himself/);
         expect(source).toMatch(/two different people/);
         // The specific slip: "HES JUST LIKE ME FR" answered with "you don't
         // even know who that is", because it never considered it was the "he".
         expect(source).toMatch(/third person/);
+    });
+
+    test('"i\'m just an AI" is named as the dodge it is, without banning the fact', () => {
+        const source = speak();
+        // The old wording banned describing itself at all, which is where the
+        // deflection came from AND what made it evasive when asked outright.
+        // Both halves have to survive: it may state the fact, once, and may
+        // never use it as a reason not to answer something else.
+        expect(source).toMatch(/Asked point blank what you are, say it plainly/);
+        expect(source).toMatch(/i'm just an AI/);
+        expect(source).toMatch(/they are you refusing to answer/);
+        expect(source).not.toMatch(/Never describe what you "are"/);
+    });
+
+    test('it knows which commands exist, so it stops inventing features', () => {
+        const { BOT_CAPABILITIES } = require('../src/utils/constants');
+        expect(speak()).toContain('BOT_CAPABILITIES');
+        // A list it recites is worse than no list.
+        expect(BOT_CAPABILITIES).toMatch(/Never recite this list/);
+    });
+
+    test('and every command it claims is one that actually registers', () => {
+        // The first draft of this list invented /videoedit and /imageeffects,
+        // which is precisely the failure it exists to prevent: a bot confidently
+        // naming a command nobody can run.
+        const { BOT_CAPABILITIES } = require('../src/utils/constants');
+        const dirs = ['src/commands/tools', 'src/commands/media'];
+        const real = new Set();
+        for (const dir of dirs) {
+            for (const file of fs.readdirSync(path.join(__dirname, '..', dir))) {
+                if (!file.endsWith('.js')) continue;
+                const source = read(`${dir}/${file}`);
+                const match = source.match(/new SlashCommandBuilder\(\)\s*(?:\r?\n\s*)?\.setName\(['"]([^'"]+)['"]\)/);
+                if (match) real.add(match[1]);
+            }
+        }
+        const claimed = [...BOT_CAPABILITIES.matchAll(/\/([a-z_]+)/g)].map(m => m[1]);
+        expect(claimed.length).toBeGreaterThan(10);
+        for (const command of claimed) expect([...real]).toContain(command);
+    });
+
+    test('one identity, not five: every prompt reads it from the same place', () => {
+        const { BOT_IDENTITY } = require('../src/utils/constants');
+        expect(BOT_IDENTITY.name).toBe('The Cooler Moksi');
+        // The label its own lines carry in the chat log is parsed in three
+        // places; they used to be three separate string literals.
+        for (const file of ['src/commands/tools/speak.js', 'src/utils/speakPipeline.js']) {
+            expect(read(file)).toContain('BOT_IDENTITY.ownLineLabel');
+        }
+        for (const file of ['src/utils/casinoHeckle.js', 'src/commands/tools/checkrelationship.js']) {
+            expect(read(file)).toContain('BOT_IDENTITY.line');
+        }
+    });
+
+    test('the casino heckler is no longer forbidden from knowing itself', () => {
+        const heckle = read('src/utils/casinoHeckle.js');
+        expect(heckle).not.toMatch(/Do not mention being an AI/);
+        // Still not allowed to make itself the joke; that part was right.
+        expect(heckle).toMatch(/never make the joke about yourself/);
     });
 });
 

@@ -7,7 +7,7 @@ const { Pool, types } = require('pg');
 const crypto = require('crypto');
 const fs = require('fs');
 const logger = require('./logger');
-const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY, MEMORY_LIMITS } = require('./constants');
+const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY, MEMORY_LIMITS, SPEAK_MODELS } = require('./constants');
 const { downloadToTemp, createTempPath, cleanup, extFromUrl } = require('./media/tempFiles');
 const { runFFmpeg } = require('./media/ffmpegUtils');
 const { firstFrameDataUri, MAX_VIDEO_BYTES } = require('./media/videoFrame');
@@ -794,7 +794,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
     const MAX_ATTEMPTS = 2;
     const BACKOFF_BASE = 100; // milliseconds
 
-    const VISION_MODEL = 'google/gemini-3.1-flash-lite';
+    const VISION_MODEL = SPEAK_MODELS.VISION;
     const visionInput = [{
         role: 'user',
         content: [
@@ -877,7 +877,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
 // FALLBACK: Qwen3 VL 8B (current-gen, cheap, strong on text/memes)
 async function analyzeImageFallback(imageUrl, prompt) {
     const FALLBACK_TIMEOUT = 8000; // Slightly shorter timeout than primary
-    const FALLBACK_MODEL = 'qwen/qwen3-vl-8b-instruct';
+    const FALLBACK_MODEL = SPEAK_MODELS.VISION_FALLBACK;
     const visionInput = [{
         role: 'user',
         content: [
@@ -1212,11 +1212,16 @@ Rules:
 - Clamp to [-1.0, 1.0].
 Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
 
-    // Try MiMo-V2-Flash first (cheapest, native JSON mode, reasoning toggle)
+    // The configured utility model. This was a three-model cascade whose first
+    // two rungs had both been delisted from OpenRouter, so every sentiment
+    // read in the bot spent two doomed round trips before the safety net
+    // below caught it, on every single reply.
     try {
-        logger.debug('Sentiment: Attempting MiMo-V2-Flash primary', { promptLength: prompt.length });
+        const { getUtilityModel } = require('./speakPipeline');
+        const model = await getUtilityModel();
+        logger.debug('Sentiment: attempting utility model', { model, promptLength: prompt.length });
         const { callOpenRouterAPI } = require('./apiHelpers');
-        const result = await callOpenRouterAPI('xiaomi/mimo-v2-flash', [
+        const result = await callOpenRouterAPI(model, [
             { role: 'system', content: 'Output JSON only.' },
             { role: 'user', content: prompt }
         ], {
@@ -1227,36 +1232,15 @@ Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
         });
         if (result) {
             const parsed = JSON.parse(result);
-            logger.info('Sentiment: MiMo-V2-Flash success', { sentiment: parsed.sentiment });
+            logger.info('Sentiment: utility model success', { sentiment: parsed.sentiment });
             return parsed;
         }
     } catch (e) {
-        logger.warn('Sentiment: MiMo-V2-Flash failed', { error: e.message });
+        logger.warn('Sentiment: utility model failed', { error: e.message });
     }
 
-    // Fallback 1: Groq Llama 3.3 8B (cheaper than 70B, same family)
-    try {
-        logger.debug('Sentiment: Attempting Groq Llama 3.3 8B fallback');
-        const { callOpenRouterAPI } = require('./apiHelpers');
-        const result = await callOpenRouterAPI('meta-llama/llama-3.3-8b-instruct', [
-            { role: 'system', content: 'Output JSON only.' },
-            { role: 'user', content: prompt }
-        ], {
-            maxTokens: 100,
-            temperature: 0.1,
-            timeout: 8000,
-            telemetry: { kind: 'sentiment', extra: { fallbackFor: 'xiaomi/mimo-v2-flash' } }
-        });
-        if (result) {
-            const parsed = JSON.parse(result);
-            logger.info('Sentiment: Groq 8B fallback success', { sentiment: parsed.sentiment });
-            return parsed;
-        }
-    } catch (e) {
-        logger.warn('Sentiment: Groq 8B fallback failed', { error: e.message });
-    }
-
-    // Fallback 2: DeepSeek V3 (proven reliable, use as final safety net)
+    // Safety net: a different family on purpose, so one vendor having a bad
+    // afternoon does not take the attitude system down with it.
     try {
         logger.debug('Sentiment: Attempting DeepSeek V3 final fallback');
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -1268,7 +1252,7 @@ Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
                 'X-Title': 'Cooler Moksi Sentiment',
             },
             body: JSON.stringify({
-                model: 'deepseek/deepseek-chat',
+                model: SPEAK_MODELS.SENTIMENT_SAFETY_NET,
                 messages: [
                     { role: 'system', content: 'Output JSON only.' },
                     { role: 'user', content: prompt }

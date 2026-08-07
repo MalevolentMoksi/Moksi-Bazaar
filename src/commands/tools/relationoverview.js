@@ -2,6 +2,8 @@
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db.js');
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
+const { getUtilityModel } = require('../../utils/speakPipeline');
+const { SPEAK_MODELS } = require('../../utils/constants');
 const { createOverviewEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
 const { ui, retireControls } = require('../../utils/ui/panel');
@@ -75,13 +77,13 @@ No zoomer slang. No standard emojis. If mentioning names, use them naturally in 
   // PRIMARY: MiMo-V2-Flash ($0.09/$0.29/M). Ultra-cheap, fast, excellent for short text
   // FALLBACK: Gemma 4 31B ($0.13/M). Dense model, reliable fallback
   const response = await callOpenRouterAPI(
-    'xiaomi/mimo-v2-flash',
+    await getUtilityModel(),
     [{ role: 'user', content: prompt }],
     {
       maxTokens: 110,
       temperature: 0.7,
       timeout: 10000,
-      fallbackModel: 'google/gemma-4-31b-it'
+      fallbackModel: SPEAK_MODELS.LEGACY_WRITER
     }
   ).catch(e => {
     logger.error('Relationship summary generation failed', { error: e.message });

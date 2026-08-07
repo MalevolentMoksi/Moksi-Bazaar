@@ -22,11 +22,12 @@ const {
     storeConversationMemory, getSpeakConfigValue, setSpeakConfigValue, isUserBlacklisted,
 } = require('./db');
 const { getSetting } = require('./casinoConfig');
+const { getUtilityModel } = require('./speakPipeline');
+const { BOT_IDENTITY, SPEAK_MODELS } = require('./constants');
 const logger = require('./logger');
 
-const HECKLE_MODEL = 'xiaomi/mimo-v2-flash';
 /** One unavailable model should not mute the casino for good. */
-const FALLBACK_MODEL = 'meta-llama/llama-3.3-8b-instruct';
+const FALLBACK_MODEL = SPEAK_MODELS.LEGACY_WRITER;
 const LAST_HECKLE_KEY = 'casino_heckle_last_ms';
 /**
  * Why the last eligible swing did or did not get a line. Silence has half a
@@ -62,7 +63,7 @@ function memoryLine(game, net) {
         : `*lost ${money(net)} on ${noun}*`;
 }
 
-const PROMPT = `You are Cooler Moksi, a dry cynical AI who runs a Discord casino.
+const PROMPT = `${BOT_IDENTITY.line} You run this server's casino.
 
 Someone just {event}. React out loud, in the channel, unprompted.
 
@@ -70,8 +71,8 @@ Rules:
 - ONE sentence. Short. Under 20 words.
 - Dry, deadpan, a bit mean. Never cheerful, never a cheerleader.
 - No emoji, no hashtags, no quotation marks around your reply.
-- Do not congratulate. Do not offer advice. Do not mention being an AI.
-- Never describe what you are, and never make the joke about yourself. The line is about them.
+- Do not congratulate. Do not offer advice.
+- Never bring up what you are, and never make the joke about yourself. The line is about them.
 - Address them as "you" or by name; do not narrate in the third person.
 
 Their name: {name}
@@ -143,7 +144,7 @@ async function maybeSpeak({ channel, username, event }) {
             .replace('{name}', username || 'they');
 
         const reply = await callOpenRouterAPI(
-            HECKLE_MODEL,
+            await getUtilityModel(),
             [{ role: 'user', content: prompt }],
             { maxTokens: 60, temperature: 1.0, fallbackModel: FALLBACK_MODEL }
         );

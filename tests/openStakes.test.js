@@ -139,14 +139,19 @@ describe('the sweeps', () => {
 
     test('the boot sweep only reaches games too old to still be running', async () => {
         deleteReturns = [{ id: 9, user_id: 'u3', amount: 40, game: 'slots' }];
+        const window = 10 * 60 * 1000;
         const before = Date.now();
 
-        const summary = await db.refundOpenStakes({ olderThanMs: 10 * 60 * 1000 });
+        const summary = await db.refundOpenStakes({ olderThanMs: window });
 
         expect(summary).toEqual({ stakes: 1, users: 1, total: 40 });
         const [sql, params] = sqlLike('DELETE FROM open_stakes')[0];
         expect(sql).toContain('opened_at_ms <= ');
-        expect(params[0]).toBeLessThanOrEqual(before - 10 * 60 * 1000);
+        // The cutoff is taken inside the call, so it lands somewhere in the
+        // window between the two clock reads here. Bounding it on both sides
+        // is the only assertion that is not a race against a millisecond.
+        expect(params[0]).toBeGreaterThanOrEqual(before - window);
+        expect(params[0]).toBeLessThanOrEqual(Date.now() - window);
     });
 
     test('an empty own-set never opens a connection', async () => {

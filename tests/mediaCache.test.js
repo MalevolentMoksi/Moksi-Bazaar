@@ -80,17 +80,25 @@ describe('what counts as animated', () => {
 });
 
 // Source-level guards for what cannot be exercised without a live database.
+// The ids themselves moved to constants.js when a boot-time check was added,
+// so that something enumerates every model the bot is configured to call.
 describe('the vision chain points at models that exist', () => {
+    const { SPEAK_MODELS } = require('../src/utils/constants');
+
     test('the primary is the stable Gemini id, not the preview', () => {
-        const db = read('src/utils/db.js');
-        expect(db).toContain("'google/gemini-3.1-flash-lite'");
-        expect(db).not.toContain('flash-lite-preview');
+        expect(SPEAK_MODELS.VISION).toBe('google/gemini-3.1-flash-lite');
+        expect(SPEAK_MODELS.VISION).not.toContain('preview');
     });
 
     test('the fallback is the living Qwen3 VL, not the delisted 2.5', () => {
+        expect(SPEAK_MODELS.VISION_FALLBACK).toBe('qwen/qwen3-vl-8b-instruct');
+        expect(SPEAK_MODELS.VISION_FALLBACK).not.toContain('qwen-2.5-vl-7b-instruct');
+    });
+
+    test('db.js reads them from there rather than carrying its own copies', () => {
         const db = read('src/utils/db.js');
-        expect(db).toContain("'qwen/qwen3-vl-8b-instruct'");
-        expect(db).not.toContain('qwen-2.5-vl-7b-instruct');
+        expect(db).toContain('SPEAK_MODELS.VISION');
+        expect(db).toContain('SPEAK_MODELS.VISION_FALLBACK');
     });
 });
 
