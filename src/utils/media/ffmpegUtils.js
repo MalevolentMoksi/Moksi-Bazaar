@@ -2,7 +2,61 @@
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
+const logger = require('../logger');
 const { createTempPath } = require('./tempFiles');
+
+// ── WHICH FFMPEG ────────────────────────────────────────────────────────────
+// The Docker image apt-installs a current, distro-patched ffmpeg, and that
+// build always wins when it exists. But Railway's Express builder skips the
+// Dockerfile entirely, which is not hypothetical: it shipped a container
+// where every media command died with "Cannot find ffmpeg". When the system
+// binary is missing, the vendored npm build steps in, so the media suite no
+// longer lives or dies by the builder's choices.
+//
+// This block runs once at load, and every fluent-ffmpeg call site in the
+// codebase shares the module instance configured here.
+function systemHas(bin) {
+    try { return spawnSync(bin, ['-version'], { stdio: 'ignore' }).status === 0; }
+    catch { return false; }
+}
+
+// Tolerates the package being absent AND its download script having been
+// blocked: pnpm only runs allowlisted build scripts, so without the
+// package.json allowlist entry, ffmpeg-static resolves to a path with no
+// file behind it. An existence check is the difference between falling back
+// loudly and pointing every command at nothing.
+function vendored(pkg) {
+    try {
+        const mod = require(pkg);
+        const bin = typeof mod === 'string' ? mod : mod?.path;
+        return bin && fs.existsSync(bin) ? bin : null;
+    } catch { return null; }
+}
+
+// Skipped under jest: nearly every suite loads db.js, which loads this file,
+// and two real subprocess spawns per suite turn a 4-second run into a
+// 20-second one. The resolution tests opt back in explicitly.
+if (!process.env.JEST_WORKER_ID || process.env.FFMPEG_RESOLVE_UNDER_TEST) {
+    if (!systemHas('ffmpeg')) {
+        const bin = vendored('ffmpeg-static');
+        if (bin) {
+            ffmpeg.setFfmpegPath(bin);
+            logger.warn('[MEDIA] No system ffmpeg; using the vendored binary', { bin });
+        } else {
+            logger.error('[MEDIA] No ffmpeg at all: system binary absent and the vendored one did not install (is ffmpeg-static in pnpm.onlyBuiltDependencies?)');
+        }
+    }
+    if (!systemHas('ffprobe')) {
+        const bin = vendored('ffprobe-static');
+        if (bin) {
+            ffmpeg.setFfprobePath(bin);
+            logger.warn('[MEDIA] No system ffprobe; using the vendored binary', { bin });
+        } else {
+            logger.error('[MEDIA] No ffprobe at all: probing and audio detection will fail');
+        }
+    }
+}
 
 const DEFAULT_TARGET_BYTES = 18 * 1024 * 1024;
 
