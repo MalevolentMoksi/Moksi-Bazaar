@@ -26,8 +26,8 @@ const {
 } = require('discord.js');
 
 const {
-    ui, toContainer, retireControls, isV2Message, planFields, alignTable, tableCell,
-    MAX_COMPONENTS,
+    ui, toContainer, retireControls, isV2Message, planFields, alignTable,
+    tableCell, tableName, tableValue, MAX_COMPONENTS,
 } = require('../src/utils/ui/panel');
 const mode = require('../src/utils/ui/mode');
 
@@ -128,11 +128,12 @@ describe('ephemeral', () => {
 });
 
 describe('field layout', () => {
-    test('four or more short inline fields become one aligned block', () => {
+    test('five or more short inline fields become one aligned block', () => {
         const blocks = planFields([
             { name: 'Minimum age', value: '30 days', inline: true },
             { name: 'Dry run', value: 'off', inline: true },
             { name: 'Bots', value: 'exempt', inline: true },
+            { name: 'Exempt users', value: '4', inline: true },
             { name: 'Lifetime', value: '312 gated', inline: true },
         ]);
         expect(blocks).toHaveLength(1);
@@ -142,6 +143,35 @@ describe('field layout', () => {
         const rows = blocks[0].text.split('\n').filter(l => l && !l.startsWith('```'));
         const starts = rows.map(l => l.indexOf(l.trim().split(/\s{2,}/)[1]));
         expect(new Set(starts).size).toBe(1);
+    });
+
+    // A code block reads as reference furniture. /craps is four short readings
+    // you glance at once, and boxing them made a dice roll look like a config
+    // dump, so the threshold sits above it.
+    test('a handful of readings stays light instead of becoming a code block', () => {
+        const craps = [
+            { name: 'Roll', value: '⚄ ⚀', inline: true },
+            { name: 'Total', value: '6', inline: true },
+            { name: 'Payout', value: '$500', inline: true },
+            { name: 'Balance', value: '$14,940', inline: true },
+        ];
+        expect(planFields(craps)[0].kind).toBe('pairs');
+        expect(planFields([...craps, { name: 'Point', value: '6', inline: true }])[0].kind).toBe('table');
+    });
+
+    // An embed bolds names and leaves values plain; that contrast is what makes
+    // it scannable. "**Now editing** **Default channel**" threw it away.
+    test('a value that opens with its own bold does not fight the label', () => {
+        expect(planFields([
+            { name: 'Minimum account age', value: '**14** days', inline: true },
+            { name: 'Bot accounts', value: '✅ Exempt', inline: true },
+        ])[0].text).toBe('**Minimum account age** 14 days · **Bot accounts** ✅ Exempt');
+
+        // Emphasis inside a sentence is doing real work and survives.
+        expect(planFields([
+            { name: 'Result', value: '💰 You won **$1,500**.', inline: true },
+            { name: 'Bet', value: '$250', inline: true },
+        ])[0].text).toContain('**$1,500**');
     });
 
     test('two or three inline fields share a line instead', () => {
@@ -169,6 +199,27 @@ describe('field layout', () => {
             .toBe('**Hands**\none\ntwo');
     });
 
+    // /slots uses a zero-width space as a field name to get an unlabelled row.
+    // Rendered naively that became a visible, empty pair of asterisks.
+    test('a deliberately blank label prints nothing rather than empty bold', () => {
+        expect(planFields([{ name: '​', value: '🍒 🍋 🍒' }])[0].text).toBe('🍒 🍋 🍒');
+        expect(planFields([
+            { name: '​', value: 'a', inline: true },
+            { name: 'Bet', value: '$250', inline: true },
+        ])[0].text).toBe('a · **Bet** $250');
+    });
+
+    // /relationoverview is a tier label over its list of people. Pulling the
+    // list up beside the label read as one run-on sentence.
+    test('a decorated or mention-carrying value keeps its own line', () => {
+        expect(planFields([{ name: '💚 Close Friends', value: '💚 **<@1>** - 340 msgs' }])[0].text)
+            .toBe('**💚 Close Friends**\n💚 **<@1>** - 340 msgs');
+        expect(planFields([{ name: 'Exempt users', value: '<@1>, <@2>' }])[0].text)
+            .toBe('**Exempt users**\n<@1>, <@2>');
+        // A plain short reading still sits beside its label.
+        expect(planFields([{ name: 'Dealer', value: 'K♠ 9♦' }])[0].text).toBe('**Dealer** K♠ 9♦');
+    });
+
     test('an explicit layout is honoured rather than quietly ignored', () => {
         const two = [
             { name: 'Bet', value: '500', inline: true },
@@ -179,9 +230,9 @@ describe('field layout', () => {
         expect(planFields(two, { layout: 'table' })[0].kind).toBe('table');
         expect(planFields(two, { layout: 'prose' }).map(b => b.kind)).toEqual(['prose', 'prose']);
 
-        const four = ['a', 'b', 'c', 'd'].map(n => ({ name: n, value: '1', inline: true }));
-        expect(planFields(four)[0].kind).toBe('table');
-        expect(planFields(four, { layout: 'pairs' })[0].kind).toBe('pairs');
+        const five = ['a', 'b', 'c', 'd', 'e'].map(n => ({ name: n, value: '1', inline: true }));
+        expect(planFields(five)[0].kind).toBe('table');
+        expect(planFields(five, { layout: 'pairs' })[0].kind).toBe('pairs');
     });
 
     test('field order survives a mix of the two', () => {
@@ -207,9 +258,64 @@ describe('field layout', () => {
         expect(blocks[0].kind).toBe('pairs');
     });
 
-    test('emoji and markup are stripped from table cells, since they break alignment', () => {
-        expect(tableCell('🟢 On')).toBe('On');
-        expect(tableCell('**30** days')).toBe('30 days');
+    // The first pass stripped emoji from both columns and turned "10 ⛁" into
+    // "10" and "🟢 On" into "On", throwing away the meaning to protect an
+    // alignment that was never at risk: nothing is padded after the value.
+    test('only the padded name column loses its emoji; values keep theirs', () => {
+        expect(tableName('🟢 Heckling')).toBe('Heckling');
+        expect(tableValue('🟢 On')).toBe('🟢 On');
+        expect(tableValue('10 ⛁')).toBe('10 ⛁');
+        expect(tableValue('50 ⛁/day')).toBe('50 ⛁/day');
+    });
+
+    test('markup still goes, because a code block would print it literally', () => {
+        expect(tableValue('**30** days')).toBe('30 days');
+        expect(tableName('**Bots**')).toBe('Bots');
+    });
+
+    // /casino profile put "-18,200 ⛁" over "612 rounds" because an embed field
+    // had no other way to hold two numbers. A table row does.
+    test('a two-line value folds onto one row instead of refusing the table', () => {
+        expect(tableValue('-18,200 ⛁\n612 rounds')).toBe('-18,200 ⛁ · 612 rounds');
+
+        const games = ['Blackjack', 'Slots', 'Craps', 'Roulette', 'Highlow'].map((name, i) => ({
+            name, value: `-${i + 1},200 ⛁\n${100 + i} rounds`, inline: true,
+        }));
+        const blocks = planFields(games);
+        expect(blocks).toHaveLength(1);
+        expect(blocks[0].kind).toBe('table');
+        expect(blocks[0].text).toContain('-1,200 ⛁ · 100 rounds');
+    });
+
+    // The join gate overview is eight tidy settings and one long tally.
+    test('a single long value does not sink the whole block', () => {
+        const fields = [
+            { name: 'Server', value: 'Festival Hub', inline: true },
+            { name: 'Minimum age', value: '**14** days', inline: true },
+            { name: 'Dry run', value: '⚪ Off', inline: true },
+            { name: 'Bots', value: 'Exempt', inline: true },
+            { name: 'Exempt users', value: '4', inline: true },
+            { name: 'Lifetime', value: '312 kicked · 18 banned · 4 failed', inline: true },
+        ];
+        const blocks = planFields(fields);
+        expect(blocks.map(b => b.kind)).toEqual(['table', 'pairs']);
+        expect(blocks[0].text).toContain('Dry run');
+        expect(blocks[0].text).not.toContain('Lifetime');
+        expect(blocks[1].text).toContain('**Lifetime** 312 kicked');
+    });
+
+    test('field order is never rearranged to make a table', () => {
+        // The long value comes first, so no leading run qualifies and the whole
+        // thing stays pairs rather than being reordered around it.
+        const blocks = planFields([
+            { name: 'Lifetime', value: 'a'.repeat(40), inline: true },
+            { name: 'a', value: '1', inline: true },
+            { name: 'b', value: '2', inline: true },
+            { name: 'c', value: '3', inline: true },
+            { name: 'd', value: '4', inline: true },
+        ]);
+        expect(blocks.map(b => b.kind)).toEqual(['pairs']);
+        expect(blocks[0].text.indexOf('Lifetime')).toBeLessThan(blocks[0].text.indexOf('**a**'));
     });
 
     test('a long name is truncated rather than pushing the column out', () => {

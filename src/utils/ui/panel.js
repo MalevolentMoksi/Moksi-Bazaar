@@ -38,7 +38,14 @@ const MAX_TEXT_CHARS = 3800;
 /** Beyond this a monospace row wraps on a phone and the alignment is a lie. */
 const TABLE_NAME_MAX = 22;
 const TABLE_VALUE_MAX = 26;
-const TABLE_MIN_ROWS = 4;
+
+/**
+ * A code block is reference furniture: right for a settings page or a spec
+ * sheet, far too heavy for a dice roll you glance at once and forget. Row
+ * count is the only generic signal for which is which, and four was low
+ * enough to make /craps look like a config dump.
+ */
+const TABLE_MIN_ROWS = 5;
 
 /** Roughly one line of a desktop container before it starts to wrap. */
 const PAIR_LINE_CHARS = 68;
@@ -64,21 +71,49 @@ function embedData(embed) {
     return embed.data || embed;
 }
 
+/** Markdown is literal inside a code block, so it has to go either way. */
+const stripMarkup = text => text.replace(/\*\*|__|~~|`|\*/g, '');
+
 /**
- * Code blocks render markdown literally and mangle emoji width, so a cell is
- * only table-safe once it is plain text. Returns null when stripping would
- * change what the value means.
+ * The left column of a table gets padded to a fixed width, so it has to be
+ * plain: an emoji here is a variable number of columns and every row below it
+ * stops lining up.
  */
+function tableName(raw) {
+    const text = String(raw ?? '');
+    if (text.includes('<') || text.includes('\n')) return null;
+    const stripped = stripMarkup(text).replace(EMOJI_RE, '').replace(/\s+/g, ' ').trim();
+    return stripped.length ? stripped : null;
+}
+
+/**
+ * The right column keeps its emoji. Nothing is padded after the value, so a
+ * wide glyph there costs nothing, and "10 ⛁" and "🟢 On" carry meaning that
+ * stripping them threw away.
+ *
+ * A two-line value is folded onto one with a separator rather than rejected:
+ * "-18,200 ⛁ / 612 rounds" reads better as a table row than the pair of lines
+ * an embed was forced into.
+ */
+function tableValue(raw) {
+    const text = String(raw ?? '');
+    // Mentions, channel refs and <t:> timestamps all render raw in a code block.
+    if (text.includes('<')) return null;
+    const folded = stripMarkup(text)
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .join(' · ')
+        .replace(/[ \t]+/g, ' ')
+        .trim();
+    return folded.length ? folded : null;
+}
+
+/** Kept for callers that only care whether a string can sit in a table at all. */
 function tableCell(raw) {
     const text = String(raw ?? '');
-    // Mentions, channel refs and <t:> timestamps all die inside a code block.
-    if (text.includes('<') || text.includes('\n')) return null;
-    const stripped = text
-        .replace(EMOJI_RE, '')
-        .replace(/\*\*|__|~~|`|\*/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    return stripped.length ? stripped : null;
+    if (text.includes('\n')) return null;
+    return tableName(text);
 }
 
 /** Pads names into a column so the values start at the same offset. */
@@ -98,10 +133,13 @@ function asTable(run, { force = false } = {}) {
     if (!run.length) return null;
     const entries = [];
     for (const field of run) {
-        const name = tableCell(field.name);
-        const value = tableCell(field.value);
+        const name = tableName(field.name);
+        const value = tableValue(field.value);
         if (!name || !value) return null;
-        if (name.length > TABLE_NAME_MAX || value.length > TABLE_VALUE_MAX) return null;
+        if (name.length > TABLE_NAME_MAX) return null;
+        // Emoji are one code point but read wider, so they are worth two.
+        const width = value.length + (value.match(EMOJI_RE) || []).length;
+        if (width > TABLE_VALUE_MAX) return null;
         entries.push({ name, value });
     }
     return alignTable(entries);
@@ -112,9 +150,25 @@ function visibleLength(text) {
     return text.replace(/\*\*|__|~~|`/g, '').length;
 }
 
+/**
+ * An embed bolds field names and leaves values plain, which is what tells them
+ * apart at a glance. A value that opens with its own bold run ("**14** days")
+ * lands right against the bold label and the two blur into one, so that
+ * leading emphasis is dropped. Emphasis further inside a sentence is doing
+ * real work and is left alone.
+ */
+function demoteLeadingBold(value) {
+    return value.replace(/^\*\*([^*]+)\*\*/, '$1');
+}
+
 /** Two or three stats per line, keeping the bold-label look of an embed. */
 function asPairs(run) {
-    const parts = run.map(f => `**${String(f.name).trim()}** ${String(f.value).replace(/\n+/g, ' ').trim()}`);
+    const parts = run.map((f) => {
+        const name = String(f.name ?? '').trim();
+        const value = String(f.value ?? '').replace(/\n+/g, ' ').trim();
+        if (BLANK_NAME_RE.test(name)) return value;
+        return `**${name}** ${demoteLeadingBold(value)}`;
+    });
     const lines = [];
     let current = [];
     let length = 0;
@@ -134,17 +188,34 @@ function asPairs(run) {
 }
 
 /**
+ * A zero-width space is Discord's idiom for "this field has no label", so it
+ * has to count as blank rather than as a name worth bolding. Written as escapes
+ * on purpose: the literal characters are invisible in a diff.
+ */
+const BLANK_NAME_RE = /^[\s\u200B-\u200D\uFEFF]*$/;
+
+/** A value that opens with an emoji is a decorated line, not a bare reading. */
+const LEADS_WITH_EMOJI = /^\s*(?:\p{Extended_Pictographic}|\p{Regional_Indicator})/u;
+
+/**
  * A full-width field. A short single-line value sits beside its label rather
  * than under it: an embed had no choice about the line break, a container does,
  * and "Dealer  K♠ 9♦" on one line reads far better than two.
+ *
+ * It stays under the label when the value is really a block: a mention list, or
+ * anything that opens with its own emoji, both of which read as a run-on
+ * sentence once they are pushed up against a bold label.
  */
 function asProse(field) {
     const name = String(field.name ?? '').trim();
     const value = String(field.value ?? '').trim();
-    if (!name) return value;
+    // A blank label is deliberate; printing `****` for it is not.
+    if (!name || BLANK_NAME_RE.test(name)) return value;
     if (!value) return `**${name}**`;
-    const oneLine = !value.includes('\n') && value.length <= PROSE_INLINE_MAX;
-    return oneLine ? `**${name}** ${value}` : `**${name}**\n${value}`;
+
+    const structured = value.includes('<@') || value.includes('<#') || LEADS_WITH_EMOJI.test(value);
+    const oneLine = !value.includes('\n') && !structured && value.length <= PROSE_INLINE_MAX;
+    return oneLine ? `**${name}** ${demoteLeadingBold(value)}` : `**${name}**\n${value}`;
 }
 
 /**
@@ -166,11 +237,22 @@ function planFields(fields, { layout = 'auto' } = {}) {
             return;
         }
         if (layout !== 'pairs') {
-            // An explicit 'table' means it, so it skips the four-row threshold
-            // that stops 'auto' from making a code block out of two stats.
-            const table = asTable(run, { force: layout === 'table' });
-            if (table) {
-                blocks.push({ kind: 'table', text: table });
+            // One outlier should not sink the whole block. The join gate
+            // overview is eight tidy settings and a long lifetime tally; the
+            // eight still deserve to line up. Only a leading run is taken, so
+            // the author's field order is never rearranged.
+            const force = layout === 'table';
+            let cut = run.length;
+            while (cut > 0 && !asTable(run.slice(0, cut), { force })) cut -= 1;
+
+            if (cut === run.length) {
+                blocks.push({ kind: 'table', text: asTable(run, { force }) });
+                run = [];
+                return;
+            }
+            if (cut >= TABLE_MIN_ROWS) {
+                blocks.push({ kind: 'table', text: asTable(run.slice(0, cut), { force }) });
+                blocks.push({ kind: 'pairs', text: asPairs(run.slice(cut)) });
                 run = [];
                 return;
             }
@@ -468,6 +550,8 @@ module.exports = {
     toContainer,
     retireControls,
     isV2Message,
+    tableName,
+    tableValue,
     planFields,
     alignTable,
     tableCell,
