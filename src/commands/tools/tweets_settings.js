@@ -227,7 +227,8 @@ function testReport(r) {
     }
 
     const head = `Looked back **${r.hoursBack}h**. `;
-    const cost = `\nThat check cost $${(r.spend.usd).toFixed(4)} of $2.00 running total.`;
+    const cost = `\n-# This check: $${r.callUsd.toFixed(5)}. `
+        + `Month so far: $${r.spend.usd.toFixed(4)} of $${r.budgetUsd.toFixed(2)}.`;
 
     if (r.found === 0) {
         return `${head}⚠️ **Found nothing.**\n`
@@ -244,10 +245,22 @@ function testReport(r) {
         .join(' · ');
 
     const newest = r.newest;
+    // X appends its own t.co link for whatever media the post carries. Left in
+    // the quote, Discord unfurls it too and the report grows a second, worse
+    // embed above the one that is the actual proof.
+    const quoted = (newest.text || '[no text]')
+        .replace(/https?:\/\/t\.co\/\w+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220);
+
     return `${head}✅ **Found ${r.found} posts.**\n`
-        + `${breakdown}\n\n`
-        + `Newest, <t:${Math.floor(newest.atMs / 1000)}:R>:\n`
-        + `> ${(newest.text || '[no text]').replace(/\n/g, ' ').slice(0, 220)}\n`
+        + `${breakdown}\n`
+        + (r.silent?.length
+            ? `-# Nothing from ${r.silent.map(a => `@${a}`).join(', ')} in that window, which is normal for a low-volume account and also what a typo looks like.\n`
+            : '')
+        + `\nNewest, <t:${Math.floor(newest.atMs / 1000)}:R>:\n`
+        + `> ${quoted || '[no text]'}\n`
         + `${newest.url}\n`
         + 'Nothing was posted to the channel and the cursor did not move, so the '
         + 'next real check still picks up from where it was.'

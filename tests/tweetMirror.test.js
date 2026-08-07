@@ -740,7 +740,7 @@ describe('reading the test out loud', () => {
     test('calls six hours of silence suspicious, and shows the query', () => {
         const text = testReport({
             ok: true, hoursBack: 6, found: 0, perAccount: {}, newest: null,
-            query: '(from:HYPEX) -filter:replies since_time:1', spend: { usd: 0.0003 },
+            query: '(from:HYPEX) -filter:replies since_time:1', silent: ['HYPEX'], callUsd: 0.00015, budgetUsd: 2, spend: { usd: 0.0003 },
         });
         expect(text).toMatch(/Found nothing/);
         expect(text).toMatch(/wrong handle|rejected query/);
@@ -751,8 +751,9 @@ describe('reading the test out loud', () => {
         const text = testReport({
             ok: true, hoursBack: 6, found: 4,
             perAccount: { HYPEX: 3, ShiinaBR: 1 },
-            newest: { atMs: 1754000000000, text: 'a leak', url: 'https://fxtwitter.com/HYPEX/status/1' },
-            query: 'q', spend: { usd: 0.0009 },
+            newest: { atMs: 1754000000000, text: 'a leak https://t.co/abc123', url: 'https://fxtwitter.com/HYPEX/status/1' },
+            silent: ['FNFestival'],
+            query: 'q', callUsd: 0.0006, budgetUsd: 2, spend: { usd: 0.0009 },
         });
         expect(text).toMatch(/Found 4 posts/);
         expect(text).toContain('@HYPEX 3');
@@ -761,5 +762,76 @@ describe('reading the test out loud', () => {
 
     test('turns a missing key into the instruction that fixes it', () => {
         expect(testReport({ ok: false, reason: 'no TWITTERAPI_KEY set' })).toMatch(/Railway/);
+    });
+});
+
+describe('the money line in the test report', () => {
+    const { testReport } = require('../src/commands/tools/tweets_settings');
+
+    const report = over => testReport({
+        ok: true, hoursBack: 6, found: 7,
+        perAccount: { HYPEX: 3, ShiinaBR: 4 }, silent: [],
+        newest: { atMs: 1754000000000, text: 'x', url: 'https://fxtwitter.com/HYPEX/status/1' },
+        query: 'q', callUsd: 0.00105, budgetUsd: 2, spend: { usd: 0.0016 },
+        ...over,
+    });
+
+    test('separates what this check cost from the running total', () => {
+        // These were one number labelled "that check cost", which showed the
+        // cumulative figure. On the only feature in the bot that spends real
+        // money, that is the wrong number under the wrong name.
+        const text = report();
+        expect(text).toContain('This check: $0.00105');
+        expect(text).toContain('Month so far: $0.0016');
+    });
+
+    test('quotes the real cap rather than assuming it is still two dollars', () => {
+        expect(report({ budgetUsd: 5 })).toContain('of $5.00');
+    });
+
+    test('strips the t.co link X appends, which Discord would unfurl as a second embed', () => {
+        const text = report({
+            newest: { atMs: 1754000000000, text: 'REGULAR SHOW RETURNS https://t.co/Ig1YIfMGuG', url: 'https://fxtwitter.com/HYPEX/status/1' },
+        });
+        expect(text).not.toContain('t.co');
+        expect(text).toContain('REGULAR SHOW RETURNS');
+    });
+
+    test('names the accounts that returned nothing, since a typo looks like a quiet day', () => {
+        expect(report({ silent: ['FNFestival'] })).toContain('@FNFestival');
+    });
+});
+
+describe('spotting a handle that never answers', () => {
+    test('reports which watched accounts returned nothing', async () => {
+        mockStore.set(ACCOUNTS_KEY, ['FNFestival', 'HYPEX', 'ShiinaBR']);
+        respond({ tweets: [apiTweet('1', { handle: 'HYPEX' })] });
+
+        const r = await mirror.testFetch();
+
+        expect(r.perAccount).toEqual({ HYPEX: 1 });
+        expect(r.silent.sort()).toEqual(['FNFestival', 'ShiinaBR']);
+    });
+
+    test('nothing is silent when everyone answered', async () => {
+        mockStore.set(ACCOUNTS_KEY, ['HYPEX']);
+        respond({ tweets: [apiTweet('1', { handle: 'HYPEX' })] });
+
+        expect((await mirror.testFetch()).silent).toEqual([]);
+    });
+
+    test('the per-check cost is the billed one, not the running total', async () => {
+        respond({ tweets: [apiTweet('1'), apiTweet('2'), apiTweet('3')] });
+        const r = await mirror.testFetch();
+
+        expect(r.callUsd).toBeCloseTo(3 * COST_PER_UNIT_USD, 8);
+        expect(r.spend.usd).toBeCloseTo(3 * COST_PER_UNIT_USD, 8);
+
+        // Second call: the running total moves, the per-call figure does not.
+        respond({ tweets: [apiTweet('4')] });
+        const r2 = await mirror.testFetch();
+
+        expect(r2.callUsd).toBeCloseTo(COST_PER_UNIT_USD, 8);
+        expect(r2.spend.usd).toBeCloseTo(4 * COST_PER_UNIT_USD, 8);
     });
 });

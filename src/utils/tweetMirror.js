@@ -577,7 +577,16 @@ async function testFetch({ hoursBack = 6 } = {}) {
         raw: result.tweets.length,
         found: found.length,
         perAccount,
+        // Which of the watched handles returned nothing. A silent account is
+        // usually just quiet, but it is also what a typo looks like, and the
+        // caller cannot tell the two apart without knowing who was asked.
+        silent: accounts.map(a => String(a).replace(/^@/, '')).filter(a => !perAccount[a]),
         newest: found[0] ?? null,
+        // What THIS request cost, kept separate from the running total. The
+        // two are trivially confusable and one of them is the number that
+        // answers "should I be worried".
+        callUsd: Math.max(1, result.tweets.length) * COST_PER_UNIT_USD,
+        budgetUsd: budget,
         spend: newSpend,
     };
 }
