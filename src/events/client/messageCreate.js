@@ -37,7 +37,17 @@ module.exports = {
     // one of the bot's own messages. The reply path matters because replying
     // with the ping toggled off adds nothing to `mentions`, so people who
     // continued a conversation the natural way used to get silence.
-    let triggered = message.mentions.users.has(botId);
+    //
+    // Read from the TEXT, not from `mentions.users`. Discord adds the
+    // replied-to user to that collection for any reply with the ping left on,
+    // which is the default, so every ordinary reply looked like somebody had
+    // typed the bot's name. That made this line swallow the reply path
+    // wholesale, mirror guard and all, and the bot answered a leak embed
+    // within an hour of the mirror going live. A reply-ping never writes the
+    // token into the content, so the content is the only honest signal for
+    // "they addressed the bot on purpose".
+    const mentionToken = new RegExp(`<@!?${botId}>`);
+    let triggered = mentionToken.test(message.content ?? '');
     if (!triggered && message.reference?.messageId) {
       const referenced = message.channel.messages.cache.get(message.reference.messageId)
         ?? await message.channel.messages.fetch(message.reference.messageId).catch(() => null);

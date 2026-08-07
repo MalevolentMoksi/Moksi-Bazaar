@@ -33,18 +33,29 @@ beforeEach(() => {
 });
 
 /**
- * A message in a guild. `repliesTo` is the message it used Discord's reply
- * function on, `mentionsBot` whether it also pinged.
+ * A message in a guild, modelling one detail Discord gets right and this
+ * codebase once got wrong: replying to somebody with the ping left on (the
+ * DEFAULT) puts them in `mentions.users` without a single character of the
+ * mention appearing in the content.
+ *
+ * So `repliesTo` alone already implies a pinged mention in the collection.
+ * `replyPing: false` is the user having toggled the ping off, and a typed
+ * mention is what it is in real life: the token, in the text.
  */
-function message({ repliesTo = null, mentionsBot = false, content = 'no way' } = {}) {
+function message({ repliesTo = null, replyPing = true, content = 'no way' } = {}) {
     const cache = new Map();
     if (repliesTo) cache.set(repliesTo.id, repliesTo);
+
+    const pinged = new Set();
+    if (repliesTo && replyPing) pinged.add(repliesTo.author.id);
+    for (const [, id] of String(content).matchAll(/<@!?([^>]+)>/g)) pinged.add(id);
+
     return {
         content,
         author: { bot: false, id: HUMAN, username: 'someone' },
         member: { displayName: 'someone' },
         guild: { id: 'g1' },
-        mentions: { users: { has: id => mentionsBot && id === BOT } },
+        mentions: { users: { has: id => pinged.has(id) } },
         reference: repliesTo ? { messageId: repliesTo.id } : null,
         channel: {
             id: 'c1',
@@ -58,21 +69,34 @@ function message({ repliesTo = null, mentionsBot = false, content = 'no way' } =
 const botMessage = (id, content = 'something conversational') => ({ id, author: { id: BOT }, content });
 
 describe('replying to a mirrored tweet', () => {
-    test('does not wake the bot', async () => {
+    test('does not wake the bot, with the reply ping left on as Discord defaults it', async () => {
+        // The regression that reached production: the ping put the bot in
+        // mentions.users, that read as "they @ed me", and the guard below was
+        // skipped entirely. Someone said "thats cool" to a leak embed and the
+        // bot answered them.
         isMirrorMessage.mockResolvedValue(true);
 
-        await handler.execute(message({ repliesTo: botMessage('m-tweet') }), client);
+        await handler.execute(message({ repliesTo: botMessage('m-tweet'), replyPing: true }), client);
 
         expect(speak.execute).not.toHaveBeenCalled();
     });
 
-    test('still wakes it if they actually @ it, which is unambiguous', async () => {
+    test('does not wake the bot with the ping toggled off either', async () => {
         isMirrorMessage.mockResolvedValue(true);
 
-        await handler.execute(message({ repliesTo: botMessage('m-tweet'), mentionsBot: true }), client);
+        await handler.execute(message({ repliesTo: botMessage('m-tweet'), replyPing: false }), client);
+
+        expect(speak.execute).not.toHaveBeenCalled();
+    });
+
+    test('still wakes it if they actually type its name, which is unambiguous', async () => {
+        isMirrorMessage.mockResolvedValue(true);
+
+        await handler.execute(
+            message({ repliesTo: botMessage('m-tweet'), content: `<@${BOT}> thoughts` }), client);
 
         expect(speak.execute).toHaveBeenCalled();
-        // The mention path never needs the lookup: it short-circuits before it.
+        // A typed mention short-circuits before the lookup is needed.
         expect(isMirrorMessage).not.toHaveBeenCalled();
     });
 });
@@ -125,24 +149,37 @@ describe('the request text the bot actually reads', () => {
     const request = () => speak.execute.mock.calls[0][0].options.getString('request');
 
     test('a leading summon ping is stripped clean', async () => {
-        await handler.execute(message({ mentionsBot: true, content: `<@${BOT}> hello there` }), client);
+        await handler.execute(message({ content: `<@${BOT}> hello there` }), client);
         expect(request()).toBe('hello there');
     });
 
     test('a mid-sentence ping becomes the bot\'s name, not a hole', async () => {
         await handler.execute(
-            message({ mentionsBot: true, content: `as in when <@${BOT}> types in it` }), client);
+            message({ content: `as in when <@${BOT}> types in it` }), client);
         expect(request()).toBe('as in when @Cooler Moksi types in it');
     });
 
     test('the nickname mention form gets the same treatment', async () => {
         await handler.execute(
-            message({ mentionsBot: true, content: `ping me when <@!${BOT}> posts` }), client);
+            message({ content: `ping me when <@!${BOT}> posts` }), client);
         expect(request()).toBe('ping me when @Cooler Moksi posts');
     });
 
     test('a bare ping still reads as an empty request', async () => {
-        await handler.execute(message({ mentionsBot: true, content: `<@${BOT}>` }), client);
+        await handler.execute(message({ content: `<@${BOT}>` }), client);
         expect(request()).toBeNull();
+    });
+
+    test('replying to the bot conversationally still reaches speak, with no text mention', async () => {
+        // The path the ping-based check used to serve for free. It now costs
+        // one cache lookup and must still work: this is how most people talk
+        // to the bot.
+        isMirrorMessage.mockResolvedValue(false);
+
+        await handler.execute(
+            message({ repliesTo: botMessage('m-chat'), content: 'and what about tuesday' }), client);
+
+        expect(speak.execute).toHaveBeenCalled();
+        expect(request()).toBe('and what about tuesday');
     });
 });
