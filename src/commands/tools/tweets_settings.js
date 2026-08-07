@@ -21,7 +21,7 @@ const { setSpeakConfigValue } = require('../../utils/db.js');
 const { OWNER_REJECTION_JOKES, isOwner, EMBED_COLORS } = require('../../utils/constants');
 const { ui, retireControls, isV2Message } = require('../../utils/ui/panel');
 const {
-    runOnce, mirrorStatus,
+    runOnce, testFetch, mirrorStatus,
     CHANNEL_KEY, ENABLED_KEY, ACCOUNTS_KEY, BUDGET_KEY, STYLE_KEY,
     COST_PER_UNIT_USD,
 } = require('../../utils/tweetMirror');
@@ -32,6 +32,12 @@ const PANEL_IDLE_MS = 5 * 60_000;
 const MODAL_TIMEOUT_MS = 120_000;
 
 const MAX_ACCOUNTS = 10;
+/**
+ * How far back "Test fetch" reaches. Long enough that silence is a real
+ * signal rather than a quiet spell, short enough that the handful of posts
+ * it bills for stays under a cent.
+ */
+const TEST_HOURS = 6;
 /** twitterapi.io prices everything in credits; 100,000 of them cost a dollar. */
 const CREDITS_PER_USD = 100_000;
 
@@ -182,6 +188,11 @@ function render(s) {
                 .setLabel('Check now')
                 .setStyle(ButtonStyle.Primary)
                 .setDisabled(!s.hasKey || !s.channelId),
+            new ButtonBuilder()
+                .setCustomId('tw_test')
+                .setLabel('Test fetch')
+                .setStyle(ButtonStyle.Primary)
+                .setDisabled(!s.hasKey),
             new ButtonBuilder().setCustomId('tw_refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
         ),
         new ActionRowBuilder().addComponents(
@@ -195,6 +206,52 @@ function render(s) {
     ];
 
     return { embed, rows };
+}
+
+/**
+ * Turns a test fetch into a verdict rather than a row of numbers.
+ *
+ * The reason this exists at all: "0 posts fetched" is what a healthy mirror
+ * looks like on a quiet quarter of an hour AND what a broken one looks like
+ * forever. Six hours of silence from three accounts that post hourly is not
+ * ambiguous, so say so plainly instead of printing a zero and leaving it to
+ * be interpreted.
+ */
+function testReport(r) {
+    if (!r.ok) {
+        return `❌ Could not test: ${r.reason}.`
+            + (r.error ? `\n\`${String(r.error).slice(0, 250)}\`` : '')
+            + (r.reason === 'no TWITTERAPI_KEY set'
+                ? '\nSet it in Railway and redeploy.'
+                : '');
+    }
+
+    const head = `Looked back **${r.hoursBack}h**. `;
+    const cost = `\nThat check cost $${(r.spend.usd).toFixed(4)} of $2.00 running total.`;
+
+    if (r.found === 0) {
+        return `${head}⚠️ **Found nothing.**\n`
+            + 'Three accounts posting hourly should not be silent that long, so this is '
+            + 'more likely a wrong handle or a rejected query than a quiet day. '
+            + 'The exact query was:\n'
+            + `\`\`\`${r.query.slice(0, 300)}\`\`\``
+            + cost;
+    }
+
+    const breakdown = Object.entries(r.perAccount)
+        .sort((a, b) => b[1] - a[1])
+        .map(([handle, n]) => `@${handle} ${n}`)
+        .join(' · ');
+
+    const newest = r.newest;
+    return `${head}✅ **Found ${r.found} posts.**\n`
+        + `${breakdown}\n\n`
+        + `Newest, <t:${Math.floor(newest.atMs / 1000)}:R>:\n`
+        + `> ${(newest.text || '[no text]').replace(/\n/g, ' ').slice(0, 220)}\n`
+        + `${newest.url}\n`
+        + 'Nothing was posted to the channel and the cursor did not move, so the '
+        + 'next real check still picks up from where it was.'
+        + cost;
 }
 
 async function buildPanel() {
@@ -280,6 +337,13 @@ module.exports = {
                         : `Found ${result.found}, posted ${result.posted}.`
                         + (result.dropped ? ` Skipped ${result.dropped} older ones from a burst.` : '');
                     return i.followUp({ content: note, flags: MessageFlags.Ephemeral }).catch(() => {});
+                }
+
+                if (id === 'tw_test') {
+                    await i.deferUpdate().catch(() => {});
+                    const r = await testFetch({ hoursBack: TEST_HOURS });
+                    await refresh(null);
+                    return i.followUp({ content: testReport(r), flags: MessageFlags.Ephemeral }).catch(() => {});
                 }
 
                 if (id === 'tw_accounts') {
@@ -369,4 +433,5 @@ module.exports = {
     parseAccounts,
     projectMonth,
     render,
+    testReport,
 };

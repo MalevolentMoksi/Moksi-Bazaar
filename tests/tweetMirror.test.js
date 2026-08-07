@@ -664,3 +664,102 @@ describe('remembering what it posted', () => {
         await result.verification;
     });
 });
+
+// ── Proving it works ────────────────────────────────────────────────────────
+//
+// "0 posts fetched" is what a healthy mirror looks like on a quiet quarter of
+// an hour and what a broken one looks like forever. twitterapi.io's own call
+// log does not separate them either: it showed no calls at all for a request
+// that had demonstrably been billed. So the bot has to answer the question
+// itself, with a window wide enough that silence means something.
+
+describe('the test fetch', () => {
+    test('reaches back hours, not minutes, so silence is a real signal', async () => {
+        const now = Date.now();
+        respond({ tweets: [] });
+        await mirror.testFetch({ hoursBack: 6 });
+
+        const since = Number(lastQuery().match(/since_time:(\d+)/)[1]) * 1000;
+        expect(now - since).toBeGreaterThan(5.5 * 3600 * 1000);
+    });
+
+    test('leaves the cursor exactly where it was', async () => {
+        // It must never eat a post the real poller would have delivered.
+        mockStore.set(SINCE_KEY, 12345);
+        respond({ tweets: [apiTweet('1')] });
+
+        await mirror.testFetch();
+
+        expect(mockStore.get(SINCE_KEY)).toBe(12345);
+    });
+
+    test('posts nothing and claims nothing', async () => {
+        respond({ tweets: [apiTweet('1'), apiTweet('2')] });
+        await mirror.testFetch();
+
+        expect(sent).toHaveLength(0);
+        expect(mockClaimed.size).toBe(0);
+    });
+
+    test('still pays for itself, because the request is just as real', async () => {
+        respond({ tweets: [apiTweet('1'), apiTweet('2'), apiTweet('3')] });
+        const r = await mirror.testFetch();
+
+        expect(r.spend.usd).toBeCloseTo(3 * COST_PER_UNIT_USD, 8);
+    });
+
+    test('breaks the count down per handle, so one dead account is visible', async () => {
+        // Three accounts and twelve results could still be one working handle
+        // and two silently misspelled ones.
+        respond({
+            tweets: [
+                apiTweet('1', { handle: 'HYPEX' }),
+                apiTweet('2', { handle: 'HYPEX' }),
+                apiTweet('3', { handle: 'ShiinaBR' }),
+            ],
+        });
+        const r = await mirror.testFetch();
+
+        expect(r.perAccount).toEqual({ HYPEX: 2, ShiinaBR: 1 });
+        expect(r.found).toBe(3);
+    });
+
+    test('refuses to run without a key rather than reporting a false negative', async () => {
+        delete process.env.TWITTERAPI_KEY;
+        const r = await mirror.testFetch();
+
+        expect(r.ok).toBe(false);
+        expect(r.reason).toBe('no TWITTERAPI_KEY set');
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+});
+
+describe('reading the test out loud', () => {
+    const { testReport } = require('../src/commands/tools/tweets_settings');
+
+    test('calls six hours of silence suspicious, and shows the query', () => {
+        const text = testReport({
+            ok: true, hoursBack: 6, found: 0, perAccount: {}, newest: null,
+            query: '(from:HYPEX) -filter:replies since_time:1', spend: { usd: 0.0003 },
+        });
+        expect(text).toMatch(/Found nothing/);
+        expect(text).toMatch(/wrong handle|rejected query/);
+        expect(text).toContain('from:HYPEX');
+    });
+
+    test('says plainly that a successful test changed nothing', () => {
+        const text = testReport({
+            ok: true, hoursBack: 6, found: 4,
+            perAccount: { HYPEX: 3, ShiinaBR: 1 },
+            newest: { atMs: 1754000000000, text: 'a leak', url: 'https://fxtwitter.com/HYPEX/status/1' },
+            query: 'q', spend: { usd: 0.0009 },
+        });
+        expect(text).toMatch(/Found 4 posts/);
+        expect(text).toContain('@HYPEX 3');
+        expect(text).toMatch(/cursor did not move/);
+    });
+
+    test('turns a missing key into the instruction that fixes it', () => {
+        expect(testReport({ ok: false, reason: 'no TWITTERAPI_KEY set' })).toMatch(/Railway/);
+    });
+});
