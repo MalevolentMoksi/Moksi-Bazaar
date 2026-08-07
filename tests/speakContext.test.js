@@ -86,6 +86,67 @@ describe('reply markers', () => {
         }
     });
 
+    test('the same hand is still legible once it is a Components V2 container', () => {
+        // A container message has NO embeds: everything moved into components.
+        // Read naively, the bot would go blind to its own panels the moment a
+        // surface is switched over, undoing the test above without touching it.
+        const { EmbedBuilder } = require('discord.js');
+        const { toContainer } = require('../src/utils/ui/panel');
+
+        const embed = new EmbedBuilder()
+            .setTitle('Blackjack')
+            .setDescription('**-$120,000** on this hand.')
+            .addFields(
+                { name: 'Dealer (9)', value: '5S 4D' },
+                { name: 'Your hand (23)', value: '5D 6D 2D JC\nBust' },
+                { name: 'Balance', value: '$566' },
+            )
+            .setFooter({ text: 'This session: -$30,000' });
+
+        const hand = {
+            embeds: [],
+            attachments: new Map(),
+            components: [toContainer(embed).toJSON()],
+        };
+        const seen = describeNonTextPayload(hand, 600);
+
+        for (const fact of ['Blackjack', '-$120,000', 'Bust', '$566', 'This session: -$30,000']) {
+            expect(seen).toContain(fact);
+        }
+    });
+
+    test('an aligned table inside a panel reads as key and value, not as backticks', () => {
+        const { EmbedBuilder } = require('discord.js');
+        const { toContainer } = require('../src/utils/ui/panel');
+
+        const embed = new EmbedBuilder().setTitle('Join gate').addFields(
+            { name: 'Minimum age', value: '30 days', inline: true },
+            { name: 'Dry run', value: 'off', inline: true },
+            { name: 'Bots', value: 'exempt', inline: true },
+            { name: 'Lifetime', value: '312 gated', inline: true },
+        );
+        const seen = describeNonTextPayload(
+            { embeds: [], attachments: new Map(), components: [toContainer(embed).toJSON()] },
+            600,
+        );
+
+        expect(seen).toContain('Minimum age');
+        expect(seen).toContain('30 days');
+        expect(seen).not.toContain('```');
+    });
+
+    test('a classic embed message gains no panel text, so nothing double-renders', () => {
+        const plain = {
+            embeds: [{ title: 'Hello', fields: [] }],
+            attachments: new Map(),
+            components: [{ type: 1, components: [{ type: 2, label: 'Hit' }] }],
+        };
+        const seen = describeNonTextPayload(plain, 600);
+        expect(seen).toContain('[embed: Hello]');
+        expect(seen).not.toContain('[panel:');
+        expect(seen).not.toContain('Hit');
+    });
+
     test('a long quote is truncated rather than swallowing the line', () => {
         const target = message({ id: 'm0', authorId: 'u2', name: 'Ada', content: 'x'.repeat(400) });
         const reply = message({ id: 'm1', content: 'sure', reference: { messageId: 'm0' } });

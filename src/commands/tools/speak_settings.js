@@ -616,15 +616,25 @@ module.exports = {
         });
 
         collector.on('end', async () => {
-            // Under Components V2 there is no `content`, and blanking
-            // `components` would erase the panel rather than its buttons.
+            const notice = 'Panel timed out. Run /speak_settings again to make more changes.';
+
+            // Under Components V2 there is no `content` to put the notice in,
+            // and blanking `components` would erase the panel rather than its
+            // buttons. Rebuild it with the notice as its footer instead, so
+            // the timed-out panel reads the same either way.
             if (isV2Message(message)) {
-                await interaction.editReply(retireControls(message)).catch(() => {});
+                const last = await buildPanel(panel.section).catch(() => null);
+                if (last?.embed) {
+                    last.embed.setFooter({ text: notice });
+                    await interaction.editReply(ui(last.embed, [], { like: message })).catch(() => {});
+                } else {
+                    await interaction.editReply(retireControls(message)).catch(() => {});
+                }
                 return;
             }
             await interaction.editReply({
                 components: [],
-                content: '*Panel timed out. Run `/speak_settings` again to make more changes.*',
+                content: `*${notice}*`,
             }).catch(() => {});
         });
     },

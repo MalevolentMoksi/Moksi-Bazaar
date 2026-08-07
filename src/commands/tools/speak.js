@@ -1,5 +1,5 @@
 // ENHANCED SPEAK.JS - DeepSeek V3 + Relationship-Aware Context
-const { SlashCommandBuilder } = require('discord.js');
+const { SlashCommandBuilder, ComponentType } = require('discord.js');
 
 const {
   isUserBlacklisted,
@@ -100,6 +100,9 @@ function describeForwarded(msg, charLimit) {
     if (snap.content) bits.push(flatten(readableTimestamps(snap.content)));
     const embedText = describeEmbeds(snap, Math.floor(charLimit / 2));
     if (embedText) bits.push(embedText.trim());
+    // A forwarded Components V2 message has no embeds either.
+    const panelText = describeContainers(snap, Math.floor(charLimit / 2));
+    if (panelText) bits.push(panelText.trim());
     if (snap.attachments?.size) bits.push(`${snap.attachments.size} attachment(s)`);
 
     const text = bits.join(' ').trim();
@@ -137,9 +140,53 @@ function describeOtherAttachments(msg) {
   return ` [${names.join(', ')}]`;
 }
 
+/**
+ * Renders the readable text of a Components V2 message.
+ *
+ * A message sent that way has NO embeds at all: the title, the fields and the
+ * footer all live inside a container in `components`. Without this the bot goes
+ * blind to its own panels the moment a surface is switched over, which would
+ * quietly undo the work that made a blackjack hand legible in the first place.
+ *
+ * Buttons are skipped on purpose. What the panel says is context; what it
+ * offers to click is not, and listing every control drowns the rest.
+ */
+function describeContainers(msg, charLimit) {
+  const parts = [];
+
+  const walk = (node, depth = 0) => {
+    if (!node || depth > 6) return;
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child, depth);
+      return;
+    }
+    if (node.type === ComponentType.ActionRow) return;
+    if (node.type === ComponentType.TextDisplay && node.content) {
+      // Code fences carry the aligned tables; the alignment is the point, the
+      // backticks are noise. Subtext markers mean nothing to a reader either.
+      const cleaned = String(node.content)
+        .replace(/```/g, '')
+        .replace(/^\s*-#\s*/gm, '')
+        .replace(/^\s*#{1,3}\s*/gm, '')
+        .trim();
+      if (cleaned) parts.push(cleaned);
+      return;
+    }
+    walk(node.components, depth + 1);
+  };
+
+  walk(msg?.components);
+  if (parts.length === 0) return '';
+
+  const text = flatten(readableTimestamps(parts.join(' | ')));
+  if (!text) return '';
+  return ` [panel: ${text.slice(0, charLimit)}]`;
+}
+
 /** Everything readable about a message that is not plain `content`. */
 function describeNonTextPayload(msg, charLimit) {
-  return `${describeEmbeds(msg, charLimit)}${describeForwarded(msg, charLimit)}${describeOtherAttachments(msg)}`;
+  return `${describeEmbeds(msg, charLimit)}${describeContainers(msg, charLimit)}`
+    + `${describeForwarded(msg, charLimit)}${describeOtherAttachments(msg)}`;
 }
 
 // Build a compact "reply to X" marker so the AI sees conversational threading

@@ -84,6 +84,13 @@ module.exports = {
     let balance = deductResult.newBalance;
 
     await interaction.deferReply();
+
+    // "Play again" calls runRound() again and edits the same message, so the
+    // rendering has to stay whatever that message was born as. Without this a
+    // toggle flipped between rounds would try to change a message's shape,
+    // which Discord refuses.
+    let board = null;
+
     await runRound();
 
     async function runRound() {
@@ -127,7 +134,9 @@ module.exports = {
           .setStyle(ButtonStyle.Danger)
       );
 
-      const payload = ui(embed, [row], { scope: 'casino' });
+      const payload = board
+        ? ui(embed, [row], { like: board })
+        : ui(embed, [row], { scope: 'casino' });
       if (interaction.replied || interaction.deferred) {
         await interaction.editReply(payload);
       } else {
@@ -135,6 +144,7 @@ module.exports = {
       }
 
       const message = await interaction.fetchReply();
+      board = message;
       const collector = message.createMessageComponentCollector({
         componentType: ComponentType.Button,
         time: GAME_CONFIG.CRAPS.COLLECTOR_TIMEOUT,

@@ -31,6 +31,9 @@ const {
 } = require('../src/utils/ui/panel');
 const mode = require('../src/utils/ui/mode');
 
+/** Discord's own hard limit on components per message, nested ones included. */
+const DISCORD_COMPONENT_CEILING = 40;
+
 const row = (...labels) => new ActionRowBuilder().addComponents(
     ...labels.map(label => new ButtonBuilder()
         .setCustomId(`btn_${label}`).setLabel(label).setStyle(ButtonStyle.Secondary)),
@@ -151,9 +154,34 @@ describe('field layout', () => {
         expect(blocks[0].text).toBe('**On the table** 500 · **Balance** 12,340');
     });
 
-    test('a full-width field keeps its label above its value', () => {
-        const blocks = planFields([{ name: 'Kick message', value: 'Come back later.' }]);
-        expect(blocks[0]).toEqual({ kind: 'prose', text: '**Kick message**\nCome back later.' });
+    // An embed had no say in this; a container does, so a short value sits
+    // beside its label instead of wasting a line on it.
+    test('a short full-width value sits beside its label', () => {
+        const blocks = planFields([{ name: 'Dealer', value: 'K♠ 9♦' }]);
+        expect(blocks[0]).toEqual({ kind: 'prose', text: '**Dealer** K♠ 9♦' });
+    });
+
+    test('a long or multi-line full-width value still gets its own line', () => {
+        const long = 'Your account is too new for this server, so you were removed automatically.';
+        expect(planFields([{ name: 'Kick message', value: long }])[0].text)
+            .toBe(`**Kick message**\n${long}`);
+        expect(planFields([{ name: 'Hands', value: 'one\ntwo' }])[0].text)
+            .toBe('**Hands**\none\ntwo');
+    });
+
+    test('an explicit layout is honoured rather than quietly ignored', () => {
+        const two = [
+            { name: 'Bet', value: '500', inline: true },
+            { name: 'Balance', value: '12,340', inline: true },
+        ];
+        // 'auto' would not make a table out of two rows; 'table' means it.
+        expect(planFields(two)[0].kind).toBe('pairs');
+        expect(planFields(two, { layout: 'table' })[0].kind).toBe('table');
+        expect(planFields(two, { layout: 'prose' }).map(b => b.kind)).toEqual(['prose', 'prose']);
+
+        const four = ['a', 'b', 'c', 'd'].map(n => ({ name: n, value: '1', inline: true }));
+        expect(planFields(four)[0].kind).toBe('table');
+        expect(planFields(four, { layout: 'pairs' })[0].kind).toBe('pairs');
     });
 
     test('field order survives a mix of the two', () => {
@@ -224,9 +252,22 @@ describe('the container itself', () => {
         expect(section.accessory.media.url).toBe('https://example.invalid/a.png');
     });
 
-    test('a linked title keeps its link', () => {
-        const container = toContainer(new EmbedBuilder().setTitle('Docs').setURL('https://example.invalid'));
-        expect(texts(container)[0]).toBe('**[Docs](https://example.invalid)**');
+    // An embed title renders larger than its body; plain bold does not, so a
+    // heading is the closer match.
+    test('the title is a heading, and a linked title keeps its link', () => {
+        expect(texts(toContainer(new EmbedBuilder().setTitle('Blackjack')))[0])
+            .toBe('### Blackjack');
+        expect(texts(toContainer(new EmbedBuilder().setTitle('Docs').setURL('https://example.invalid')))[0])
+            .toBe('### [Docs](https://example.invalid)');
+    });
+
+    test('a lone row builder is accepted rather than silently dropped', () => {
+        const payload = ui(new EmbedBuilder().setTitle('t'), row('Go'), { mode: 'v2' });
+        const kinds = payload.components[0].toJSON().components.map(c => c.type);
+        expect(kinds).toContain(ComponentType.ActionRow);
+
+        const classic = ui(new EmbedBuilder().setTitle('t'), row('Go'), { mode: 'v1' });
+        expect(classic.components).toHaveLength(1);
     });
 
     test('an empty embed falls back to an embed, since an empty container is illegal', () => {
@@ -235,13 +276,49 @@ describe('the container itself', () => {
         expect(payload.embeds).toHaveLength(1);
     });
 
-    test('a dense panel stays well under the component ceiling', () => {
-        const embed = new EmbedBuilder().setTitle('Everything');
+    // Discord counts EVERY component, nested included. Five full button rows
+    // are 30 of the 40 on their own, so counting only top-level children put
+    // the worst real panel at exactly 40: one more field and it stops sending.
+    test('the worst panel Discord can even describe stays under the ceiling', () => {
+        const embed = new EmbedBuilder()
+            .setTitle('Everything').setDescription('desc').setFooter({ text: 'footer' });
+        // 25 fields is an embed's own hard maximum, so this is the true ceiling.
         for (let i = 0; i < 25; i += 1) {
-            embed.addFields({ name: `Field ${i}`, value: `value ${i}`, inline: true });
+            embed.addFields({ name: `Long field name ${i}`, value: 'x'.repeat(70) });
         }
-        const container = toContainer(embed);
-        expect(container.toJSON().components.length).toBeLessThanOrEqual(MAX_COMPONENTS);
+        const fullRows = Array.from({ length: 5 }, (_, r) => row(...['a', 'b', 'c', 'd', 'e'].map(b => `${r}${b}`)));
+
+        const json = toContainer(embed, fullRows).toJSON();
+        const total = node => 1 + (node.components || []).reduce((n, c) => n + total(c), 0);
+
+        expect(total(json)).toBeLessThanOrEqual(DISCORD_COMPONENT_CEILING);
+        expect(total(json)).toBeLessThanOrEqual(MAX_COMPONENTS);
+    });
+
+    test('overflowing content is merged, never dropped, and controls always survive', () => {
+        const embed = new EmbedBuilder().setTitle('T').setFooter({ text: 'THE FOOTER' });
+        for (let i = 0; i < 25; i += 1) embed.addFields({ name: `Field ${i}`, value: `value ${i}` });
+        const fullRows = Array.from({ length: 5 }, (_, r) => row(...['a', 'b', 'c', 'd', 'e'].map(b => `${r}${b}`)));
+
+        const json = toContainer(embed, fullRows).toJSON();
+        const rendered = JSON.stringify(json);
+
+        expect(rendered).toContain('Field 0');
+        expect(rendered).toContain('Field 24');
+        expect(rendered).toContain('THE FOOTER');
+        expect(json.components.filter(c => c.type === ComponentType.ActionRow)).toHaveLength(5);
+    });
+
+    test('the footer sits below the controls, where an embed footer sat', () => {
+        const json = toContainer(
+            new EmbedBuilder().setTitle('T').setFooter({ text: 'session' }),
+            [row('Hit')],
+        ).toJSON();
+        const rowAt = json.components.findIndex(c => c.type === ComponentType.ActionRow);
+        const footerAt = json.components.findIndex(
+            c => c.type === ComponentType.TextDisplay && c.content.includes('session'),
+        );
+        expect(footerAt).toBeGreaterThan(rowAt);
     });
 
     test('several embeds become several containers, controls on the last', () => {

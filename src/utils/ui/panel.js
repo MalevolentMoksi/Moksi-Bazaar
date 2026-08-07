@@ -44,6 +44,9 @@ const TABLE_MIN_ROWS = 4;
 const PAIR_LINE_CHARS = 68;
 const PAIR_MAX_PER_LINE = 3;
 
+/** Past this a full-width value wants its own line, as it had in the embed. */
+const PROSE_INLINE_MAX = 44;
+
 const EMOJI_RE = /\p{Extended_Pictographic}️?|\p{Regional_Indicator}/gu;
 
 /** True when this message was sent as Components V2 and must stay that way. */
@@ -80,6 +83,7 @@ function tableCell(raw) {
 
 /** Pads names into a column so the values start at the same offset. */
 function alignTable(entries) {
+    if (!entries?.length) return '';
     const width = Math.min(TABLE_NAME_MAX, Math.max(...entries.map(e => e.name.length)));
     const lines = entries.map(({ name, value }) => {
         const label = name.length > width ? `${name.slice(0, width - 1)}…` : name.padEnd(width, ' ');
@@ -89,8 +93,9 @@ function alignTable(entries) {
 }
 
 /** Can this run of inline fields become an aligned block? */
-function asTable(run) {
-    if (run.length < TABLE_MIN_ROWS) return null;
+function asTable(run, { force = false } = {}) {
+    if (!force && run.length < TABLE_MIN_ROWS) return null;
+    if (!run.length) return null;
     const entries = [];
     for (const field of run) {
         const name = tableCell(field.name);
@@ -102,6 +107,11 @@ function asTable(run) {
     return alignTable(entries);
 }
 
+/** What a reader actually sees: the asterisks are markup, not width. */
+function visibleLength(text) {
+    return text.replace(/\*\*|__|~~|`/g, '').length;
+}
+
 /** Two or three stats per line, keeping the bold-label look of an embed. */
 function asPairs(run) {
     const parts = run.map(f => `**${String(f.name).trim()}** ${String(f.value).replace(/\n+/g, ' ').trim()}`);
@@ -109,26 +119,32 @@ function asPairs(run) {
     let current = [];
     let length = 0;
     for (const part of parts) {
-        const wouldBe = length + part.length + 3;
+        const width = visibleLength(part);
+        const wouldBe = length + width + 3;
         if (current.length && (current.length >= PAIR_MAX_PER_LINE || wouldBe > PAIR_LINE_CHARS)) {
             lines.push(current.join(' · '));
             current = [];
             length = 0;
         }
         current.push(part);
-        length += part.length + 3;
+        length += width + 3;
     }
     if (current.length) lines.push(current.join(' · '));
     return lines.join('\n');
 }
 
-/** A full-width field keeps its label on its own line, like the embed did. */
+/**
+ * A full-width field. A short single-line value sits beside its label rather
+ * than under it: an embed had no choice about the line break, a container does,
+ * and "Dealer  K♠ 9♦" on one line reads far better than two.
+ */
 function asProse(field) {
     const name = String(field.name ?? '').trim();
     const value = String(field.value ?? '').trim();
     if (!name) return value;
     if (!value) return `**${name}**`;
-    return `**${name}**\n${value}`;
+    const oneLine = !value.includes('\n') && value.length <= PROSE_INLINE_MAX;
+    return oneLine ? `**${name}** ${value}` : `**${name}**\n${value}`;
 }
 
 /**
@@ -144,9 +160,16 @@ function planFields(fields, { layout = 'auto' } = {}) {
 
     const flushRun = () => {
         if (!run.length) return;
+        if (layout === 'prose') {
+            for (const field of run) blocks.push({ kind: 'prose', text: asProse(field) });
+            run = [];
+            return;
+        }
         if (layout !== 'pairs') {
-            const table = asTable(run);
-            if (table && layout !== 'prose') {
+            // An explicit 'table' means it, so it skips the four-row threshold
+            // that stops 'auto' from making a code block out of two stats.
+            const table = asTable(run, { force: layout === 'table' });
+            if (table) {
                 blocks.push({ kind: 'table', text: table });
                 run = [];
                 return;
@@ -180,11 +203,17 @@ function footerLine(data) {
     return `-# ${bits.join(' · ')}`;
 }
 
-/** The title, honouring a link the way the embed would have. */
+/**
+ * The title, honouring a link the way the embed would have.
+ *
+ * A heading rather than bold text: an embed title renders visibly larger than
+ * its body, and plain bold does not. `###` is the closest match Discord's
+ * markdown offers, and it keeps links working.
+ */
 function titleLine(data) {
     if (!data.title) return null;
     const title = String(data.title).trim();
-    return data.url ? `**[${title}](${data.url})**` : `**${title}**`;
+    return data.url ? `### [${title}](${data.url})` : `### ${title}`;
 }
 
 /**
@@ -201,79 +230,119 @@ function toContainer(embed, rows = [], opts = {}) {
     const container = new ContainerBuilder();
     if (typeof data.color === 'number') container.setAccentColor(data.color);
 
-    let budget = MAX_TEXT_CHARS;
-    let slots = MAX_COMPONENTS;
-    let wrote = false;
+    const usableRows = (rows || []).filter(Boolean).slice(0, 5);
 
-    /** Adds a text display if there is room, and reports whether it landed. */
-    const text = (content) => {
-        if (!content || slots <= 0) return false;
-        const trimmed = content.length > budget ? `${content.slice(0, Math.max(0, budget - 1))}…` : content;
-        if (!trimmed.trim()) return false;
-        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(trimmed));
-        budget -= trimmed.length;
-        slots -= 1;
-        wrote = true;
-        return true;
-    };
-
-    const separator = (large = false) => {
-        if (slots <= 1) return;
-        container.addSeparatorComponents(
-            new SeparatorBuilder()
-                .setDivider(true)
-                .setSpacing(large ? SeparatorSpacingSize.Large : SeparatorSpacingSize.Small),
-        );
-        slots -= 1;
-    };
-
-    if (data.author?.name) text(`-# ${String(data.author.name).trim()}`);
+    // Discord counts EVERY component, nested ones included: the container
+    // itself, each action row, and each button inside it. A join gate panel
+    // with five full rows spends 31 of the 40 on controls alone, so the
+    // controls are costed first and the text works with what is left.
+    const rowCost = usableRows.reduce((total, row) => {
+        const kids = typeof row.toJSON === 'function' ? (row.toJSON().components || []) : (row.components || []);
+        return total + 1 + kids.length;
+    }, 0);
 
     const heading = titleLine(data);
     const body = data.description ? String(data.description).trim() : null;
+    const authorLine = data.author?.name ? `-# ${String(data.author.name).trim()}` : null;
+    const useSection = Boolean(data.thumbnail?.url && (heading || body));
+    const hasImage = Boolean(data.image?.url);
+    const footer = footerLine(data);
 
-    // A thumbnail becomes a real accessory beside the heading rather than a
-    // detached corner image, which is the one layout V2 does better for free.
-    if (data.thumbnail?.url && (heading || body)) {
+    // A section costs itself, its lines and its accessory.
+    const sectionCost = useSection ? 1 + [heading, body].filter(Boolean).length + 1 : 0;
+    const fixedCost = 1 + rowCost + sectionCost + (hasImage ? 1 : 0);
+
+    const blocks = planFields(data.fields, opts);
+    const wantSeparators = (blocks.length ? 1 : 0) + (usableRows.length ? 1 : 0);
+
+    /**
+     * Every text display that is not part of the section, in order. Merging
+     * two of these costs nothing visually, so overflow is folded into the last
+     * one rather than dropped: a panel that will not send is worse than a
+     * panel with one paragraph break fewer.
+     */
+    const pieces = [
+        ...(authorLine ? [authorLine] : []),
+        ...(useSection ? [] : [heading, body].filter(Boolean)),
+        ...blocks.map(block => block.text),
+        ...(footer ? [footer] : []),
+    ];
+
+    let separators = wantSeparators;
+    let allowance = MAX_COMPONENTS - fixedCost - separators;
+    if (allowance < 1) {
+        // Drop the decoration before the content.
+        separators = 0;
+        allowance = Math.max(1, MAX_COMPONENTS - fixedCost);
+    }
+
+    const merged = pieces.slice(0, Math.max(0, allowance - 1));
+    const overflow = pieces.slice(Math.max(0, allowance - 1));
+    if (overflow.length) merged.push(overflow.join('\n'));
+
+    let budget = MAX_TEXT_CHARS;
+    let wrote = false;
+    let queue = merged.filter(Boolean);
+
+    /** Adds the next queued text display, clipped to the character budget. */
+    const flushText = (count) => {
+        for (let i = 0; i < count && queue.length; i += 1) {
+            const content = queue.shift();
+            const trimmed = content.length > budget
+                ? `${content.slice(0, Math.max(0, budget - 1))}…`
+                : content;
+            if (!trimmed.trim()) continue;
+            container.addTextDisplayComponents(new TextDisplayBuilder().setContent(trimmed));
+            budget -= trimmed.length;
+            wrote = true;
+        }
+    };
+
+    const separator = () => {
+        if (separators <= 0) return;
+        container.addSeparatorComponents(
+            new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small),
+        );
+        separators -= 1;
+    };
+
+    if (authorLine) flushText(1);
+
+    if (useSection) {
         const section = new SectionBuilder()
             .setThumbnailAccessory(new ThumbnailBuilder().setURL(data.thumbnail.url));
-        const lines = [heading, body].filter(Boolean);
-        for (const line of lines.slice(0, 3)) {
+        for (const line of [heading, body].filter(Boolean)) {
             const trimmed = line.length > budget ? `${line.slice(0, Math.max(0, budget - 1))}…` : line;
             section.addTextDisplayComponents(new TextDisplayBuilder().setContent(trimmed));
             budget -= trimmed.length;
         }
         container.addSectionComponents(section);
-        slots -= 1;
         wrote = true;
     } else {
-        if (heading) text(heading);
-        if (body) text(body);
+        flushText([heading, body].filter(Boolean).length);
     }
 
-    const blocks = planFields(data.fields, opts);
     if (blocks.length && wrote) separator();
-    for (const block of blocks) text(block.text);
+    // Everything except the footer, which is held back until after the rows.
+    flushText(Math.max(0, queue.length - (footer ? 1 : 0)));
 
-    if (data.image?.url && slots > 0) {
+    if (hasImage) {
         container.addMediaGalleryComponents(
             new MediaGalleryBuilder().addItems({ media: { url: data.image.url } }),
         );
-        slots -= 1;
         wrote = true;
     }
 
     // Controls belong to the panel they drive, so they go inside the box.
-    const usable = (rows || []).filter(Boolean).slice(0, Math.max(0, Math.min(5, slots - 1)));
-    if (usable.length) {
+    if (usableRows.length) {
         if (wrote) separator();
-        container.addActionRowComponents(...usable);
-        slots -= usable.length;
+        container.addActionRowComponents(...usableRows);
         wrote = true;
     }
 
-    const footer = footerLine(data);
-    if (footer) text(footer);
+    // The footer sits below the controls, where an embed footer sat below
+    // everything, so it stays queued until now.
+    flushText(queue.length);
 
     return wrote ? container : null;
 }
@@ -292,7 +361,11 @@ function toContainer(embed, rows = [], opts = {}) {
  */
 function ui(embed, components = [], opts = {}) {
     const { scope, like, mode, ephemeral = false, files, layout } = opts;
-    const rows = Array.isArray(components) ? components.filter(Boolean) : [];
+    // A lone builder rather than an array is an easy slip, and silently
+    // dropping the controls would be a very quiet bug to chase.
+    const rows = Array.isArray(components)
+        ? components.filter(Boolean)
+        : (components ? [components] : []);
     // A message may carry several embeds; each becomes its own container, and
     // the controls belong to the last one.
     const panels = (Array.isArray(embed) ? embed : [embed]).filter(Boolean);
