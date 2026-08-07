@@ -14,7 +14,7 @@
 const {
     SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
     ChannelSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
-    ChannelType, MessageFlags,
+    ChannelType, MessageFlags, PermissionsBitField,
 } = require('discord.js');
 
 const { setSpeakConfigValue } = require('../../utils/db.js');
@@ -49,6 +49,34 @@ function parseAccounts(input) {
             .map(s => s.trim().replace(/^@/, ''))
             .filter(s => /^[A-Za-z0-9_]{1,15}$/.test(s))
     )].slice(0, MAX_ACCOUNTS);
+}
+
+/**
+ * What the bot cannot do in the target channel, in words rather than flags.
+ *
+ * ReadMessageHistory is in here for a reason that is easy to miss: the embed
+ * repair pass works by re-reading its own message to see whether Discord
+ * attached a preview. Without that permission the re-read fails, and the code
+ * treats an unreadable message as fine rather than churning links, so the
+ * fallback chain silently stops existing.
+ *
+ * @returns {string[]} empty when everything needed is granted
+ */
+function missingPermissions(guild, channelId) {
+    const channel = guild?.channels?.cache?.get(channelId);
+    const me = guild?.members?.me;
+    if (!channel || !me) return [];
+
+    const perms = channel.permissionsFor(me);
+    if (!perms) return [];
+
+    const needed = [
+        [PermissionsBitField.Flags.ViewChannel, 'View Channel'],
+        [PermissionsBitField.Flags.SendMessages, 'Send Messages'],
+        [PermissionsBitField.Flags.EmbedLinks, 'Embed Links'],
+        [PermissionsBitField.Flags.ReadMessageHistory, 'Read Message History'],
+    ];
+    return needed.filter(([flag]) => !perms.has(flag)).map(([, label]) => label);
 }
 
 function bar(fraction, width = 14) {
@@ -127,6 +155,12 @@ function render(s) {
                 value: s.channelId ? `<#${s.channelId}>` : '*none*',
                 inline: true,
             },
+            ...(s.missingPerms?.length ? [{
+                name: '⚠️ Cannot post there',
+                value: `Missing **${s.missingPerms.join('**, **')}**. Posts are held, not dropped, `
+                    + 'so fixing this brings back the last couple of hours.',
+                inline: false,
+            }] : []),
             {
                 name: 'State',
                 value: !s.hasKey ? '⚠️ no key' : s.enabled ? (s.running ? '🟢 Running' : '🟡 On, not scheduled') : '⚪ Off',
@@ -254,8 +288,9 @@ function testReport(r) {
         .trim()
         .slice(0, 220);
 
-    return `${head}✅ **Found ${r.found} posts.**\n`
+    return `${head}✅ **Found ${r.found}${r.more ? '+' : ''} posts.**\n`
         + `${breakdown}\n`
+        + (r.more ? '-# That is one page; there were more in the window than a single request returns.\n' : '')
         + (r.silent?.length
             ? `-# Nothing from ${r.silent.map(a => `@${a}`).join(', ')} in that window, which is normal for a low-volume account and also what a typo looks like.\n`
             : '')
@@ -267,8 +302,12 @@ function testReport(r) {
         + cost;
 }
 
-async function buildPanel() {
+async function buildPanel(guild = null) {
     const state = await mirrorStatus();
+    // Re-checked on every render rather than once at setup, because a
+    // permission can be taken away long after the channel was chosen and the
+    // symptom of that is an empty channel, not an error.
+    state.missingPerms = state.channelId ? missingPermissions(guild, state.channelId) : [];
     const { embed, rows } = render(state);
     return { state, embed, rows };
 }
@@ -288,7 +327,7 @@ module.exports = {
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const opening = await buildPanel();
+        const opening = await buildPanel(interaction.guild);
         const message = await interaction.editReply(ui(opening.embed, opening.rows, { scope: 'speak' }));
 
         const collector = message.createMessageComponentCollector({
@@ -298,7 +337,7 @@ module.exports = {
         });
 
         const refresh = async (respondTo) => {
-            const rebuilt = await buildPanel();
+            const rebuilt = await buildPanel(interaction.guild);
             const next = ui(rebuilt.embed, rebuilt.rows, { like: message });
             const canUpdate = respondTo && !respondTo.replied && !respondTo.deferred
                 && (typeof respondTo.isFromMessage !== 'function' || respondTo.isFromMessage());
@@ -318,12 +357,28 @@ module.exports = {
                 if (id === 'tw_refresh') return refresh(i);
 
                 if (id === 'tw_channel') {
-                    await setSpeakConfigValue(CHANNEL_KEY, i.values[0]);
+                    const channelId = i.values[0];
+                    await setSpeakConfigValue(CHANNEL_KEY, channelId);
                     // Choosing a channel is the whole setup, so it implies
                     // wanting it on; leaving it off here would look broken.
                     await setSpeakConfigValue(ENABLED_KEY, true);
-                    logger.info('[TWEETS] Channel set', { channelId: i.values[0], by: i.user.id });
-                    return refresh(i);
+                    logger.info('[TWEETS] Channel set', { channelId, by: i.user.id });
+                    await refresh(i);
+
+                    // Checked now rather than discovered later. A missing
+                    // permission here does not fail loudly at post time: the
+                    // panel goes on saying Running and the spend goes on
+                    // ticking, and the only symptom is an empty channel.
+                    const missing = missingPermissions(i.guild, channelId);
+                    if (missing.length) {
+                        return i.followUp({
+                            content: `⚠️ The bot is missing **${missing.join('**, **')}** in <#${channelId}>.\n`
+                                + 'Nothing will appear there until that is fixed. Posts are held rather '
+                                + 'than dropped in the meantime, so fixing it brings back the last couple of hours.',
+                            flags: MessageFlags.Ephemeral,
+                        }).catch(() => {});
+                    }
+                    return undefined;
                 }
 
                 if (id === 'tw_toggle') {
@@ -429,7 +484,7 @@ module.exports = {
             const notice = 'Panel timed out. Run /tweets_settings again to make more changes.';
 
             if (isV2Message(message)) {
-                const last = await buildPanel().catch(() => null);
+                const last = await buildPanel(interaction.guild).catch(() => null);
                 if (last?.embed) {
                     last.embed.setFooter({ text: notice });
                     await interaction.editReply(ui(last.embed, [], { like: message })).catch(() => {});

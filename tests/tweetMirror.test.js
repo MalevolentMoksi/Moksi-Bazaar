@@ -19,6 +19,7 @@ jest.mock('../src/utils/db', () => ({
     // exactly a set insert: true the first time, false forever after.
     claimTweet: jest.fn(async id => (mockClaimed.has(id) ? false : (mockClaimed.add(id), true))),
     recordMirrorMessage: jest.fn(async () => {}),
+    releaseTweet: jest.fn(async id => { mockClaimed.delete(id); }),
     pruneMirroredTweets: jest.fn(async () => 0),
 }));
 jest.mock('../src/utils/logger', () => ({
@@ -323,17 +324,39 @@ describe('two containers running at once', () => {
         expect(order).toEqual(['claim:1', 'send']);
     });
 
-    test('a send that Discord rejects does not un-claim, so it cannot loop', async () => {
+    test('a failed send is retried, and the retry cannot run forever', async () => {
+        // This asserted the opposite until the audit: that a failed send kept
+        // its claim, reasoning that retrying is how a channel gets spammed.
+        // Wrong in the case that actually happens. The realistic failure is a
+        // missing Send Messages permission, which fails every post equally,
+        // and keeping the claim meant silently discarding all of them while
+        // the panel went on reporting a healthy, spending mirror.
+        //
+        // Retrying is safe because the lookback clamp bounds it: once a
+        // failure is older than the clamp, the window outruns it unaided, so
+        // a permanently unpostable tweet cannot wedge the mirror.
         client.channels.fetch = jest.fn(async () => ({
             isTextBased: () => true,
             send: jest.fn(async () => { throw new Error('Missing Permissions'); }),
+            messages: { fetch: jest.fn(async () => ({ embeds: [{}] })) },
         }));
-        respond({ tweets: [apiTweet('1')] });
+        const at = Date.now() - 30 * 60 * 1000;
+        respond({ tweets: [apiTweet('1', { at: new Date(at).toISOString() })] });
 
-        const result = await runOnce(client);
+        const result = await runOnce(client, { sleep: noWait });
 
         expect(result.posted).toBe(0);
-        expect(mockClaimed.has('1')).toBe(true);
+        expect(mockClaimed.has('1')).toBe(false);
+        expect(mockStore.get(SINCE_KEY)).toBe(at - 1);
+
+        // Hours later it is the clamp, not the held cursor, deciding the window.
+        const muchLater = Date.now() + 5 * 60 * 60 * 1000;
+        global.fetch.mockClear();
+        respond({ tweets: [] });
+        await runOnce(client, { now: muchLater, sleep: noWait });
+
+        const since = Number(lastQuery().match(/since_time:(\d+)/)[1]) * 1000;
+        expect(since).toBeGreaterThanOrEqual(muchLater - MAX_LOOKBACK_MS - 1000);
     });
 });
 
@@ -833,5 +856,160 @@ describe('spotting a handle that never answers', () => {
 
         expect(r2.callUsd).toBeCloseTo(COST_PER_UNIT_USD, 8);
         expect(r2.spend.usd).toBeCloseTo(4 * COST_PER_UNIT_USD, 8);
+    });
+});
+
+// ── The audit round ─────────────────────────────────────────────────────────
+//
+// Everything below came out of reading the finished feature back rather than
+// from building it. These are the failures that survive a green test suite:
+// silent losses, misreported state, and inputs nobody types on purpose.
+
+describe('a send that fails must not lose the post', () => {
+    /** A channel whose sends always fail, as one without Send Messages does. */
+    function brokenChannel() {
+        return {
+            isTextBased: () => true,
+            send: jest.fn(async () => { throw new Error('Missing Permissions'); }),
+            messages: { fetch: jest.fn(async () => ({ embeds: [{}] })) },
+        };
+    }
+
+    test('hands the claim back so the next poll can try again', async () => {
+        client.channels.fetch = jest.fn(async () => brokenChannel());
+        respond({ tweets: [apiTweet('1')] });
+
+        await runOnce(client, { sleep: noWait });
+
+        // Claimed then released. Left claimed, the retry below would be
+        // skipped and the post would be gone for good.
+        expect(mockClaimed.has('1')).toBe(false);
+    });
+
+    test('holds the cursor short of the failure instead of walking past it', async () => {
+        client.channels.fetch = jest.fn(async () => brokenChannel());
+        const at = '2026-08-07T12:00:00.000Z';
+        respond({ tweets: [apiTweet('1', { at })] });
+
+        await runOnce(client, { sleep: noWait });
+
+        expect(mockStore.get(SINCE_KEY)).toBe(Date.parse(at) - 1);
+    });
+
+    test('so fixing the permission actually delivers the held post', async () => {
+        client.channels.fetch = jest.fn(async () => brokenChannel());
+        respond({ tweets: [apiTweet('1')] });
+        await runOnce(client, { sleep: noWait });
+        expect(sent).toHaveLength(0);
+
+        // Permission restored; same window, because the cursor never moved.
+        client.channels.fetch = jest.fn(async () => ({
+            isTextBased: () => true,
+            send: jest.fn(async p => { sent.push(p); return { id: 'm1', edit: jest.fn() }; }),
+            messages: { fetch: jest.fn(async () => ({ embeds: [{}] })) },
+        }));
+        respond({ tweets: [apiTweet('1')] });
+        const second = await runOnce(client, { sleep: noWait });
+
+        expect(second.posted).toBe(1);
+    });
+
+    test('a partial failure still advances past what did post', async () => {
+        let calls = 0;
+        client.channels.fetch = jest.fn(async () => ({
+            isTextBased: () => true,
+            send: jest.fn(async p => {
+                calls += 1;
+                if (calls === 2) throw new Error('nope');
+                sent.push(p);
+                return { id: `m${calls}`, edit: jest.fn() };
+            }),
+            messages: { fetch: jest.fn(async () => ({ embeds: [{}] })) },
+        }));
+        respond({
+            tweets: [
+                apiTweet('old', { at: '2026-08-07T10:00:00Z' }),
+                apiTweet('bad', { at: '2026-08-07T11:00:00Z' }),
+                apiTweet('new', { at: '2026-08-07T12:00:00Z' }),
+            ],
+        });
+
+        const r = await runOnce(client, { sleep: noWait });
+
+        expect(r.posted).toBe(2);
+        // Rewound to just before the one that failed, not to the newest.
+        expect(mockStore.get(SINCE_KEY)).toBe(Date.parse('2026-08-07T11:00:00Z') - 1);
+    });
+});
+
+describe('handles that are not handles', () => {
+    test('a handle with a bracket cannot reshape the query', () => {
+        // A stored value is not a validated value. An unescaped bracket would
+        // silently change what was asked for, and be billed as though it had
+        // not.
+        expect(buildQuery(['HYPEX', 'evil) OR from:everyone'], 1)).toBe(
+            '(from:HYPEX) -filter:replies since_time:1'
+        );
+    });
+
+    test('nothing usable yields no query at all rather than a broken one', () => {
+        expect(buildQuery(['', '   ', '@@@'], 1)).toBeNull();
+        expect(buildQuery([], 1)).toBeNull();
+    });
+
+    test('the poller refuses to spend on a query it could not build', async () => {
+        mockStore.set(ACCOUNTS_KEY, ['not a handle!']);
+        const r = await runOnce(client);
+
+        expect(r.skipped).toBe('no valid handles');
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+});
+
+describe('the silent-account check', () => {
+    test('is case-insensitive, since X handles are', async () => {
+        // Watching "shiinabr" while the API answers "ShiinaBR" would otherwise
+        // report a perfectly healthy account as silent on every single test.
+        mockStore.set(ACCOUNTS_KEY, ['shiinabr', 'HyPeX']);
+        respond({
+            tweets: [apiTweet('1', { handle: 'ShiinaBR' }), apiTweet('2', { handle: 'HYPEX' })],
+        });
+
+        expect((await mirror.testFetch()).silent).toEqual([]);
+    });
+});
+
+describe('the fallback embed is not a dead end', () => {
+    test('carries a link through to the post it is standing in for', () => {
+        // It only ever renders because no link service did, so if it does not
+        // link anywhere, there is no way left to reach the tweet.
+        const t = normalizeTweet(apiTweet('123', { handle: 'HYPEX' }));
+        expect(renderEmbed(t).toJSON().description).toContain('https://fxtwitter.com/HYPEX/status/123');
+    });
+
+    test('and still fits when the text is at maximum length', () => {
+        const t = normalizeTweet(apiTweet('1', { text: 'x'.repeat(9000) }));
+        expect(renderEmbed(t).toJSON().description.length).toBeLessThanOrEqual(4096);
+    });
+});
+
+describe('complaints clear when the condition does', () => {
+    test('a key rejected, fixed, then rejected again is reported both times', async () => {
+        const logger = require('../src/utils/logger');
+        const rejections = () => logger.error.mock.calls.filter(c => /key rejected/.test(c[0])).length;
+
+        respond({ status: 401, body: 'no' });
+        await runOnce(client);
+        expect(rejections()).toBe(1);
+
+        // Fixed: a good poll clears the condition.
+        mockStore.set(ENABLED_KEY, true);
+        respond({ tweets: [] });
+        await runOnce(client);
+
+        mockStore.set(ENABLED_KEY, true);
+        respond({ status: 401, body: 'no' });
+        await runOnce(client);
+        expect(rejections()).toBe(2);
     });
 });

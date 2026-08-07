@@ -30,6 +30,7 @@ const {
     getSpeakConfigValue,
     setSpeakConfigValue,
     claimTweet,
+    releaseTweet,
     recordMirrorMessage,
     pruneMirroredTweets,
 } = require('./db');
@@ -128,7 +129,16 @@ const complained = new Set();
  * @param {number} sinceSeconds unix seconds
  */
 function buildQuery(accounts, sinceSeconds) {
-    const who = accounts.map(a => `from:${String(a).replace(/^@/, '')}`).join(' OR ');
+    // Sanitised here rather than trusted from storage. The panel validates
+    // what it writes, but this reads a config row, and a handle carrying a
+    // space or a bracket would not fail loudly: it would quietly reshape the
+    // query, and a reshaped query is billed exactly like a correct one.
+    const clean = accounts
+        .map(a => String(a).trim().replace(/^@/, ''))
+        .filter(a => /^[A-Za-z0-9_]{1,15}$/.test(a));
+    if (clean.length === 0) return null;
+
+    const who = clean.map(a => `from:${a}`).join(' OR ');
     return `(${who}) -filter:replies since_time:${Math.floor(sinceSeconds)}`;
 }
 
@@ -198,7 +208,10 @@ function renderEmbed(tweet) {
             url: `https://fxtwitter.com/${tweet.handle}`,
             ...(tweet.avatar ? { iconURL: tweet.avatar } : {}),
         })
-        .setDescription((tweet.text || '[no text]').slice(0, 4096))
+        // The link matters more here than anywhere else: this embed exists
+        // because no link service rendered one, so without it the message is
+        // a dead end with no way through to the actual post.
+        .setDescription(`${(tweet.text || '[no text]').slice(0, 3900)}\n\n[Open on X](${tweet.url})`)
         .setTimestamp(new Date(tweet.atMs));
 
     if (tweet.photo) embed.setImage(tweet.photo);
@@ -422,6 +435,12 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
     const sinceMs = Math.max(stored || (now - FIRST_RUN_LOOKBACK_MS), now - MAX_LOOKBACK_MS);
 
     const query = buildQuery(accounts, sinceMs / 1000);
+    if (!query) {
+        complainOnce('handles', 'error', '[TWEETS] No usable handles configured', { accounts });
+        return { skipped: 'no valid handles' };
+    }
+    resolved('handles');
+
     const result = await searchTweets({ apiKey, query });
 
     if (!result.ok) {
@@ -441,7 +460,11 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
         return { skipped: 'request failed', status: result.status, error: result.error };
     }
 
+    // 'auth' too: a key that was rejected, fixed, and then rejected again
+    // would otherwise stay silent the second time, which is exactly when
+    // being told matters.
     resolved('http:');
+    resolved('auth');
     const newSpend = await recordSpend(result.tweets.length);
 
     const found = result.tweets
@@ -477,6 +500,7 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
     let verification = null;
 
     const delivered = [];
+    const failed = [];
     for (const tweet of selected) {
         // The claim is what makes two overlapping containers safe, and it has
         // to happen before the send: claiming after would let both post first.
@@ -496,8 +520,13 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
                     .catch(e => logger.warn('[TWEETS] Could not record message id', { error: e.message }));
             }
         } catch (error) {
-            // The claim stands. A post that Discord refused is not worth
-            // retrying forever, and retrying is how a channel gets spammed.
+            // Hand the claim back and hold the cursor short of this post, so
+            // the next poll gets to try again. Without that pair, the single
+            // most likely failure here (pointed at a channel the bot cannot
+            // type in) silently drops every post while the panel keeps
+            // reporting a healthy, spending mirror.
+            failed.push(tweet);
+            await releaseTweet(tweet.id).catch(() => {});
             logger.error('[TWEETS] Could not post', { tweetId: tweet.id, error: error.message });
         }
     }
@@ -513,10 +542,29 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
         ));
     }
 
-    // To the newest thing seen, not the newest thing posted: anything older
-    // was either delivered, deliberately dropped, or claimed by the other
-    // container, and none of those should be looked at again.
-    await setSpeakConfigValue(SINCE_KEY, found[found.length - 1].atMs);
+    // Normally to the newest thing seen: anything older was delivered,
+    // deliberately dropped, or claimed by the other container, and none of
+    // those wants looking at again.
+    //
+    // When a send failed, the cursor stops just short of the oldest failure
+    // instead, so the next poll refetches it. That window cannot grow without
+    // bound because the lookback clamp above outruns it after two hours, which
+    // is what keeps a permanently unpostable tweet from wedging the mirror
+    // forever while still giving a transient failure several chances.
+    const oldestFailure = failed.length
+        ? failed.reduce((a, b) => (a.atMs <= b.atMs ? a : b))
+        : null;
+    if (oldestFailure) {
+        complainOnce(`send:${channelId}`, 'error', '[TWEETS] Posting failed; holding the cursor so nothing is lost', {
+            channelId, failed: failed.length, posted,
+        });
+    } else {
+        resolved('send:');
+    }
+    await setSpeakConfigValue(
+        SINCE_KEY,
+        oldestFailure ? oldestFailure.atMs - 1 : found[found.length - 1].atMs
+    );
 
     if (posted > 0) {
         logger.info('[TWEETS] Posted', { posted, found: found.length, spentUsd: newSpend.usd });
@@ -556,6 +604,8 @@ async function testFetch({ hoursBack = 6 } = {}) {
 
     const sinceMs = Date.now() - hoursBack * 60 * 60 * 1000;
     const query = buildQuery(accounts, sinceMs / 1000);
+    if (!query) return { ok: false, reason: 'no usable handles (letters, numbers and _ only, max 15)' };
+
     const result = await searchTweets({ apiKey, query });
 
     if (!result.ok) {
@@ -570,6 +620,12 @@ async function testFetch({ hoursBack = 6 } = {}) {
     const perAccount = {};
     for (const t of found) perAccount[t.handle] = (perAccount[t.handle] ?? 0) + 1;
 
+    // X handles are case-insensitive and the API answers in the account's own
+    // casing, so a watch list entry of "shiinabr" would never match the
+    // "ShiinaBR" that comes back, and a perfectly healthy account would be
+    // reported as silent every single time.
+    const answered = new Set(Object.keys(perAccount).map(h => h.toLowerCase()));
+
     return {
         ok: true,
         hoursBack,
@@ -580,7 +636,12 @@ async function testFetch({ hoursBack = 6 } = {}) {
         // Which of the watched handles returned nothing. A silent account is
         // usually just quiet, but it is also what a typo looks like, and the
         // caller cannot tell the two apart without knowing who was asked.
-        silent: accounts.map(a => String(a).replace(/^@/, '')).filter(a => !perAccount[a]),
+        silent: accounts
+            .map(a => String(a).trim().replace(/^@/, ''))
+            .filter(a => a && !answered.has(a.toLowerCase())),
+        // Advanced Search pages at 20. Saying "found 20" without saying there
+        // were more turns a truncated sample into a wrong answer.
+        more: Boolean(result.hasNextPage),
         newest: found[0] ?? null,
         // What THIS request cost, kept separate from the running total. The
         // two are trivially confusable and one of them is the number that

@@ -1699,6 +1699,20 @@ async function claimTweet(tweetId) {
 }
 
 /**
+ * Gives a claim back, so the next poll may try that tweet again.
+ *
+ * Claiming happens before the send, because claiming afterwards would let two
+ * overlapping containers both post first. The cost of that ordering is that a
+ * send which fails has already consumed its one chance, and the post is gone
+ * for good. Handing the claim back turns a failed send into a retry instead
+ * of a silent loss, which matters most in the case that actually happens:
+ * the mirror pointed at a channel the bot cannot type in.
+ */
+async function releaseTweet(tweetId) {
+    await pool.query('DELETE FROM mirrored_tweets WHERE tweet_id = $1', [String(tweetId)]);
+}
+
+/**
  * Remembers which Discord message carried a given tweet.
  *
  * Replying to one of the bot's messages is how you talk to it, so without
@@ -2234,6 +2248,7 @@ module.exports = {
     invalidateSpeakConfig,
     // Tweet mirror
     claimTweet,
+    releaseTweet,
     recordMirrorMessage,
     isMirrorMessage,
     pruneMirroredTweets,
