@@ -172,8 +172,10 @@ function renderEmbed(tweet) {
     if (tweet.photo) embed.setImage(tweet.photo);
 
     const stats = [];
-    if (tweet.likes) stats.push(`${tweet.likes.toLocaleString()} likes`);
-    if (tweet.retweets) stats.push(`${tweet.retweets.toLocaleString()} reposts`);
+    // Locale pinned so the footer reads the same wherever the bot happens
+    // to be running; bare toLocaleString() follows the host's locale.
+    if (tweet.likes) stats.push(`${tweet.likes.toLocaleString('en-US')} likes`);
+    if (tweet.retweets) stats.push(`${tweet.retweets.toLocaleString('en-US')} reposts`);
     if (tweet.hasVideo) stats.push('has video');
     embed.setFooter({ text: stats.length ? `X • ${stats.join(' • ')}` : 'X' });
 
@@ -413,7 +415,7 @@ function stopTweetMirror() {
     if (firstTimer) { clearTimeout(firstTimer); firstTimer = null; }
 }
 
-/** Everything the /tweets command needs, in one read. */
+/** Everything the /tweets_settings panel needs, in one read. */
 async function mirrorStatus() {
     const [channelId, enabled, accounts, since, budget, style] = await Promise.all([
         getSpeakConfigValue(CHANNEL_KEY, null),

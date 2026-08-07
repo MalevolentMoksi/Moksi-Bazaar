@@ -418,3 +418,111 @@ describe('when the API says no', () => {
         expect(mockClaimed.size).toBe(0);
     });
 });
+
+// ── The panel ───────────────────────────────────────────────────────────────
+//
+// /tweets_settings is the only settings panel in the bot whose controls cost
+// money, so what it must never do is misreport the spend or offer a button
+// that quietly charges you when it cannot possibly work.
+
+const panel = require('../src/commands/tools/tweets_settings');
+
+/** The shape mirrorStatus() hands the renderer. */
+function panelState(over = {}) {
+    return {
+        hasKey: true,
+        channelId: 'chan-1',
+        enabled: true,
+        accounts: ['FNFestival', 'HYPEX', 'ShiinaBR'],
+        sinceMs: Date.now() - 60_000,
+        budgetUsd: 2,
+        style: 'link',
+        spend: { month: '2026-08', usd: 0.12, calls: 800, tweets: 40 },
+        running: true,
+        intervalMs: 10 * 60 * 1000,
+        floorUsdPerMonth: 0.65,
+        ...over,
+    };
+}
+
+const buttons = rendered => rendered.rows
+    .flatMap(r => r.toJSON().components)
+    .filter(c => c.custom_id?.startsWith('tw_'));
+const button = (rendered, id) => buttons(rendered).find(c => c.custom_id === id);
+
+describe('reading handles out of the modal', () => {
+    test('strips @, splits on commas or spaces, and drops duplicates', () => {
+        expect(panel.parseAccounts('@HYPEX, ShiinaBR  FNFestival, @hypex, HYPEX'))
+            .toEqual(['HYPEX', 'ShiinaBR', 'FNFestival', 'hypex']);
+    });
+
+    test('rejects anything X could not be a handle', () => {
+        // Over 15 characters, or containing punctuation, is not a handle. A
+        // bad one would silently return nothing forever rather than erroring.
+        expect(panel.parseAccounts('way_too_long_to_be_a_handle, bad-dash, ok_1'))
+            .toEqual(['ok_1']);
+        expect(panel.parseAccounts('   ,,,  ')).toEqual([]);
+    });
+
+    test('caps the list, because every handle widens the query', () => {
+        const many = Array.from({ length: 30 }, (_, i) => `user${i}`).join(',');
+        expect(panel.parseAccounts(many)).toHaveLength(10);
+    });
+});
+
+describe('projecting the month', () => {
+    test('says nothing on the first day, when the sample proves nothing', () => {
+        expect(panel.projectMonth(0.01, new Date('2026-08-01T02:00:00Z'))).toBeNull();
+        expect(panel.projectMonth(0, new Date('2026-08-20T00:00:00Z'))).toBeNull();
+    });
+
+    test('extrapolates the rest of the month from what has been spent', () => {
+        // Half a month gone, $0.50 spent, so about $1 by the end of August.
+        const projected = panel.projectMonth(0.5, new Date('2026-08-16T00:00:00Z'));
+        expect(projected).toBeGreaterThan(0.9);
+        expect(projected).toBeLessThan(1.1);
+    });
+});
+
+describe('what the panel shows', () => {
+    test('leads with the missing key, since nothing works without it', () => {
+        const { embed } = panel.render(panelState({ hasKey: false }));
+        expect(embed.toJSON().description).toMatch(/TWITTERAPI_KEY/);
+    });
+
+    test('will not offer "check now" when it would fail or cost for nothing', () => {
+        expect(button(panel.render(panelState({ hasKey: false })), 'tw_check').disabled).toBe(true);
+        expect(button(panel.render(panelState({ channelId: null })), 'tw_check').disabled).toBe(true);
+        expect(button(panel.render(panelState()), 'tw_check').disabled).toBe(false);
+    });
+
+    test('cannot be switched on before a channel exists to switch it on for', () => {
+        expect(button(panel.render(panelState({ channelId: null })), 'tw_toggle').disabled).toBe(true);
+    });
+
+    test('shows spend against the cap, in dollars and in the credits the vendor uses', () => {
+        const { embed } = panel.render(panelState({ spend: { month: '2026-08', usd: 0.123, calls: 820, tweets: 41 } }));
+        const field = embed.toJSON().fields.find(f => /Spent this month/.test(f.name));
+        expect(field.value).toContain('$0.1230');
+        expect(field.value).toContain('of $2.00');
+        // 100,000 credits to the dollar, which is what the twitterapi.io
+        // dashboard displays; showing only dollars means doing the conversion
+        // by hand every time the two are compared.
+        expect(field.value).toContain('12,300 credits');
+    });
+
+    test('says plainly when the cap has stopped it', () => {
+        const { embed } = panel.render(panelState({ spend: { month: '2026-08', usd: 2, calls: 1, tweets: 0 } }));
+        expect(embed.toJSON().description).toMatch(/cap reached/i);
+        expect(embed.toJSON().color).toBe(require('../src/utils/constants').EMBED_COLORS.ERROR);
+    });
+
+    test('the style button offers the other style, not the current one', () => {
+        expect(button(panel.render(panelState({ style: 'link' })), 'tw_style').label).toMatch(/embed/i);
+        expect(button(panel.render(panelState({ style: 'embed' })), 'tw_style').label).toMatch(/fxtwitter/i);
+    });
+
+    test('stays within Discord\u2019s five rows', () => {
+        expect(panel.render(panelState()).rows.length).toBeLessThanOrEqual(5);
+    });
+});
