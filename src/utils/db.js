@@ -429,13 +429,24 @@ const init = async () => {
             value JSONB NOT NULL
         );
         -- Every X post the tweet mirror has already put in the channel. This
-        -- exists purely so a post cannot appear twice; see claimTweet.
+        -- exists so a post cannot appear twice (see claimTweet), and so the
+        -- bot can recognise its own mirror posts when someone replies to one.
         CREATE TABLE IF NOT EXISTS mirrored_tweets (
             tweet_id     TEXT PRIMARY KEY,
-            posted_at_ms BIGINT NOT NULL
+            posted_at_ms BIGINT NOT NULL,
+            message_id   TEXT
         );
         CREATE INDEX IF NOT EXISTS mirrored_tweets_posted_idx
             ON mirrored_tweets (posted_at_ms);
+        CREATE INDEX IF NOT EXISTS mirrored_tweets_message_idx
+            ON mirrored_tweets (message_id);
+    `);
+
+    // Migration: the mirror shipped before it tracked its own message ids.
+    await pool.query(`
+        ALTER TABLE mirrored_tweets ADD COLUMN IF NOT EXISTS message_id TEXT;
+        CREATE INDEX IF NOT EXISTS mirrored_tweets_message_idx
+            ON mirrored_tweets (message_id);
     `);
 
     // Default Settings
@@ -1682,6 +1693,37 @@ async function claimTweet(tweetId) {
 }
 
 /**
+ * Remembers which Discord message carried a given tweet.
+ *
+ * Replying to one of the bot's messages is how you talk to it, so without
+ * this a mirror post is an invitation to a conversation nobody wanted: reply
+ * to a leak to say "no way" and the bot answers you.
+ */
+async function recordMirrorMessage(tweetId, messageId) {
+    await pool.query(
+        'UPDATE mirrored_tweets SET message_id = $2 WHERE tweet_id = $1',
+        [String(tweetId), String(messageId)]
+    );
+}
+
+/**
+ * Was this message posted by the tweet mirror?
+ *
+ * Goes stale after pruneMirroredTweets drops the row, which means a reply to
+ * a month-old tweet embed does wake the bot. That is the right trade: the
+ * alternative is keeping every message id forever to handle a case that does
+ * not happen.
+ */
+async function isMirrorMessage(messageId) {
+    if (!messageId) return false;
+    const { rows } = await pool.query(
+        'SELECT 1 FROM mirrored_tweets WHERE message_id = $1 LIMIT 1',
+        [String(messageId)]
+    );
+    return rows.length > 0;
+}
+
+/**
  * Drops claim rows old enough that the cursor can never reach them again.
  * @returns {Promise<number>} rows removed
  */
@@ -2186,6 +2228,8 @@ module.exports = {
     invalidateSpeakConfig,
     // Tweet mirror
     claimTweet,
+    recordMirrorMessage,
+    isMirrorMessage,
     pruneMirroredTweets,
     getSpeakProfile,
     saveSpeakProfile,

@@ -18,6 +18,7 @@ jest.mock('../src/utils/db', () => ({
     // The real one is an INSERT ... ON CONFLICT DO NOTHING RETURNING, which is
     // exactly a set insert: true the first time, false forever after.
     claimTweet: jest.fn(async id => (mockClaimed.has(id) ? false : (mockClaimed.add(id), true))),
+    recordMirrorMessage: jest.fn(async () => {}),
     pruneMirroredTweets: jest.fn(async () => 0),
 }));
 jest.mock('../src/utils/logger', () => ({
@@ -45,7 +46,13 @@ beforeEach(() => {
         channels: {
             fetch: jest.fn(async () => ({
                 isTextBased: () => true,
-                send: jest.fn(async payload => { sent.push(payload); }),
+                // Returns a message the way Discord does, since the mirror
+                // records its id and may later edit it.
+                send: jest.fn(async payload => {
+                    sent.push(payload);
+                    return { id: `msg-${sent.length}`, edit: jest.fn(async () => {}) };
+                }),
+                messages: { fetch: jest.fn(async () => ({ embeds: [{}] })) },
             })),
         },
     };
@@ -549,5 +556,111 @@ describe('what the panel shows', () => {
 
     test('stays within Discord\u2019s five rows', () => {
         expect(panel.render(panelState()).rows.length).toBeLessThanOrEqual(5);
+    });
+});
+
+// ── When the embed service lets us down ─────────────────────────────────────
+//
+// The one part of this that depends on somebody else's uptime is the link
+// unfurl. What matters is that a failure is noticed at all: a bare URL sitting
+// in a feed channel with no preview is the visible symptom, and nothing in the
+// bot would otherwise ever know.
+
+const { repairEmbed, embedLanded, linkFor, LINK_HOSTS } = mirror;
+
+/** Verification waits several seconds; tests are not going to. */
+const noWait = async () => {};
+
+function fakeChannel(embedCountsInOrder) {
+    const counts = [...embedCountsInOrder];
+    const edits = [];
+    return {
+        edits,
+        messages: {
+            fetch: jest.fn(async () => ({ embeds: new Array(counts.shift() ?? 0).fill({}) })),
+        },
+        message: {
+            id: 'msg-1',
+            edit: jest.fn(async payload => { edits.push(payload); }),
+        },
+    };
+}
+
+describe('the fallback ladder', () => {
+    test('the first fallback is a different project, not another door to the same one', () => {
+        // fxtwitter, girlcockx, fixupx and twittpr are all FixTweet: one
+        // backend, four domains, verified by identical OG output. Falling from
+        // one to another survives a DNS problem and nothing else. vxtwitter is
+        // a separate project, so it is the hop that survives an outage.
+        expect(LINK_HOSTS[0]).toBe('fxtwitter.com');
+        expect(LINK_HOSTS[1]).toBe('vxtwitter.com');
+        expect(LINK_HOSTS).toContain('girlcockx.com');
+    });
+
+    test('builds the same path against any host', () => {
+        expect(linkFor('HYPEX', '9', 'vxtwitter.com')).toBe('https://vxtwitter.com/HYPEX/status/9');
+    });
+
+    test('leaves the message alone when the first link renders', async () => {
+        const ch = fakeChannel([1]);
+        const via = await repairEmbed(ch, normalizeTweet(apiTweet('1')), ch.message, { sleep: noWait });
+
+        expect(via).toBe('fxtwitter.com');
+        expect(ch.message.edit).not.toHaveBeenCalled();
+    });
+
+    test('rewrites to the next service when nothing rendered', async () => {
+        const ch = fakeChannel([0, 1]);   // fxtwitter blank, vxtwitter fine
+        const via = await repairEmbed(ch, normalizeTweet(apiTweet('1', { handle: 'HYPEX' })), ch.message, { sleep: noWait });
+
+        expect(via).toBe('vxtwitter.com');
+        expect(ch.edits).toEqual([{ content: 'https://vxtwitter.com/HYPEX/status/1' }]);
+    });
+
+    test('ends at an embed built here, which needs nobody else to render it', async () => {
+        const ch = fakeChannel([0, 0, 0]);
+        const via = await repairEmbed(ch, normalizeTweet(apiTweet('1')), ch.message, { sleep: noWait });
+
+        expect(via).toBe('built-in');
+        // Content cleared so the dead URL does not sit above the embed.
+        const last = ch.edits[ch.edits.length - 1];
+        expect(last.content).toBe('');
+        expect(last.embeds).toHaveLength(1);
+    });
+
+    test('a message it cannot re-read is not treated as a failure', async () => {
+        // Churning the link because one fetch failed would rewrite messages
+        // that were rendering perfectly well.
+        const channel = { messages: { fetch: jest.fn(async () => null) } };
+        expect(await embedLanded(channel, 'm', { sleep: noWait })).toBe(true);
+    });
+
+    test('forces past the cache, which still holds the pre-unfurl copy', async () => {
+        const channel = { messages: { fetch: jest.fn(async () => ({ embeds: [{}] })) } };
+        await embedLanded(channel, 'm-7', { sleep: noWait });
+        expect(channel.messages.fetch).toHaveBeenCalledWith({ message: 'm-7', force: true });
+    });
+});
+
+describe('remembering what it posted', () => {
+    test('records the message id so a reply to it does not wake the bot', async () => {
+        const db = require('../src/utils/db');
+        respond({ tweets: [apiTweet('42')] });
+
+        const result = await runOnce(client, { sleep: noWait });
+        await result.verification;
+
+        expect(db.recordMirrorMessage).toHaveBeenCalledWith('42', expect.any(String));
+    });
+
+    test('posting is not held up by the embed check', async () => {
+        // The check waits seconds per message. Doing it inline would stall the
+        // next post behind it and put the cursor write on the far side.
+        respond({ tweets: [apiTweet('1'), apiTweet('2')] });
+        const result = await runOnce(client, { sleep: noWait });
+
+        expect(result.posted).toBe(2);
+        expect(result.verification).toBeInstanceOf(Promise);
+        await result.verification;
     });
 });

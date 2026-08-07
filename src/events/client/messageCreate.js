@@ -3,6 +3,7 @@ const logger = require('../../utils/logger');
 const { handleWatchedMessage } = require('../../utils/joinGate/enforcement');
 const { noteMessage } = require('../../utils/joinGate/activity');
 const { shouldInterject } = require('../../utils/interjections');
+const { isMirrorMessage } = require('../../utils/db');
 
 /** Discord's typing indicator lasts ~10s; refresh just inside that. */
 const TYPING_REFRESH_MS = 8_000;
@@ -40,6 +41,17 @@ module.exports = {
       const referenced = message.channel.messages.cache.get(message.reference.messageId)
         ?? await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
       triggered = referenced?.author?.id === botId;
+
+      // Except when the bot's message was a mirrored tweet. Those are posted
+      // unprompted into a feed channel, so a reply to one is somebody talking
+      // about the tweet, not to the bot, and answering is butting into a
+      // conversation it was never part of. Only checked once the message is
+      // known to be the bot's own, which is rare enough to afford a lookup.
+      //
+      // An explicit @mention still gets through, because that is unambiguous.
+      if (triggered && await isMirrorMessage(message.reference.messageId).catch(() => false)) {
+        triggered = false;
+      }
     }
 
     // Third trigger: unprompted interjection, if this message clears the

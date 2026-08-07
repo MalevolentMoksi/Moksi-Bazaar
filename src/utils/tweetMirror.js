@@ -30,6 +30,7 @@ const {
     getSpeakConfigValue,
     setSpeakConfigValue,
     claimTweet,
+    recordMirrorMessage,
     pruneMirroredTweets,
 } = require('./db');
 const logger = require('./logger');
@@ -75,6 +76,31 @@ const DEFAULT_BUDGET_USD = 2.0;
 const DEFAULT_STYLE = 'link';
 
 const X_BLUE = 0x1D9BF0;
+
+/**
+ * Where a link goes when Discord refuses to unfurl the one before it.
+ *
+ * The order is deliberate and the reason is not obvious. fxtwitter.com,
+ * girlcockx.com, fixupx.com and twittpr.com are all FixTweet: same backend,
+ * four doorways, verified by them returning byte-identical OG tags. Falling
+ * from one to another only survives a DNS or per-domain problem, not the
+ * service being down, which is the failure people actually notice.
+ *
+ * vxtwitter.com is a different project with different infrastructure, so it
+ * is the first hop worth making. The second FixTweet domain sits after it as
+ * cheap insurance against the per-domain case.
+ *
+ * Whatever survives all of them falls through to an embed built from data we
+ * already hold, which cannot fail because nothing external renders it.
+ */
+const LINK_HOSTS = ['fxtwitter.com', 'vxtwitter.com', 'girlcockx.com'];
+
+/**
+ * How long Discord gets to attach an embed before it is called a failure.
+ * Unfurling is usually well under a second; this is slack, not an estimate,
+ * and it is spent after the message is already visible.
+ */
+const EMBED_GRACE_MS = 5_000;
 
 let timer = null;
 let firstTimer = null;
@@ -149,9 +175,15 @@ function normalizeTweet(raw) {
         hasVideo,
         likes: Number(raw.likeCount ?? raw.favorite_count ?? 0) || 0,
         retweets: Number(raw.retweetCount ?? raw.retweet_count ?? 0) || 0,
-        // The one thing he actually asked for: the link that embeds properly.
-        url: `https://fxtwitter.com/${handle}/status/${id}`,
+        // The link that embeds properly. Kept as the default host; linkFor()
+        // produces the same URL against any of the fallbacks.
+        url: linkFor(handle, id, LINK_HOSTS[0]),
     };
+}
+
+/** The same post, addressed to whichever embed service is being tried. */
+function linkFor(handle, id, host) {
+    return `https://${host}/${handle}/status/${id}`;
 }
 
 /**
@@ -180,6 +212,64 @@ function renderEmbed(tweet) {
     embed.setFooter({ text: stats.length ? `X • ${stats.join(' • ')}` : 'X' });
 
     return embed;
+}
+
+// ── Getting one post onto the screen ────────────────────────────────────────
+
+/**
+ * Did Discord attach an embed to this message?
+ *
+ * Discord unfurls a link server-side after the message is already delivered,
+ * so the object returned by send() never has the embed yet. The only way to
+ * know is to wait and look again, forcing past the cache, because the cached
+ * copy is the one from before the unfurl.
+ */
+async function embedLanded(channel, messageId, { waitMs = EMBED_GRACE_MS, sleep } = {}) {
+    // unref'd: shutdown has an eight second budget and must not spend it
+    // waiting to re-check a link that is almost certainly fine.
+    const wait = sleep ?? (ms => new Promise(r => { const t = setTimeout(r, ms); t.unref?.(); }));
+    await wait(waitMs);
+    const fresh = await channel.messages.fetch({ message: messageId, force: true }).catch(() => null);
+    // A message we cannot re-read is not evidence of a failed embed, and
+    // replacing a link on that basis would be churn for nothing.
+    if (!fresh) return true;
+    return (fresh.embeds?.length ?? 0) > 0;
+}
+
+/**
+ * Checks that a posted link actually rendered, and rewrites it until one does.
+ *
+ * A bare link is the best possible result: FixTweet shows the author, the
+ * text, the images, and a video that plays inline. It is also the only part
+ * of this that depends on somebody else's uptime, so when it produces nothing
+ * the message is edited to the next service, and finally to an embed built
+ * here from data already in hand.
+ *
+ * Runs after the message is on screen, never before, so a slow check delays
+ * nothing. In the good case it is one background fetch and no edit at all.
+ *
+ * @returns {Promise<string>} what ended up rendering it
+ */
+async function repairEmbed(channel, tweet, message, { hosts = LINK_HOSTS, sleep } = {}) {
+    for (let i = 0; i < hosts.length; i += 1) {
+        if (await embedLanded(channel, message.id, { sleep })) {
+            if (i > 0) {
+                logger.info('[TWEETS] Fell back to another embed service', { host: hosts[i], tweetId: tweet.id });
+            }
+            return hosts[i];
+        }
+        const next = hosts[i + 1];
+        if (!next) break;
+        await message.edit({ content: linkFor(tweet.handle, tweet.id, next) }).catch(() => {});
+    }
+
+    // Every link service declined. Our own embed needs nobody else to render
+    // it, so this is a floor rather than one more thing that can fail.
+    logger.warn('[TWEETS] No link service produced an embed, using the built-in one', {
+        tweetId: tweet.id, tried: hosts,
+    });
+    await message.edit({ content: '', embeds: [renderEmbed(tweet)] }).catch(() => {});
+    return 'built-in';
 }
 
 // ── Spend ───────────────────────────────────────────────────────────────────
@@ -306,7 +396,7 @@ function resolved(prefix) {
  * Never throws. Returns a summary so the command and the tests can see what
  * happened without reading the log.
  */
-async function runOnce(client, { now = Date.now() } = {}) {
+async function runOnce(client, { now = Date.now(), sleep } = {}) {
     const apiKey = process.env.TWITTERAPI_KEY;
     if (!apiKey) return { skipped: 'no TWITTERAPI_KEY set' };
 
@@ -383,21 +473,44 @@ async function runOnce(client, { now = Date.now() } = {}) {
 
     const style = await getSpeakConfigValue(STYLE_KEY, DEFAULT_STYLE);
     let posted = 0;
+    /** Exposed so callers that care (the tests) can wait for the repair pass. */
+    let verification = null;
 
+    const delivered = [];
     for (const tweet of selected) {
         // The claim is what makes two overlapping containers safe, and it has
         // to happen before the send: claiming after would let both post first.
         if (!(await claimTweet(tweet.id))) continue;
         try {
-            await channel.send(style === 'embed'
+            const message = await channel.send(style === 'embed'
                 ? { embeds: [renderEmbed(tweet)] }
-                : { content: tweet.url });
+                : { content: linkFor(tweet.handle, tweet.id, LINK_HOSTS[0]) });
             posted += 1;
+            // Guarded rather than assumed: it is already on screen by now, so
+            // anything odd about the returned object is a bookkeeping problem,
+            // and letting it throw would log a successful post as a failure.
+            if (message?.id) {
+                delivered.push({ tweet, message });
+                // So that replying to this post does not wake the bot up.
+                recordMirrorMessage(tweet.id, message.id)
+                    .catch(e => logger.warn('[TWEETS] Could not record message id', { error: e.message }));
+            }
         } catch (error) {
             // The claim stands. A post that Discord refused is not worth
             // retrying forever, and retrying is how a channel gets spammed.
             logger.error('[TWEETS] Could not post', { tweetId: tweet.id, error: error.message });
         }
+    }
+
+    // After everything is on screen, and deliberately not awaited: this is
+    // seconds of waiting per message, and none of it should hold up the next
+    // post or the cursor write below. Losing it to a shutdown costs nothing,
+    // because the un-repaired state is the one that works nearly always.
+    if (style !== 'embed' && delivered.length) {
+        verification = Promise.all(delivered.map(d =>
+            repairEmbed(channel, d.tweet, d.message, { sleep }).catch(e =>
+                logger.warn('[TWEETS] Embed check failed', { tweetId: d.tweet.id, error: e.message }))
+        ));
     }
 
     // To the newest thing seen, not the newest thing posted: anything older
@@ -410,7 +523,7 @@ async function runOnce(client, { now = Date.now() } = {}) {
         pruneMirroredTweets().catch(e => logger.warn('[TWEETS] Prune failed', { error: e.message }));
     }
 
-    return { posted, found: found.length, dropped, spend: newSpend };
+    return { posted, found: found.length, dropped, spend: newSpend, verification };
 }
 
 // ── Scheduling ──────────────────────────────────────────────────────────────
@@ -474,6 +587,11 @@ module.exports = {
     buildQuery,
     normalizeTweet,
     renderEmbed,
+    repairEmbed,
+    embedLanded,
+    linkFor,
+    LINK_HOSTS,
+    EMBED_GRACE_MS,
     readSpend,
     recordSpend,
     monthKey,
