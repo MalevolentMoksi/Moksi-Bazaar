@@ -854,8 +854,9 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             })
         });
 
-        clearTimeout(timeoutId);
-
+        // Armed until the body is read, not just the headers: a provider can
+        // answer 200 instantly and then trickle the body past any deadline.
+        // Cleared in the finally.
         if (!response.ok) {
             // HTTP error, try fallback
             logger.warn('[MEDIA] Gemini HTTP error, attempting fallback', { status: response.status, attempt });
@@ -881,8 +882,6 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         record({ outcome: 'empty' });
         return await analyzeImageFallback(imageUrl, prompt);
     } catch (e) {
-        clearTimeout(timeoutId);
-
         // One retry, and only for a fast network failure. A timeout goes
         // straight to the fallback: retrying a slow provider stacks 8-second
         // waits in front of a reply that has a 20-second deadline.
@@ -896,6 +895,8 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         logger.error('[MEDIA] Gemini failed, trying fallback', { error: e.message });
         record({ outcome: e.name === 'AbortError' ? 'timeout' : 'exception', error: e.message });
         return await analyzeImageFallback(imageUrl, prompt);
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 
@@ -916,10 +917,10 @@ async function analyzeImageFallback(imageUrl, prompt) {
         latencyMs: Date.now() - startedAt, ...fields,
     });
 
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), FALLBACK_TIMEOUT);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FALLBACK_TIMEOUT);
 
+    try {
         logger.debug('[MEDIA] Qwen fallback attempt', { urlLength: imageUrl.length });
 
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -939,8 +940,7 @@ async function analyzeImageFallback(imageUrl, prompt) {
             })
         });
 
-        clearTimeout(timeoutId);
-
+        // Armed until the body is read; cleared in the finally.
         if (!response.ok) {
             logger.warn('[MEDIA] Qwen HTTP error', { status: response.status });
             record({ outcome: `http_${response.status}` });
@@ -967,6 +967,8 @@ async function analyzeImageFallback(imageUrl, prompt) {
         logger.error('[MEDIA] Qwen fallback exception', { error: e.message });
         record({ outcome: e.name === 'AbortError' ? 'timeout' : 'exception', error: e.message });
         return null;
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 

@@ -29,6 +29,10 @@ async function callOpenRouterAPI(model, messages, options = {}) {
         timeout = TIMEOUTS.API_CALL,
         cacheControl = false,
         fallbackModel = null,
+        // Overrides for the request-shaping defaults below. Passing null keeps
+        // the default; pass an object to replace it wholesale.
+        reasoning = null,
+        provider = null,
         // {kind, extra}: names this call in telemetry. Rows are only written
         // when a telemetry trace is active (i.e. inside the speak pipeline).
         telemetry: telemetryMeta = null
@@ -64,6 +68,21 @@ async function callOpenRouterAPI(model, messages, options = {}) {
             messages: resolvedMessages,
             max_tokens: maxTokens,
             temperature,
+            // Off unless a caller asks otherwise. The writers and utility
+            // models here are hybrid reasoners, and providers that default
+            // reasoning ON spend the entire max_tokens budget on thinking
+            // that goes to a separate field: finish_reason "length", empty
+            // content, full price. Three calls in one traced reply died
+            // exactly that way, including the judge, whose 6-token budget
+            // cannot survive a single thought. effort "none" is OpenRouter's
+            // documented "disables reasoning entirely" form; exclude would
+            // merely hide the thinking while still paying for it.
+            reasoning: reasoning ?? { effort: 'none' },
+            // Without a sort OpenRouter load-balances by price, which is how
+            // a reply got routed to a host generating at 2 tokens/second
+            // while the same model did 121/s elsewhere. At this bot's token
+            // counts the price spread between providers is noise.
+            provider: provider ?? { sort: 'throughput' },
             // Usage accounting: the response reports real token counts and the
             // actual dollar cost, so telemetry records facts, not estimates.
             usage: { include: true }
@@ -81,8 +100,12 @@ async function callOpenRouterAPI(model, messages, options = {}) {
             signal: controller.signal
         });
 
-        clearTimeout(timeoutId);
-
+        // The timer stays armed until the BODY is consumed, not just the
+        // headers. A provider can answer 200 in half a second and then
+        // trickle tokens for a minute; clearing here made the timeout a
+        // time-to-first-byte check and let one such call hold a reply
+        // hostage for 61 seconds. The abort signal covers the body reads
+        // below, and the finally clears the timer on every exit.
         if (!response.ok) {
             const errorText = await response.text();
             logger.error('OpenRouter API error', { status: response.status, error: errorText, model });
@@ -137,8 +160,6 @@ async function callOpenRouterAPI(model, messages, options = {}) {
 
         return cleanContent || null;
     } catch (error) {
-        clearTimeout(timeoutId);
-
         if (error.name === 'AbortError') {
             logger.warn('OpenRouter API timeout', { timeout, model });
             record({ outcome: 'timeout', error: `timed out after ${timeout}ms` });
@@ -148,6 +169,8 @@ async function callOpenRouterAPI(model, messages, options = {}) {
         }
 
         return null;
+    } finally {
+        clearTimeout(timeoutId);
     }
 }
 

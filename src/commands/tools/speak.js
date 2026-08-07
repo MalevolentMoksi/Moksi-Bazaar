@@ -54,12 +54,25 @@ const INTERJECTION_DEADLINE_MS = 40_000;
 /** After this much has already been spent (a cold video, a slow fetch), the
  *  pre-pass is skipped rather than making a late reply later. */
 const PREPASS_LATEST_START_MS = 8_000;
+/** The pre-pass on a LIVE reply gets this long, no more. It writes ~60 tokens
+ *  of JSON; a healthy call is done in under two seconds, and a reply aiming
+ *  at six seconds total cannot donate more than this to guidance. */
+const REPLY_PREPASS_TIMEOUT_MS = 3_500;
+/** Ceiling on any single draft during a live reply. The panel runs in
+ *  parallel, so this is the whole stage's worst case, and a writer that
+ *  cannot produce two sentences in eight seconds was routed somewhere bad. */
+const WRITER_TIMEOUT_CAP_MS = 8_000;
 /** The judge needs at least this much runway to be worth consulting. */
 const JUDGE_MIN_BUDGET_MS = 4_000;
 /** Fresh media analysis stops starting once this much of the reply window is
  *  spent; anything still unanalysed goes out as an honest "not seen" tag and
- *  is picked up next time. Cached descriptions are exempt: they are free. */
+ *  is picked up next time. Cached descriptions are exempt: they are free.
+ *  Interjections only: nobody is watching that clock. */
 const MEDIA_STAGE_BUDGET_MS = 12_000;
+/** Live replies get half of it, for the same reason the pre-pass is capped:
+ *  the target is an answer in ~6 seconds, and a cold video cannot be allowed
+ *  to spend twice that before a single word is generated. */
+const REPLY_MEDIA_BUDGET_MS = 6_000;
 /** Memory v2 shows this many raw exchange pairs; profiles carry the rest. */
 const MEMORY_V2_RAW_PAIRS = 2;
 
@@ -599,7 +612,7 @@ module.exports = {
       //    everyone else in the room in a single batched query.
       const { text: conversationContext, participants, oldestTimestamp } =
         await buildConversationContext(messages, botId, pinnedIds, {
-          mediaDeadlineAt: startedAt + MEDIA_STAGE_BUDGET_MS,
+          mediaDeadlineAt: startedAt + (isInterjection ? MEDIA_STAGE_BUDGET_MS : REPLY_MEDIA_BUDGET_MS),
         });
 
       const otherIds = [...participants.keys()].filter(id => id !== userId);
@@ -636,6 +649,9 @@ module.exports = {
           userRequest,
           isInterjection,
           utilityModel: pipeline.utilityModel,
+          // A live reply cannot lend the read more than this; an interjection
+          // keeps readRoom's own roomier default.
+          ...(isInterjection ? {} : { timeoutMs: REPLY_PREPASS_TIMEOUT_MS }),
         });
       }
 
@@ -784,8 +800,10 @@ ${memoryText}`;
       //    byte-identical behaviour. Pipeline on: every writer drafts in
       //    parallel (same wall time as one call), then the judge picks,
       //    unless the deadline says ship the first draft and be done.
-      //    Either way this runs concurrently with the sentiment pass, so the
-      //    user waits for whichever is slower rather than for both.
+      //    The sentiment pass gates NOTHING here: its verdict is consulted
+      //    for the emoji fallback (briefly, if it is ready) and the memory
+      //    row (after the send), so a sentiment provider having a slow day
+      //    must never add a visible second to the reply.
       const writerMessages = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: finalUserPrompt }
@@ -799,19 +817,26 @@ ${memoryText}`;
       };
 
       let rawContent;
-      let sentimentAnalysis;
       let generation;
       let vetoed = false;
       if (wants.drafts) {
-        const [draftResults, sentimentResult] = await Promise.all([
-          Promise.all(wants.writers.map((model, index) =>
-            callOpenRouterAPI(model, writerMessages, {
-              ...writerOptions,
-              telemetry: { kind: 'draft', extra: { index: index + 1 } },
-            }))),
-          sentimentPromise,
-        ]);
-        sentimentAnalysis = sentimentResult;
+        // Each writer is bounded by what is left of the deadline, minus the
+        // judge's runway. The panel runs in parallel, so the slowest writer
+        // IS the stage's wall time, and before this cap one bad routing
+        // decision could hold the whole reply for the API default timeout.
+        const writerTimeout = Math.max(
+          4_000,
+          Math.min(
+            isInterjection ? 15_000 : WRITER_TIMEOUT_CAP_MS,
+            wants.deadlineMs - (Date.now() - startedAt) - JUDGE_MIN_BUDGET_MS
+          )
+        );
+        const draftResults = await Promise.all(wants.writers.map((model, index) =>
+          callOpenRouterAPI(model, writerMessages, {
+            ...writerOptions,
+            timeout: writerTimeout,
+            telemetry: { kind: 'draft', extra: { index: index + 1 } },
+          })));
 
         const drafts = draftResults.filter(Boolean);
         const timeLeft = wants.deadlineMs - (Date.now() - startedAt);
@@ -845,13 +870,10 @@ ${memoryText}`;
           };
         }
       } else {
-        [rawContent, sentimentAnalysis] = await Promise.all([
-          callOpenRouterAPI('deepseek/deepseek-chat', writerMessages, {
-            ...writerOptions,
-            telemetry: { kind: 'chat' },
-          }),
-          sentimentPromise
-        ]);
+        rawContent = await callOpenRouterAPI('deepseek/deepseek-chat', writerMessages, {
+          ...writerOptions,
+          telemetry: { kind: 'chat' },
+        });
         generation = { mode: 'legacy' };
       }
 
@@ -905,10 +927,19 @@ ${memoryText}`;
           finalEmoji = GOAT_EMOJIS.goat_smile;
         } else if (lvl === 'familiar') {
           finalEmoji = GOAT_EMOJIS.goat_small_bleat;
-        } else if (sentimentAnalysis.originalSentiment <= SENTIMENT_THRESHOLDS.AUTO_EMOJI_NEGATIVE) {
-          finalEmoji = GOAT_EMOJIS.goat_exhausted;
-        } else if (sentimentAnalysis.originalSentiment >= SENTIMENT_THRESHOLDS.AUTO_EMOJI_POSITIVE) {
-          finalEmoji = GOAT_EMOJIS.goat_smile;
+        } else {
+          // Only the neutral case consults the sentiment verdict, and only
+          // if it arrives within a short grace: an emoji is never worth
+          // stalling the send for a slow sentiment provider.
+          const verdict = await Promise.race([
+            sentimentPromise,
+            new Promise(resolve => { const t = setTimeout(() => resolve(null), 1_000); t.unref?.(); }),
+          ]);
+          if (verdict && verdict.originalSentiment <= SENTIMENT_THRESHOLDS.AUTO_EMOJI_NEGATIVE) {
+            finalEmoji = GOAT_EMOJIS.goat_exhausted;
+          } else if (verdict && verdict.originalSentiment >= SENTIMENT_THRESHOLDS.AUTO_EMOJI_POSITIVE) {
+            finalEmoji = GOAT_EMOJIS.goat_smile;
+          }
         }
       }
 
@@ -935,14 +966,17 @@ ${memoryText}`;
       //    context-only: nobody asked anything, so there is no exchange to
       //    count toward the relationship.
       const isContextOnly = interaction._interjection || !userRequest || !userRequest.trim();
-      storeConversationMemory(
+      // Chained on the real verdict, however long it takes: the memory row
+      // should carry the sentiment that was actually measured, and nothing
+      // user-visible is waiting on this.
+      sentimentPromise.then(verdict => storeConversationMemory(
         userId,
         channelId,
         interaction._interjection ? '[interjection]' : (userRequest || '[context]'),
         replyText,
-        sentimentAnalysis.sentiment,
+        verdict.sentiment,
         isContextOnly
-      ).catch(e =>
+      )).catch(e =>
         logger.error('Failed to store conversation memory', { userId, error: e.message })
       );
 

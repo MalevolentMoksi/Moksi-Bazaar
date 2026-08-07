@@ -116,3 +116,33 @@ describe('what must keep working', () => {
         expect(speak.execute).toHaveBeenCalled();
     });
 });
+
+describe('the request text the bot actually reads', () => {
+    // The ping at the head of a message is scaffolding; a ping in the middle
+    // is a word in the sentence. Deleting the latter left "as in when types
+    // in it": a hole where the subject was, and the model's reasoning on one
+    // traced reply literally pointed at the gap. The name goes there instead.
+    const request = () => speak.execute.mock.calls[0][0].options.getString('request');
+
+    test('a leading summon ping is stripped clean', async () => {
+        await handler.execute(message({ mentionsBot: true, content: `<@${BOT}> hello there` }), client);
+        expect(request()).toBe('hello there');
+    });
+
+    test('a mid-sentence ping becomes the bot\'s name, not a hole', async () => {
+        await handler.execute(
+            message({ mentionsBot: true, content: `as in when <@${BOT}> types in it` }), client);
+        expect(request()).toBe('as in when @Cooler Moksi types in it');
+    });
+
+    test('the nickname mention form gets the same treatment', async () => {
+        await handler.execute(
+            message({ mentionsBot: true, content: `ping me when <@!${BOT}> posts` }), client);
+        expect(request()).toBe('ping me when @Cooler Moksi posts');
+    });
+
+    test('a bare ping still reads as an empty request', async () => {
+        await handler.execute(message({ mentionsBot: true, content: `<@${BOT}>` }), client);
+        expect(request()).toBeNull();
+    });
+});

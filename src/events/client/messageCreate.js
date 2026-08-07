@@ -4,6 +4,7 @@ const { handleWatchedMessage } = require('../../utils/joinGate/enforcement');
 const { noteMessage } = require('../../utils/joinGate/activity');
 const { shouldInterject } = require('../../utils/interjections');
 const { isMirrorMessage } = require('../../utils/db');
+const { BOT_IDENTITY } = require('../../utils/constants');
 
 /** Discord's typing indicator lasts ~10s; refresh just inside that. */
 const TYPING_REFRESH_MS = 8_000;
@@ -70,8 +71,18 @@ module.exports = {
     // Extract the rest of the message after the mention as the "request".
     // Interjections carry no request at all: nobody addressed the bot, and
     // the message it is reacting to is already in the chat log it reads.
-    const mentionRegex = new RegExp(`<@!?${botId}>\\s*`, 'gi');
-    const requestText = interjecting ? '' : message.content.replace(mentionRegex, '').trim();
+    //
+    // Only the ping at the HEAD of the message is summoning scaffolding. A
+    // ping anywhere else is a word in the sentence: "when @bot types in it"
+    // with the mention deleted reads "when types in it", a hole where the
+    // subject was, and the reply to that is nonsense. Mid-sentence pings
+    // become the bot's name instead.
+    const leadingMention = new RegExp(`^\\s*<@!?${botId}>\\s*`);
+    const anyMention = new RegExp(`<@!?${botId}>`, 'g');
+    const requestText = interjecting ? '' : message.content
+      .replace(leadingMention, '')
+      .replace(anyMention, `@${BOT_IDENTITY.shortName}`)
+      .trim();
 
     // Build a compatibility interaction object for speak.js
     const interaction = {
