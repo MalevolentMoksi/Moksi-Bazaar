@@ -526,6 +526,62 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
     return { posted, found: found.length, dropped, spend: newSpend, verification };
 }
 
+// ── Proving it works ────────────────────────────────────────────────────────
+
+/**
+ * Fetches a deliberately wide window so there is certainly something to find,
+ * and reports what came back.
+ *
+ * This exists because "0 posts fetched" is both what a working mirror looks
+ * like on a quiet quarter hour and what a broken one looks like forever, and
+ * twitterapi.io's own call log does not distinguish them either: it showed no
+ * calls at all for a request that had demonstrably been billed.
+ *
+ * Deliberately does not move the cursor and does not claim anything, so it
+ * cannot eat a post the real poller would have made. It does record the
+ * spend, because the money is just as real as any other request.
+ *
+ * @returns {Promise<object>} what it found, or why it could not look
+ */
+async function testFetch({ hoursBack = 6 } = {}) {
+    const apiKey = process.env.TWITTERAPI_KEY;
+    if (!apiKey) return { ok: false, reason: 'no TWITTERAPI_KEY set' };
+
+    const accounts = await getSpeakConfigValue(ACCOUNTS_KEY, DEFAULT_ACCOUNTS);
+    if (!Array.isArray(accounts) || accounts.length === 0) return { ok: false, reason: 'no accounts set' };
+
+    const budget = Number(await getSpeakConfigValue(BUDGET_KEY, DEFAULT_BUDGET_USD)) || DEFAULT_BUDGET_USD;
+    const spend = await readSpend();
+    if (spend.usd >= budget) return { ok: false, reason: 'budget reached' };
+
+    const sinceMs = Date.now() - hoursBack * 60 * 60 * 1000;
+    const query = buildQuery(accounts, sinceMs / 1000);
+    const result = await searchTweets({ apiKey, query });
+
+    if (!result.ok) {
+        return { ok: false, reason: `request failed (${result.status})`, error: result.error, query };
+    }
+
+    const newSpend = await recordSpend(result.tweets.length);
+    const found = result.tweets.map(normalizeTweet).filter(Boolean).sort((a, b) => b.atMs - a.atMs);
+
+    // Per handle, because "12 tweets" could still be one account working and
+    // two silently misspelled.
+    const perAccount = {};
+    for (const t of found) perAccount[t.handle] = (perAccount[t.handle] ?? 0) + 1;
+
+    return {
+        ok: true,
+        hoursBack,
+        query,
+        raw: result.tweets.length,
+        found: found.length,
+        perAccount,
+        newest: found[0] ?? null,
+        spend: newSpend,
+    };
+}
+
 // ── Scheduling ──────────────────────────────────────────────────────────────
 
 function startTweetMirror(client) {
@@ -583,6 +639,7 @@ module.exports = {
     startTweetMirror,
     stopTweetMirror,
     runOnce,
+    testFetch,
     mirrorStatus,
     buildQuery,
     normalizeTweet,

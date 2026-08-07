@@ -438,11 +438,17 @@ const init = async () => {
         );
         CREATE INDEX IF NOT EXISTS mirrored_tweets_posted_idx
             ON mirrored_tweets (posted_at_ms);
-        CREATE INDEX IF NOT EXISTS mirrored_tweets_message_idx
-            ON mirrored_tweets (message_id);
     `);
 
-    // Migration: the mirror shipped before it tracked its own message ids.
+    // Migration: the mirror shipped a day before it tracked its own message
+    // ids, so the table already exists in production without that column.
+    //
+    // The index on it MUST live here and not in the CREATE above. On a
+    // database that already has the table, CREATE TABLE IF NOT EXISTS does
+    // nothing at all, including nothing about the new column, so an index
+    // declared alongside it runs against a column that does not exist yet and
+    // takes down init() and with it the whole process. That is not a
+    // hypothetical: it is what this comment was written for.
     await pool.query(`
         ALTER TABLE mirrored_tweets ADD COLUMN IF NOT EXISTS message_id TEXT;
         CREATE INDEX IF NOT EXISTS mirrored_tweets_message_idx
