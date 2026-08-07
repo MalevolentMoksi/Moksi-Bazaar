@@ -193,6 +193,15 @@ function initializeBot() {
       logger.error('Could not refund open wagers on shutdown', { error: error.message });
     }
 
+    // Tetris costs nothing to play but pays for cleared lines, and its boards
+    // live in memory. The lines were genuinely cleared; a redeploy should not
+    // be what decides whether they counted.
+    try {
+      await client.commands.get('tetris')?.settleActiveGames?.();
+    } catch (error) {
+      logger.error('Could not settle tetris games on shutdown', { error: error.message });
+    }
+
     // Before the pool closes: a minute of buffered message counts is cheap to
     // write and annoying to lose on every deploy.
     try {

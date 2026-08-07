@@ -1,15 +1,37 @@
-// src/commands/games/tetris.js - Full Discord Tetris Implementation
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
+// src/commands/tools/tetris.js
+/**
+ * Tetris, played through Discord buttons.
+ *
+ * The rules live in utils/tetris.js and know nothing about Discord. This file
+ * is the interface: what a piece looks like, which button does what, and who
+ * is allowed to press it.
+ *
+ * Three things the first version got wrong, all of them structural:
+ *
+ *  - gravity ran on a setInterval that never redrew the message, so the board
+ *    the player was looking at had nothing to do with the board they were
+ *    playing. Gravity is turn-based now; see utils/tetris.js.
+ *  - the collector listened to the whole CHANNEL rather than to its own
+ *    message, so a second game in the same channel drove the first one's
+ *    board. It listens to its own message now.
+ *  - finished games were never removed from the registry, so every game ever
+ *    played stayed in memory for the life of the process.
+ */
+
+const {
+    SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags,
+} = require('discord.js');
 const {
     adjustBalance, recordGameResult, setUserCooldown, getUserCooldownRemaining,
 } = require('../../utils/db');
+const engine = require('../../utils/tetris');
 const logger = require('../../utils/logger');
-const { ui } = require('../../utils/ui/panel');
+const { ui, retireControls } = require('../../utils/ui/panel');
 
 /**
  * Tetris is the one game here that costs nothing to play, so it had nothing to
- * do with the economy at all. Cleared lines now pay, with two brakes on it:
- * a per-game ceiling, and an hour between paid games. Play as much as you like
+ * do with the economy at all. Cleared lines pay, with two brakes on it: a
+ * per-game ceiling, and an hour between paid games. Play as much as you like
  * past that; it just stops printing money.
  */
 const TETRIS_PER_LINE = 100;
@@ -17,613 +39,310 @@ const TETRIS_MAX_PAID_LINES = 50;
 const TETRIS_PAYOUT_COOLDOWN_MS = 60 * 60 * 1000;
 const TETRIS_COOLDOWN_KEY = 'tetris_payout';
 
+/** A board nobody has touched in this long is not being played any more. */
+const IDLE_TIMEOUT_MS = 3 * 60_000;
+
+/**
+ * One coloured square per piece, plus the empty cell and the landing ghost.
+ * Emoji rather than a code block: the old board drew every piece as the same
+ * grey brick, so a stack of four different pieces was indistinguishable, and
+ * ANSI colour blocks render as raw escape codes on clients that lack them.
+ */
+const SQUARES = Object.freeze({
+    I: '🟦', O: '🟨', T: '🟪', S: '🟩', Z: '🟥', J: '🟫', L: '🟧',
+    GHOST: '⬜', EMPTY: '⬛',
+});
+
+/** userId-channelId -> game in progress. */
+const activeGames = new Map();
+
+// ── Payout ──────────────────────────────────────────────────────────────────
+
 /**
  * Settles a finished game exactly once.
  *
- * The `paid` flag is set before the first await: the game can end down several
- * code paths at once (top-out, quit, restart, collector expiry) and two of
+ * The `paid` flag is set before the first await: a game can end down several
+ * paths at once (top-out, quit, restart, idle expiry, shutdown) and two of
  * them racing must not pay twice.
  *
  * @returns {Promise<string|null>} a line to show the player, or null
  */
-async function awardTetris(game) {
-    if (game.paid || game.lines <= 0) return null;
-    game.paid = true;
+async function awardTetris(entry) {
+    if (entry.paid || entry.game.lines <= 0) return null;
+    entry.paid = true;
 
     try {
-        const remaining = await getUserCooldownRemaining(game.userId, TETRIS_COOLDOWN_KEY);
+        const remaining = await getUserCooldownRemaining(entry.userId, TETRIS_COOLDOWN_KEY);
         if (remaining > 0) {
             const mins = Math.ceil(remaining / 60000);
             return `No payout: another paid game in ${mins} min. Lines still counted.`;
         }
 
-        const paidLines = Math.min(game.lines, TETRIS_MAX_PAID_LINES);
+        const paidLines = Math.min(entry.game.lines, TETRIS_MAX_PAID_LINES);
         const amount = paidLines * TETRIS_PER_LINE;
-        const balance = await adjustBalance(game.userId, amount);
-        await setUserCooldown(game.userId, TETRIS_COOLDOWN_KEY, TETRIS_PAYOUT_COOLDOWN_MS);
-        recordGameResult(game.userId, 'tetris', { wagered: 0, returned: amount }).catch(() => {});
+        const balance = await adjustBalance(entry.userId, amount);
+        await setUserCooldown(entry.userId, TETRIS_COOLDOWN_KEY, TETRIS_PAYOUT_COOLDOWN_MS);
+        recordGameResult(entry.userId, 'tetris', { wagered: 0, returned: amount }).catch(() => {});
 
-        logger.info('Tetris payout', { userId: game.userId, lines: game.lines, amount });
+        logger.info('Tetris payout', { userId: entry.userId, lines: entry.game.lines, amount });
 
-        const capped = game.lines > TETRIS_MAX_PAID_LINES
+        const capped = entry.game.lines > TETRIS_MAX_PAID_LINES
             ? ` (${TETRIS_MAX_PAID_LINES} line cap)` : '';
         return `Earned **$${amount.toLocaleString()}** for ${paidLines} lines${capped}. `
             + `Balance $${Number(balance ?? 0).toLocaleString()}.`;
     } catch (error) {
-        logger.error('Tetris payout failed', { userId: game.userId, error: error.message });
+        logger.error('Tetris payout failed', { userId: entry.userId, error: error.message });
         return null;
     }
 }
 
-// Tetris piece definitions with rotations
-const PIECES = {
-    I: {
-        color: 0x00FFFF, // Cyan
-        blocks: [
-            [[1,1,1,1]],
-            [[1],[1],[1],[1]]
-        ]
-    },
-    O: {
-        color: 0xFFFF00, // Yellow
-        blocks: [
-            [[1,1],[1,1]]
-        ]
-    },
-    T: {
-        color: 0x800080, // Purple
-        blocks: [
-            [[0,1,0],[1,1,1]],
-            [[1,0],[1,1],[1,0]],
-            [[1,1,1],[0,1,0]],
-            [[0,1],[1,1],[0,1]]
-        ]
-    },
-    S: {
-        color: 0x00FF00, // Green
-        blocks: [
-            [[0,1,1],[1,1,0]],
-            [[1,0],[1,1],[0,1]]
-        ]
-    },
-    Z: {
-        color: 0xFF0000, // Red
-        blocks: [
-            [[1,1,0],[0,1,1]],
-            [[0,1],[1,1],[1,0]]
-        ]
-    },
-    J: {
-        color: 0x0000FF, // Blue
-        blocks: [
-            [[1,0,0],[1,1,1]],
-            [[1,1],[1,0],[1,0]],
-            [[1,1,1],[0,0,1]],
-            [[0,1],[0,1],[1,1]]
-        ]
-    },
-    L: {
-        color: 0xFFA500, // Orange
-        blocks: [
-            [[0,0,1],[1,1,1]],
-            [[1,0],[1,0],[1,1]],
-            [[1,1,1],[1,0,0]],
-            [[1,1],[0,1],[0,1]]
-        ]
+/**
+ * Pays out every game still in progress. Called on shutdown: a deploy kills
+ * every board in memory, and lines that were genuinely cleared should not
+ * evaporate because the container restarted.
+ */
+async function settleActiveGames() {
+    const entries = [...activeGames.values()];
+    activeGames.clear();
+    let paid = 0;
+    for (const entry of entries) {
+        entry.collector?.stop('shutdown');
+        const receipt = await awardTetris(entry).catch(() => null);
+        if (receipt) paid++;
     }
-};
-
-// Visual blocks for rendering
-const BLOCKS = {
-    EMPTY: '⬛',
-    FILLED: '🟦',
-    ACTIVE: '🟨',
-    GHOST: '⬜',
-    I: '🟦', // Cyan-ish
-    O: '🟨', // Yellow
-    T: '🟪', // Purple
-    S: '🟩', // Green
-    Z: '🟥', // Red
-    J: '🟦', // Blue
-    L: '🟧'  // Orange
-};
-
-// Game state storage
-const activeGames = new Map();
-
-class TetrisGame {
-    constructor(userId, channelId) {
-        this.userId = userId;
-        this.channelId = channelId;
-        this.board = Array(20).fill().map(() => Array(10).fill(0));
-        this.score = 0;
-        this.lines = 0;
-        this.level = 1;
-        this.gameOver = false;
-        this.paused = false;
-        // Settlement state; see awardTetris.
-        this.paid = false;
-        this.payoutText = null;
-
-        // Current piece
-        this.currentPiece = null;
-        this.currentX = 0;
-        this.currentY = 0;
-        this.currentRotation = 0;
-        
-        // Next piece
-        this.nextPiece = null;
-        
-        // Game timing
-        this.fallTimer = null;
-        this.fallSpeed = 1000; // 1 second initially
-        
-        // Initialize first pieces
-        this.spawnPiece();
-        this.nextPiece = this.getRandomPiece();
-    }
-    
-    getRandomPiece() {
-        const pieces = Object.keys(PIECES);
-        return pieces[Math.floor(Math.random() * pieces.length)];
-    }
-    
-    spawnPiece() {
-        this.currentPiece = this.nextPiece || this.getRandomPiece();
-        this.currentX = 3;
-        this.currentY = 0;
-        this.currentRotation = 0;
-        this.nextPiece = this.getRandomPiece();
-        
-        // Check game over
-        if (!this.isValidPosition(this.currentX, this.currentY, this.currentRotation)) {
-            this.gameOver = true;
-            this.stopFallTimer();
-            return false;
-        }
-        
-        return true;
-    }
-    
-    getCurrentPieceBlocks() {
-        return PIECES[this.currentPiece].blocks[this.currentRotation];
-    }
-    
-    isValidPosition(x, y, rotation) {
-        const blocks = PIECES[this.currentPiece].blocks[rotation];
-        
-        for (let py = 0; py < blocks.length; py++) {
-            for (let px = 0; px < blocks[py].length; px++) {
-                if (blocks[py][px]) {
-                    const nx = x + px;
-                    const ny = y + py;
-                    
-                    // Check boundaries
-                    if (nx < 0 || nx >= 10 || ny >= 20) return false;
-                    
-                    // Check collision with existing blocks
-                    if (ny >= 0 && this.board[ny][nx]) return false;
-                }
-            }
-        }
-        return true;
-    }
-    
-    placePiece() {
-        const blocks = this.getCurrentPieceBlocks();
-        
-        for (let py = 0; py < blocks.length; py++) {
-            for (let px = 0; px < blocks[py].length; px++) {
-                if (blocks[py][px]) {
-                    const nx = this.currentX + px;
-                    const ny = this.currentY + py;
-                    if (ny >= 0) {
-                        this.board[ny][nx] = this.currentPiece;
-                    }
-                }
-            }
-        }
-        
-        this.clearLines();
-        this.spawnPiece();
-    }
-    
-    clearLines() {
-        let linesCleared = 0;
-        
-        for (let y = 19; y >= 0; y--) {
-            if (this.board[y].every(cell => cell !== 0)) {
-                // Line is full, remove it
-                this.board.splice(y, 1);
-                this.board.unshift(Array(10).fill(0));
-                linesCleared++;
-                y++; // Check same line again
-            }
-        }
-        
-        if (linesCleared > 0) {
-            this.lines += linesCleared;
-            this.score += linesCleared * 100 * this.level;
-            const newLevel = Math.floor(this.lines / 10) + 1;
-            if (newLevel !== this.level) {
-                this.level = newLevel;
-                this.fallSpeed = Math.max(100, 1000 - (this.level - 1) * 100);
-                // Re-arm gravity at the new cadence; the old interval would
-                // otherwise keep ticking at the previous speed forever.
-                if (this.fallTimer) this.startFallTimer();
-            }
-        }
-    }
-    
-    moveLeft() {
-        if (this.isValidPosition(this.currentX - 1, this.currentY, this.currentRotation)) {
-            this.currentX--;
-            return true;
-        }
-        return false;
-    }
-    
-    moveRight() {
-        if (this.isValidPosition(this.currentX + 1, this.currentY, this.currentRotation)) {
-            this.currentX++;
-            return true;
-        }
-        return false;
-    }
-    
-    rotate() {
-        const newRotation = (this.currentRotation + 1) % PIECES[this.currentPiece].blocks.length;
-        if (this.isValidPosition(this.currentX, this.currentY, newRotation)) {
-            this.currentRotation = newRotation;
-            return true;
-        }
-        return false;
-    }
-    
-    softDrop() {
-        if (this.isValidPosition(this.currentX, this.currentY + 1, this.currentRotation)) {
-            this.currentY++;
-            this.score++;
-            return true;
-        } else {
-            this.placePiece();
-            return false;
-        }
-    }
-    
-    hardDrop() {
-        let dropDistance = 0;
-        while (this.isValidPosition(this.currentX, this.currentY + 1, this.currentRotation)) {
-            this.currentY++;
-            dropDistance++;
-        }
-        this.score += dropDistance * 2;
-        this.placePiece();
-        return dropDistance;
-    }
-    
-    getGhostPosition() {
-        let ghostY = this.currentY;
-        while (this.isValidPosition(this.currentX, ghostY + 1, this.currentRotation)) {
-            ghostY++;
-        }
-        return ghostY;
-    }
-    
-    renderBoard() {
-        // Create a copy of the board for rendering
-        const renderBoard = this.board.map(row => [...row]);
-        
-        // Add ghost piece
-        const ghostY = this.getGhostPosition();
-        if (ghostY > this.currentY) {
-            const blocks = this.getCurrentPieceBlocks();
-            for (let py = 0; py < blocks.length; py++) {
-                for (let px = 0; px < blocks[py].length; px++) {
-                    if (blocks[py][px]) {
-                        const nx = this.currentX + px;
-                        const ny = ghostY + py;
-                        if (ny >= 0 && ny < 20 && nx >= 0 && nx < 10 && renderBoard[ny][nx] === 0) {
-                            renderBoard[ny][nx] = 'GHOST';
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Add current piece
-        const blocks = this.getCurrentPieceBlocks();
-        for (let py = 0; py < blocks.length; py++) {
-            for (let px = 0; px < blocks[py].length; px++) {
-                if (blocks[py][px]) {
-                    const nx = this.currentX + px;
-                    const ny = this.currentY + py;
-                    if (ny >= 0 && ny < 20 && nx >= 0 && nx < 10) {
-                        renderBoard[ny][nx] = 'ACTIVE';
-                    }
-                }
-            }
-        }
-        
-        // Convert to visual blocks
-        let boardStr = '```\n┌────────────┐\n';
-        for (let y = 0; y < 20; y++) {
-            boardStr += '│';
-            for (let x = 0; x < 10; x++) {
-                const cell = renderBoard[y][x];
-                if (cell === 'ACTIVE') {
-                    boardStr += '██';
-                } else if (cell === 'GHOST') {
-                    boardStr += '░░';
-                } else if (cell === 0) {
-                    boardStr += '  ';
-                } else {
-                    boardStr += '▓▓';
-                }
-            }
-            boardStr += '│\n';
-        }
-        boardStr += '└────────────┘\n```';
-        
-        return boardStr;
-    }
-    
-    startFallTimer() {
-        this.stopFallTimer();
-        this.fallTimer = setInterval(() => {
-            if (!this.paused && !this.gameOver) {
-                this.softDrop();
-            }
-        }, this.fallSpeed);
-    }
-    
-    stopFallTimer() {
-        if (this.fallTimer) {
-            clearInterval(this.fallTimer);
-            this.fallTimer = null;
-        }
-    }
-    
-    pause() {
-        this.paused = !this.paused;
-    }
-    
-    destroy() {
-        this.stopFallTimer();
-        activeGames.delete(`${this.userId}-${this.channelId}`);
-    }
+    if (paid > 0) logger.info('Tetris: settled games interrupted by shutdown', { games: paid });
+    return paid;
 }
 
-function createGameEmbed(game) {
+// ── Rendering ───────────────────────────────────────────────────────────────
+
+function drawBoard(game) {
+    return engine.renderGrid(game)
+        .map(row => row.map(cell => SQUARES[cell] ?? SQUARES.EMPTY).join(''))
+        .join('\n');
+}
+
+function drawPreview(type) {
+    if (!type) return '*empty*';
+    return engine.previewGrid(type)
+        .map(row => row.map(cell => SQUARES[cell] ?? SQUARES.EMPTY).join(''))
+        .join('\n');
+}
+
+function gameEmbed(entry, { note = null } = {}) {
+    const { game } = entry;
     const embed = new EmbedBuilder()
-        .setTitle('🎮 Tetris')
-        .setDescription(game.renderBoard())
-        .setColor(PIECES[game.currentPiece]?.color || 0x0099FF)
+        .setTitle(game.over ? '🎮 Tetris: topped out' : '🎮 Tetris')
+        .setDescription(drawBoard(game))
+        .setColor(game.over ? 0xE74C3C : 0x5865F2)
         .addFields(
-            { name: '📊 Score', value: game.score.toString(), inline: true },
-            { name: '📏 Lines', value: game.lines.toString(), inline: true },
-            { name: '⚡ Level', value: game.level.toString(), inline: true },
-            { name: '🎯 Next', value: `\`${game.nextPiece}\``, inline: true },
-            { name: '⏸️ Status', value: game.paused ? 'Paused' : (game.gameOver ? 'Game Over' : 'Playing'), inline: true },
-            { name: '⏱️ Speed', value: `${game.fallSpeed}ms`, inline: true }
-        )
-        .setFooter({ text: 'Use buttons to control' })
-        .setTimestamp();
+            { name: 'Score', value: game.score.toLocaleString(), inline: true },
+            { name: 'Lines', value: String(game.lines), inline: true },
+            { name: 'Level', value: String(game.level), inline: true },
+            { name: 'Next', value: drawPreview(game.next), inline: true },
+            { name: 'Hold', value: drawPreview(game.hold), inline: true },
+        );
 
-    if (game.payoutText) {
-        embed.addFields({ name: '💰 Payout', value: game.payoutText, inline: false });
-    }
+    if (note) embed.addFields({ name: '​', value: note, inline: false });
+    if (entry.payoutText) embed.addFields({ name: '💰 Payout', value: entry.payoutText, inline: false });
 
+    embed.setFooter({
+        text: game.over
+            ? 'Topped out. New game deals a fresh board.'
+            : 'Every move drops the piece one row. ⬇️ places it, ⚡ slams it.',
+    });
     return embed;
 }
 
-function createControlButtons(gameOver = false, paused = false) {
-    const row1 = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('tetris_left')
-                .setLabel('◀️')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(gameOver),
-            new ButtonBuilder()
-                .setCustomId('tetris_right')
-                .setLabel('▶️')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(gameOver),
-            new ButtonBuilder()
-                .setCustomId('tetris_rotate')
-                .setLabel('🔄')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(gameOver),
-            new ButtonBuilder()
-                .setCustomId('tetris_soft_drop')
-                .setLabel('⬇️')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(gameOver),
-            new ButtonBuilder()
-                .setCustomId('tetris_hard_drop')
-                .setLabel('⚡')
-                .setStyle(ButtonStyle.Danger)
-                .setDisabled(gameOver)
-        );
-    
-    const row2 = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('tetris_pause')
-                .setLabel(paused ? '▶️ Resume' : '⏸️ Pause')
-                .setStyle(ButtonStyle.Success)
-                .setDisabled(gameOver),
-            new ButtonBuilder()
-                .setCustomId('tetris_restart')
-                .setLabel('🔄 New Game')
-                .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-                .setCustomId('tetris_quit')
-                .setLabel('❌ Quit')
-                .setStyle(ButtonStyle.Danger)
-        );
-    
-    return [row1, row2];
+function controls(game) {
+    const dead = game.over;
+    return [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('tetris:left').setEmoji('⬅️').setStyle(ButtonStyle.Secondary).setDisabled(dead),
+            new ButtonBuilder().setCustomId('tetris:rotate').setEmoji('🔄').setStyle(ButtonStyle.Primary).setDisabled(dead),
+            new ButtonBuilder().setCustomId('tetris:right').setEmoji('➡️').setStyle(ButtonStyle.Secondary).setDisabled(dead),
+            new ButtonBuilder().setCustomId('tetris:down').setEmoji('⬇️').setStyle(ButtonStyle.Secondary).setDisabled(dead),
+            new ButtonBuilder().setCustomId('tetris:drop').setEmoji('⚡').setStyle(ButtonStyle.Danger).setDisabled(dead),
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('tetris:hold').setLabel('Hold').setStyle(ButtonStyle.Secondary)
+                .setDisabled(dead || game.holdUsed),
+            new ButtonBuilder().setCustomId('tetris:new').setLabel('New game').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('tetris:quit').setLabel('Quit').setStyle(ButtonStyle.Danger),
+        ),
+    ];
 }
+
+const HELP = new EmbedBuilder()
+    .setTitle('🎮 Tetris')
+    .setColor(0x5865F2)
+    .setDescription(
+        'Turn-based, because a piece falling on a timer cannot be steered through a chat client: '
+        + 'by the time you see it and press a button, it has moved. **Every move you make drops the '
+        + 'piece one row instead.** A move that fails (into a wall, say) costs nothing.'
+    )
+    .addFields(
+        { name: '⬅️ ➡️', value: 'Move, and fall one row', inline: true },
+        { name: '🔄', value: 'Rotate, with wall kicks', inline: true },
+        { name: '⬇️', value: 'Down one row, or place it', inline: true },
+        { name: '⚡', value: 'Slam to the bottom', inline: true },
+        { name: 'Hold', value: 'Park a piece for later, once per piece', inline: true },
+        { name: 'Landing', value: `The white outline is where it lands. Once it touches down you get ${engine.LOCK_GRACE_MOVES} more moves before it welds.`, inline: false },
+        { name: 'Scoring', value: `Lines pay ${engine.LINE_SCORES.slice(1).join(' / ')} × level. Four at once is worth more than four separately. Level rises every ${engine.LINES_PER_LEVEL} lines.`, inline: false },
+        { name: 'Money', value: `$${TETRIS_PER_LINE} per line cleared, up to ${TETRIS_MAX_PAID_LINES} lines, once an hour.`, inline: false },
+    );
+
+// ── Command ─────────────────────────────────────────────────────────────────
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('tetris')
-        .setDescription('Play a full game of Tetris in Discord!')
+        .setDescription('Play Tetris in the channel')
         .addStringOption(option =>
             option.setName('action')
-                .setDescription('Game action')
+                .setDescription('What to do')
                 .addChoices(
-                    { name: 'New Game', value: 'new' },
-                    { name: 'Resume Game', value: 'resume' },
-                    { name: 'View Controls', value: 'help' }
-                )
-        ),
+                    { name: 'New game', value: 'new' },
+                    { name: 'How it works', value: 'help' },
+                )),
 
     async execute(interaction) {
         const userId = interaction.user.id;
         const channelId = interaction.channel.id;
-        const gameKey = `${userId}-${channelId}`;
-        const action = interaction.options.getString('action') || 'new';
+        const key = `${userId}-${channelId}`;
 
-        if (action === 'help') {
-            const helpEmbed = new EmbedBuilder()
-                .setTitle('🎮 Tetris Controls')
-                .setDescription('Master the classic puzzle game!')
-                .setColor(0x00FF00)
-                .addFields(
-                    { name: '◀️ Move Left', value: 'Move piece left', inline: true },
-                    { name: '▶️ Move Right', value: 'Move piece right', inline: true },
-                    { name: '🔄 Rotate', value: 'Rotate piece clockwise', inline: true },
-                    { name: '⬇️ Soft Drop', value: 'Move piece down (+1 point)', inline: true },
-                    { name: '⚡ Hard Drop', value: 'Drop piece instantly (+2 per row)', inline: true },
-                    { name: '⏸️ Pause', value: 'Pause/Resume game', inline: true },
-                    { name: '🎯 Scoring', value: 'Lines: 100×level, Drops: +1/+2 per row', inline: false },
-                    { name: '📈 Leveling', value: 'Level up every 10 lines (increases speed)', inline: false }
-                )
-                .setFooter({ text: 'Good luck! Try to clear lines by filling entire rows.' });
-
-            return interaction.reply(ui(helpEmbed, [], { scope: 'casino', ephemeral: true }));
+        if (interaction.options.getString('action') === 'help') {
+            return interaction.reply(ui(HELP, [], { scope: 'casino', ephemeral: true }));
         }
 
-        let game = activeGames.get(gameKey);
+        await interaction.deferReply();
 
-        if (action === 'resume' && !game) {
-            return interaction.reply({ content: '❌ No active game found. Start a new game!', flags: MessageFlags.Ephemeral });
+        // Starting a second board settles the first and retires its buttons,
+        // rather than leaving a live-looking game nobody is playing.
+        const previous = activeGames.get(key);
+        let carried = null;
+        if (previous) {
+            carried = await awardTetris(previous);
+            previous.collector?.stop('superseded');
+            activeGames.delete(key);
+            if (previous.message) {
+                await previous.message.edit(retireControls(previous.message)).catch(() => {});
+            }
         }
 
-        if (action === 'new' || !game) {
-            // Clean up old game
-            if (game) game.destroy();
-            
-            // Create new game
-            game = new TetrisGame(userId, channelId);
-            activeGames.set(gameKey, game);
-            game.startFallTimer();
-        }
+        const entry = {
+            userId,
+            channelId,
+            game: engine.createGame(),
+            paid: false,
+            payoutText: carried ? `Previous game: ${carried}` : null,
+            message: null,
+            collector: null,
+        };
+        activeGames.set(key, entry);
 
-        const embed = createGameEmbed(game);
-        const buttons = createControlButtons(game.gameOver, game.paused);
+        const message = await interaction.editReply(
+            ui(gameEmbed(entry), controls(entry.game), { scope: 'casino' }),
+        );
+        entry.message = message;
 
-        await interaction.reply(ui(embed, buttons, { scope: 'casino' }));
+        // On the message, not the channel: a channel-wide collector meant a
+        // second game's buttons drove the first game's board.
+        const collector = message.createMessageComponentCollector({ idle: IDLE_TIMEOUT_MS });
+        entry.collector = collector;
 
-        // Handle button interactions
-        const collector = interaction.channel.createMessageComponentCollector({
-            filter: i => i.user.id === userId && i.customId.startsWith('tetris_'),
-            time: 300000 // 5 minutes
+        collector.on('collect', async (press) => {
+            if (press.user.id !== userId) {
+                return press.reply({
+                    content: 'Not your game. `/tetris` starts your own.',
+                    flags: MessageFlags.Ephemeral,
+                }).catch(() => {});
+            }
+
+            // A board superseded by a newer one keeps its own buttons live
+            // until the edit lands; say so rather than driving a dead game.
+            if (activeGames.get(key) !== entry) {
+                return press.reply({
+                    content: 'This board was replaced by a newer game.',
+                    flags: MessageFlags.Ephemeral,
+                }).catch(() => {});
+            }
+
+            const action = press.customId.split(':')[1];
+
+            // Settling a game is two or three database round trips, and
+            // Discord kills the token after three seconds. Anything that pays
+            // out claims the interaction first and edits afterwards; ordinary
+            // moves touch nothing but memory and answer in a single call.
+            if (action === 'quit' || action === 'new') {
+                await press.deferUpdate().catch(() => {});
+                const receipt = await awardTetris(entry);
+
+                if (action === 'quit') {
+                    entry.payoutText = receipt;
+                    activeGames.delete(key);
+                    collector.stop('quit');
+                    const farewell = gameEmbed(entry, { note: 'Game ended.' })
+                        .setTitle('🎮 Tetris: ended')
+                        .setColor(0x99AAB5);
+                    return press.editReply(ui(farewell, [], { like: press.message })).catch(() => {});
+                }
+
+                entry.game = engine.createGame();
+                entry.paid = false;
+                entry.payoutText = receipt ? `Previous game: ${receipt}` : null;
+                return press.editReply(
+                    ui(gameEmbed(entry), controls(entry.game), { like: press.message }),
+                ).catch(() => {});
+            }
+
+            const before = entry.game.lines;
+            const result = engine.applyAction(entry.game, action);
+
+            if (!result.changed) {
+                // Nothing moved, so nothing to redraw. Acknowledging silently
+                // is what stops Discord showing "interaction failed".
+                return press.deferUpdate().catch(() => {});
+            }
+
+            const cleared = entry.game.lines - before;
+            const note = cleared === 4
+                ? '**TETRIS.**'
+                : (cleared > 0 ? `${cleared} line${cleared > 1 ? 's' : ''} cleared.` : null);
+
+            if (!entry.game.over) {
+                return press.update(
+                    ui(gameEmbed(entry, { note }), controls(entry.game), { like: press.message }),
+                ).catch(error => logger.debug('Tetris update failed', { error: error.message }));
+            }
+
+            // Topped out. The board stays registered and the collector stays
+            // alive so New game and Quit still work; every movement button is
+            // disabled, and applyAction ignores them regardless.
+            await press.deferUpdate().catch(() => {});
+            entry.payoutText = await awardTetris(entry);
+            await press.editReply(
+                ui(gameEmbed(entry, { note }), controls(entry.game), { like: press.message }),
+            ).catch(error => logger.debug('Tetris update failed', { error: error.message }));
         });
 
-        collector.on('collect', async (buttonInteraction) => {
-            if (!game) return;
-
-            const action = buttonInteraction.customId.split('_')[1];
-
-            // Restart and Quit stay usable after a top-out; every other
-            // control only works mid-game.
-            if (game.gameOver && action !== 'restart' && action !== 'quit') {
-                return buttonInteraction.deferUpdate();
+        collector.on('end', async (_collected, reason) => {
+            if (activeGames.get(key) === entry) activeGames.delete(key);
+            // Whatever ended it, the lines were still cleared. Shutdown is the
+            // exception: settleActiveGames is already paying, and paying twice
+            // is what the `paid` flag exists to prevent anyway.
+            if (reason !== 'shutdown' && reason !== 'superseded') {
+                await awardTetris(entry).catch(error =>
+                    logger.error('Tetris payout on expiry failed', { error: error.message }));
             }
-
-            let updated = false;
-
-            switch (action) {
-                case 'left':
-                    updated = game.moveLeft();
-                    break;
-                case 'right':
-                    updated = game.moveRight();
-                    break;
-                case 'rotate':
-                    updated = game.rotate();
-                    break;
-                case 'soft':
-                    updated = game.softDrop();
-                    break;
-                case 'hard':
-                    game.hardDrop();
-                    updated = true;
-                    break;
-                case 'pause':
-                    game.pause();
-                    updated = true;
-                    break;
-                case 'restart': {
-                    // Settle the run being abandoned before it is thrown away,
-                    // then carry the receipt onto the new board so the player
-                    // is not left wondering where the money came from.
-                    const carried = await awardTetris(game);
-                    game.destroy();
-                    game = new TetrisGame(userId, channelId);
-                    if (carried) game.payoutText = `Previous game: ${carried}`;
-                    activeGames.set(gameKey, game);
-                    game.startFallTimer();
-                    updated = true;
-                    break;
-                }
-                case 'quit': {
-                    const receipt = await awardTetris(game);
-                    game.destroy();
-                    collector.stop();
-                    const endEmbed = new EmbedBuilder()
-                        .setTitle('🎮 Tetris - Game Ended')
-                        .setDescription('Thanks for playing!')
-                        .setColor(0xFF0000)
-                        .addFields(
-                            { name: 'Final Score', value: game.score.toString(), inline: true },
-                            { name: 'Lines Cleared', value: game.lines.toString(), inline: true },
-                            { name: 'Level Reached', value: game.level.toString(), inline: true }
-                        );
-                    if (receipt) endEmbed.addFields({ name: '💰 Payout', value: receipt, inline: false });
-                    return buttonInteraction.update(ui(endEmbed, [], { like: buttonInteraction.message }));
-                }
+            if (reason === 'quit' || reason === 'superseded') return;
+            if (entry.message) {
+                await entry.message.edit(retireControls(entry.message)).catch(() => {});
             }
-
-            // A top-out settles here, on whichever move caused it.
-            if (game.gameOver && !game.paid) {
-                game.payoutText = await awardTetris(game);
-                updated = true;
-            }
-
-            if (updated) {
-                const newEmbed = createGameEmbed(game);
-                const newButtons = createControlButtons(game.gameOver, game.paused);
-                
-                await buttonInteraction.update(
-                    ui(newEmbed, newButtons, { like: buttonInteraction.message }),
-                );
-            } else {
-                await buttonInteraction.deferUpdate();
-            }
-        });
-
-        collector.on('end', () => {
-            if (!game) return;
-            // The buttons are gone and there is nothing left to edit, but the
-            // lines were still cleared, so pay for them.
-            awardTetris(game).catch(error =>
-                logger.error('Tetris payout on expiry failed', { error: error.message }));
-            if (!game.gameOver) game.destroy();
         });
     },
+
+    // Exported for the shutdown hook and the tests; not part of the command.
+    settleActiveGames,
+    activeGames,
 };
