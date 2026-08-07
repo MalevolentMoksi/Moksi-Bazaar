@@ -58,6 +58,23 @@ const init = async () => {
             user_id TEXT PRIMARY KEY,
             balance BIGINT NOT NULL
         );
+        -- Money a game has taken but not yet resolved.
+        --
+        -- Every wager leaves the balance the instant it is placed, and the hand
+        -- that would give it back lives in an in-memory collector. A deploy
+        -- therefore took the bet and forgot the game, and this bot deploys on
+        -- every push: the interaction handler apologised for it in prose while
+        -- the money stayed gone. A row here is a promise to return that stake
+        -- if the process dies before the game finishes, and it survives the
+        -- crash cases an in-memory registry could not.
+        CREATE TABLE IF NOT EXISTS open_stakes (
+            id           BIGSERIAL PRIMARY KEY,
+            user_id      TEXT NOT NULL,
+            amount       BIGINT NOT NULL,
+            game         TEXT NOT NULL,
+            opened_at_ms BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_open_stakes_opened ON open_stakes(opened_at_ms);
         CREATE TABLE IF NOT EXISTS user_preferences (
             user_id TEXT PRIMARY KEY,
             display_name TEXT,
@@ -485,6 +502,137 @@ async function adjustBalance(userId, delta) {
     }
     logger.debug('Balance adjusted', { userId, delta: amount, newBalance: rows[0].balance });
     return Number(rows[0].balance);
+}
+
+// ── OPEN STAKES ─────────────────────────────────────────────────────────────
+/**
+ * Stake ids this process opened and has not settled. The shutdown sweep works
+ * from this set rather than from the whole table, because Railway overlaps the
+ * old and new containers during a deploy: a blanket refund would hand back
+ * money for a hand the OTHER instance is still dealing.
+ */
+const ownStakeIds = new Set();
+
+/**
+ * Takes a wager and records the debt in one transaction, so there is no
+ * instant where the money has left the balance and nothing promises it back.
+ * @param {string} userId
+ * @param {number} amount positive whole amount to stake
+ * @param {string} game short label, for the refund log
+ * @returns {Promise<{balance: number, stakeId: string}|null>} null on insufficient funds
+ */
+async function placeStake(userId, amount, game) {
+    const value = Math.round(amount);
+    if (!(value > 0)) return null;
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(
+            'INSERT INTO balances (user_id, balance) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [userId, 10000]
+        );
+        const { rows } = await client.query(
+            'UPDATE balances SET balance = balance - $2 WHERE user_id = $1 AND balance - $2 >= 0 RETURNING balance',
+            [userId, value]
+        );
+        if (rows.length === 0) {
+            await client.query('ROLLBACK');
+            return null;
+        }
+        const { rows: stakeRows } = await client.query(
+            'INSERT INTO open_stakes (user_id, amount, game, opened_at_ms) VALUES ($1, $2, $3, $4) RETURNING id',
+            [userId, value, String(game || 'game').slice(0, 32), Date.now()]
+        );
+        await client.query('COMMIT');
+
+        const stakeId = String(stakeRows[0].id);
+        ownStakeIds.add(stakeId);
+        return { balance: Number(rows[0].balance), stakeId };
+    } catch (error) {
+        try { await client.query('ROLLBACK'); } catch { /* connection already gone */ }
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * The game resolved and paid out whatever it owed: the debt is discharged.
+ * Deleting a settled row is what stops the sweeps below refunding a bet that
+ * was already won or lost.
+ * @param {string[]} stakeIds
+ */
+async function settleStakes(stakeIds) {
+    const ids = (Array.isArray(stakeIds) ? stakeIds : [stakeIds]).filter(Boolean).map(String);
+    if (ids.length === 0) return 0;
+    for (const id of ids) ownStakeIds.delete(id);
+    const { rowCount } = await pool.query('DELETE FROM open_stakes WHERE id = ANY($1::bigint[])', [ids]);
+    return rowCount ?? 0;
+}
+
+/**
+ * Hands money back for stakes whose game will never finish. The delete and the
+ * credit share a transaction and the delete takes the row locks, so two sweeps
+ * racing each other cannot pay the same stake twice.
+ * @param {Object} options
+ * @param {string[]} [options.ids] specific stakes (the shutdown sweep)
+ * @param {number} [options.olderThanMs] everything opened before now minus this (the boot sweep)
+ * @returns {Promise<{stakes: number, users: number, total: number}>}
+ */
+async function refundOpenStakes({ ids = null, olderThanMs = null } = {}) {
+    const empty = { stakes: 0, users: 0, total: 0 };
+    if (ids && ids.length === 0) return empty;
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { rows } = ids
+            ? await client.query(
+                'DELETE FROM open_stakes WHERE id = ANY($1::bigint[]) RETURNING id, user_id, amount, game',
+                [ids.map(String)])
+            : await client.query(
+                'DELETE FROM open_stakes WHERE opened_at_ms <= $1 RETURNING id, user_id, amount, game',
+                [Date.now() - Math.max(0, Number(olderThanMs) || 0)]);
+
+        const perUser = new Map();
+        for (const row of rows) {
+            perUser.set(row.user_id, (perUser.get(row.user_id) ?? 0) + Number(row.amount));
+            ownStakeIds.delete(String(row.id));
+        }
+        for (const [userId, amount] of perUser) {
+            await client.query(
+                `INSERT INTO balances (user_id, balance) VALUES ($1, $2)
+                 ON CONFLICT (user_id) DO UPDATE SET balance = balances.balance + $2`,
+                [userId, amount]
+            );
+        }
+        await client.query('COMMIT');
+
+        const total = [...perUser.values()].reduce((sum, n) => sum + n, 0);
+        if (rows.length > 0) {
+            logger.info('[STAKES] Refunded unfinished wagers', {
+                stakes: rows.length, users: perUser.size, total,
+                games: [...new Set(rows.map(r => r.game))],
+            });
+        }
+        return { stakes: rows.length, users: perUser.size, total };
+    } catch (error) {
+        try { await client.query('ROLLBACK'); } catch { /* connection already gone */ }
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+/** The shutdown sweep: only this process's own unfinished games. */
+async function refundOwnStakes() {
+    return refundOpenStakes({ ids: [...ownStakeIds] });
+}
+
+/** Test seam; nothing in the bot needs to read this. */
+function openStakeCount() {
+    return ownStakeIds.size;
 }
 
 /**
@@ -1985,6 +2133,11 @@ module.exports = {
     getBalance,
     updateBalance,
     adjustBalance,
+    placeStake,
+    settleStakes,
+    refundOpenStakes,
+    refundOwnStakes,
+    openStakeCount,
     transferBalance,
     getTopBalances,
     // User Management

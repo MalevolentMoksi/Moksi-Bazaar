@@ -3,7 +3,7 @@
  * Challenge other users to wagered duels with persistent DB-backed state
  */
 
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   getBalance,
   transferBalance,
@@ -14,6 +14,7 @@ const {
   deleteDuel,
   recordGameResult,
 } = require('../../utils/db');
+const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
@@ -39,13 +40,19 @@ module.exports = {
     const me = interaction.user;
     const guild = interaction.guild;
 
+    // Every branch below opens with database work, and accept goes on to fetch
+    // a member from the API and move money. Any of that can outlast Discord's
+    // three-second window, which used to leave the wager transferred and both
+    // players staring at "This interaction failed".
+    await ackPublic(interaction);
+
     // ─── CHALLENGE ─────────────────────────────────────────────────────────
     if (sub === 'challenge') {
       const target = interaction.options.getUser('user');
       const amount = interaction.options.getInteger('amount');
 
       if (target.id === me.id) {
-        return interaction.reply({ content: '❌ You can\'t duel yourself!', flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, '❌ You can\'t duel yourself!');
       }
 
       // Check for existing pending duels in DB, on both sides: the target
@@ -53,16 +60,16 @@ module.exports = {
       // simultaneous wagers backed by the same money.
       const existingDuels = await getPendingDuelsFor(target.id);
       if (existingDuels.length > 0) {
-        return interaction.reply({ content: '❌ That user already has a pending duel.', flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, '❌ That user already has a pending duel.');
       }
       const myOutgoing = await getPendingDuelsFrom(me.id);
       if (myOutgoing.length > 0) {
-        return interaction.reply({ content: '❌ You already have an outgoing duel challenge. Wait for it to be answered or expire.', flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, '❌ You already have an outgoing duel challenge. Wait for it to be answered or expire.');
       }
 
       const myBal = await getBalance(me.id);
       if (myBal < amount) {
-        return interaction.reply({ content: `❌ You only have $${myBal}, cannot wager $${amount}.`, flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, `❌ You only have $${myBal}, cannot wager $${amount}.`);
       }
 
       // Record the pending duel in DB (auto-expires via expires_at column)
@@ -75,14 +82,14 @@ module.exports = {
                         `Type \`/duel accept\` or \`/duel decline\` within ${duelTimeout / 1000} seconds.`)
         .setColor('Blue');
 
-      return interaction.reply(ui(challenge, [], { scope: 'casino' }));
+      return replyPublic(interaction, ui(challenge, [], { scope: 'casino' }));
     }
 
     // ─── ACCEPT ────────────────────────────────────────────────────────────
     if (sub === 'accept') {
       const duels = await getPendingDuelsFor(me.id);
       if (duels.length === 0) {
-        return interaction.reply({ content: '❌ You have no pending duel to accept.', flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, '❌ You have no pending duel to accept.');
       }
       const duel = duels[0];
       await updateDuelStatus(duel.id, 'accepted');
@@ -95,11 +102,11 @@ module.exports = {
       // Check both players still have funds
       if (balA < amount) {
         await deleteDuel(duel.id);
-        return interaction.reply({ content: `❌ ${challenger} no longer has enough funds.`, flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, `❌ ${challenger} no longer has enough funds.`);
       }
       if (balB < amount) {
         await deleteDuel(duel.id);
-        return interaction.reply({ content: '❌ You no longer have enough funds.', flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, '❌ You no longer have enough funds.');
       }
 
       // Determine winner
@@ -112,7 +119,7 @@ module.exports = {
       const transfer = await transferBalance(loser.id, winner.id, amount);
       if (!transfer) {
         await deleteDuel(duel.id);
-        return interaction.reply({ content: '❌ The duel could not be settled: the funds are no longer there.', flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, '❌ The duel could not be settled: the funds are no longer there.');
       }
       const winBal = transfer.toBalance;
       const loseBal = transfer.fromBalance;
@@ -135,14 +142,14 @@ module.exports = {
         )
         .setColor('Green');
 
-      return interaction.reply(ui(result, [], { scope: 'casino' }));
+      return replyPublic(interaction, ui(result, [], { scope: 'casino' }));
     }
 
     // ─── DECLINE ───────────────────────────────────────────────────────────
     if (sub === 'decline') {
       const duels = await getPendingDuelsFor(me.id);
       if (duels.length === 0) {
-        return interaction.reply({ content: '❌ No duel to decline.', flags: MessageFlags.Ephemeral });
+        return replyPrivate(interaction, '❌ No duel to decline.');
       }
       const duel = duels[0];
       await deleteDuel(duel.id);
@@ -153,7 +160,7 @@ module.exports = {
         .setDescription(`${me} declined the duel request from ${challenger}.`)
         .setColor('DarkRed');
 
-      return interaction.reply(ui(declined, [], { scope: 'casino' }));
+      return replyPublic(interaction, ui(declined, [], { scope: 'casino' }));
     }
   }
 };

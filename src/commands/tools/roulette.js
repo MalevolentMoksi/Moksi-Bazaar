@@ -6,6 +6,7 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js'
 const { adjustBalance, recordGameResult } = require('../../utils/db');
 const { considerHeckle } = require('../../utils/casinoHeckle');
 const { deductBet } = require('../../utils/gameHelpers');
+const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
@@ -76,16 +77,17 @@ module.exports = {
       }
     }
 
-    // Deduct bet
-    const deductResult = await deductBet(userId, betAmount);
+    // Everything above is argument parsing, which cannot outrun Discord's
+    // three-second window. The money below can, so claim the interaction here.
+    await ackPublic(interaction);
+
+    const deductResult = await deductBet(userId, betAmount, { game: 'roulette' });
     if (!deductResult.success) {
-      return interaction.reply({
-        content: `❌ ${deductResult.error}`,
-        flags: MessageFlags.Ephemeral,
-      });
+      return replyPrivate(interaction, `❌ ${deductResult.error}`);
     }
 
     let finalBalance = deductResult.newBalance;
+    const stake = deductResult.stake;
 
     // Refund what an even split cannot use, right away
     const remainder = sub === 'number' ? betAmount - betPerNumber * uniqueNumbers.length : 0;
@@ -132,6 +134,8 @@ module.exports = {
     if (payout > 0) {
       finalBalance = await adjustBalance(userId, payout);
     }
+    // The wheel has stopped and the money has moved; nothing is owed back.
+    await stake?.settle();
 
     // The refunded remainder was never at risk, so `staked` is what was
     // actually wagered and is what the statistics should count.
@@ -182,6 +186,6 @@ module.exports = {
         }
       );
 
-    await interaction.reply(ui(embed, [], { scope: 'casino' }));
+    await replyPublic(interaction, ui(embed, [], { scope: 'casino' }));
   }
 };

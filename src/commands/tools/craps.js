@@ -15,6 +15,7 @@ const { adjustBalance, recordGameResult } = require('../../utils/db');
 const { ui } = require('../../utils/ui/panel');
 const { considerHeckle } = require('../../utils/casinoHeckle');
 const { deductBet } = require('../../utils/gameHelpers');
+const { ackPublic, replyPrivate } = require('../../utils/interactionAck');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
 
@@ -72,18 +73,18 @@ module.exports = {
     let bet = interaction.options.getInteger('bet');
     const originalBet = bet;
 
-    // Deduct bet
-    const deductResult = await deductBet(userId, bet);
+    // Acknowledged before the money moves. The deduction used to come first,
+    // so a slow query could take the bet and then miss Discord's three-second
+    // window, leaving the player charged for a game they never saw.
+    await ackPublic(interaction);
+
+    const deductResult = await deductBet(userId, bet, { game: 'craps' });
     if (!deductResult.success) {
-      return interaction.reply({
-        content: `❌ ${deductResult.error}`,
-        flags: MessageFlags.Ephemeral,
-      });
+      return replyPrivate(interaction, `❌ ${deductResult.error}`);
     }
 
     let balance = deductResult.newBalance;
-
-    await interaction.deferReply();
+    let stake = deductResult.stake;
 
     // "Play again" calls runRound() again and edits the same message, so the
     // rendering has to stay whatever that message was born as. Without this a
@@ -99,6 +100,8 @@ module.exports = {
       if (payout > 0) {
         balance = await adjustBalance(userId, payout);
       }
+      // Resolved either way; the bet is no longer owed back on a restart.
+      await stake?.settle();
       recordGameResult(userId, 'craps', { wagered: bet, returned: payout }).catch(() => {});
       considerHeckle({
         channel: interaction.channel,
@@ -160,7 +163,7 @@ module.exports = {
         await btnInt.deferUpdate();
 
         if (btnInt.customId === 'craps_play_again') {
-          const deductAgain = await deductBet(userId, originalBet);
+          const deductAgain = await deductBet(userId, originalBet, { game: 'craps' });
           if (!deductAgain.success) {
             return await btnInt.followUp({
               content: `Could not deduct bet: ${deductAgain.error}`,
@@ -168,6 +171,7 @@ module.exports = {
             });
           }
           balance = deductAgain.newBalance;
+          stake = deductAgain.stake;
           bet = originalBet;
           logger.info('Craps: Player starting new round', { userId, bet });
           // Retire this collector before the next round attaches its own,

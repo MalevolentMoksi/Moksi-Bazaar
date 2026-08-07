@@ -60,11 +60,15 @@ module.exports = {
     // in between.
     await interaction.deferReply();
 
-    const opening = await deductBet(userId, bet);
+    const opening = await deductBet(userId, bet, { game: 'highlow' });
     if (!opening.success) {
       return interaction.editReply(`❌ ${opening.error}`);
     }
     let balance = opening.newBalance;
+    // The longest a wager sits unresolved anywhere in the casino: the bet is
+    // gone the moment the cards appear and the answer waits on a button for a
+    // full minute. Settled on every path below, forfeit included.
+    let stake = opening.stake;
 
     await runRound();
 
@@ -100,6 +104,9 @@ module.exports = {
 
       collector.on('end', async (_collected, reason) => {
         if (reason === 'time') {
+          // Walking away forfeits the bet, which is the existing rule. Settle
+          // it so a later restart does not hand back an abandoned wager.
+          await stake?.settle();
           for (const btn of row.components) btn.setDisabled(true);
           await message.edit(retireControls(message, [row])).catch(() => {});
         }
@@ -132,6 +139,7 @@ module.exports = {
           const after = await adjustBalance(userId, payout);
           if (after !== null) balance = after;
         }
+        await stake?.settle();
         recordGameResult(userId, 'highlow', { wagered: bet, returned: payout }).catch(() => {});
         considerHeckle({
           channel: interaction.channel,
@@ -170,11 +178,12 @@ module.exports = {
           if (b.user.id !== userId) return b.reply({ content: 'Not your game!', flags: MessageFlags.Ephemeral});
           await b.deferUpdate();
           if (b.customId !== 'play_again') return;
-          const again = await deductBet(userId, originalBet);
+          const again = await deductBet(userId, originalBet, { game: 'highlow' });
           if (!again.success) {
             return b.followUp({ content: `❌ ${again.error}`, flags: MessageFlags.Ephemeral });
           }
           balance = again.newBalance;
+          stake = again.stake;
           bet = originalBet;
           againCollector.stop();
           await runRound();

@@ -9,6 +9,8 @@ const {
   MessageFlags
 } = require('discord.js');
 const { getBalance, adjustBalance, recordGameResult } = require('../../utils/db');
+const { createStake } = require('../../utils/gameHelpers');
+const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const { ui, retireControls } = require('../../utils/ui/panel');
 const crypto = require('crypto');
 
@@ -37,7 +39,7 @@ function spinOne() {
   return weightedPool[crypto.randomInt(0, weightedPool.length)];
 }
 
-async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
+async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet, stake) {
   // Step 3) 3× animation (omitted here for brevity)
   for (let i = 0; i < 3; i++) {
     const preview = Array(9).fill().map(() => spinOne().emoji);
@@ -107,6 +109,9 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     balanceAfterSpin = await adjustBalance(userId, payout);
   }
   recordGameResult(userId, 'slots', { wagered: bet, returned: payout }).catch(() => {});
+  // The spin has been paid out either way, so the wager is no longer owed
+  // back. Everything below stakes money that is already banked.
+  await stake?.settle();
 
   // Step 6) Build result embed & buttons
   const resultEmbed = new EmbedBuilder()
@@ -156,15 +161,16 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     if (i.customId === 'play_again') {
       if (spinLock) return;
       spinLock = true;
-      const newBal = await adjustBalance(userId, -bet);
-      if (newBal === null) {
+      const nextStake = createStake(userId, 'slots');
+      const placed = await nextStake.place(bet);
+      if (placed === null) {
         spinLock = false;
         return i.followUp({ content: `❌ You need $${bet} to play again.`, flags: MessageFlags.Ephemeral});
       }
       collector.stop('superseded');
       for (const btn of row.components) btn.setDisabled(true);
       await msg.edit(retireControls(msg, [row]));
-      return handleSpin(msg, spinEmbed, bet, userId, newBal);
+      return handleSpin(msg, spinEmbed, bet, userId, placed.balance, nextStake);
     }
 
     if (collected && i.customId !== 'play_again') return;
@@ -222,10 +228,15 @@ module.exports = {
     const userId = interaction.user.id;
     const bet    = interaction.options.getInteger('amount');
 
-    const balanceAfterBet = await adjustBalance(userId, -bet);
-    if (balanceAfterBet === null) {
+    // Claim the interaction before the money moves: a slow query used to mean
+    // the bet was taken and the reply arrived too late to show the spin.
+    await ackPublic(interaction);
+
+    const stake = createStake(userId, 'slots');
+    const placed = await stake.place(bet);
+    if (placed === null) {
       const balance = await getBalance(userId);
-      return interaction.reply({ content: `❌ You only have $${balance}.`, flags: MessageFlags.Ephemeral});
+      return replyPrivate(interaction, `❌ You only have $${balance}.`);
     }
 
     const spinEmbed = new EmbedBuilder()
@@ -238,7 +249,7 @@ module.exports = {
       );
 
     // define msg here so handleSpin() can use it
-    const msg = await interaction.reply({ ...ui(spinEmbed, [], { scope: 'casino' }), fetchReply: true });
-    await handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet);
+    const msg = await replyPublic(interaction, { ...ui(spinEmbed, [], { scope: 'casino' }), fetchReply: true });
+    await handleSpin(msg, spinEmbed, bet, userId, placed.balance, stake);
   }
 };

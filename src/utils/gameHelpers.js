@@ -5,9 +5,55 @@
 
 const { ComponentType, MessageFlags } = require('discord.js');
 const logger = require('./logger');
-const { getBalance, adjustBalance } = require('./db');
+const { getBalance, placeStake, settleStakes } = require('./db');
 const { getBetLimits } = require('./casinoConfig');
 const { GAME_CONFIG } = require('./constants');
+
+/**
+ * A game's running debt to a player: money already taken, not yet resolved.
+ *
+ * Games hold a stake open from the first bet until the hand finishes paying
+ * out, and the process refunds anything still open when it dies. Settle on
+ * every terminal path, including the ones where the player lost: an unsettled
+ * stake is a bet the next restart will hand back.
+ *
+ * @param {string} userId
+ * @param {string} game short label, e.g. 'blackjack'
+ */
+function createStake(userId, game) {
+    const ids = [];
+    let settled = false;
+
+    return {
+        /**
+         * Takes money and books the debt atomically.
+         * @returns {Promise<{balance: number}|null>} null when funds are short
+         */
+        async place(amount) {
+            if (settled) return null;
+            const result = await placeStake(userId, amount, game);
+            if (!result) return null;
+            ids.push(result.stakeId);
+            return { balance: result.balance };
+        },
+        /** The hand is over and the money has moved; forget the promise. */
+        async settle() {
+            if (settled || ids.length === 0) return;
+            settled = true;
+            const owed = ids.splice(0, ids.length);
+            try {
+                await settleStakes(owed);
+            } catch (error) {
+                // Worst case the next restart refunds a resolved bet. Loud,
+                // because that is real money appearing out of nowhere.
+                logger.error('Could not settle stakes; a restart may refund them', {
+                    userId, game, stakes: owed.length, error: error.message,
+                });
+            }
+        },
+        get open() { return ids.length > 0; },
+    };
+}
 
 /**
  * Validates and deducts a bet from a user's balance
@@ -16,7 +62,8 @@ const { GAME_CONFIG } = require('./constants');
  * @param {Object} options - Configuration options
  * @param {number} options.minBet - Minimum bet allowed (default: 1)
  * @param {number} options.maxBet - Maximum bet allowed (default: Infinity)
- * @returns {Promise<{success: boolean, newBalance?: number, error?: string}>}
+ * @param {string} options.game - Label recorded against the open stake
+ * @returns {Promise<{success: boolean, newBalance?: number, stake?: Object, error?: string}>}
  */
 async function deductBet(userId, betAmount, options = {}) {
   try {
@@ -46,9 +93,11 @@ async function deductBet(userId, betAmount, options = {}) {
       };
     }
 
-    // Atomic deduction; null means the guard blocked a negative balance
-    const newBalance = await adjustBalance(userId, -betAmount);
-    if (newBalance === null) {
+    // Atomic deduction plus the promise to give it back if the bot dies
+    // mid-hand; null means the guard blocked a negative balance.
+    const stake = options.stake ?? createStake(userId, options.game ?? 'game');
+    const placed = await stake.place(betAmount);
+    if (placed === null) {
       const balance = await getBalance(userId);
       return {
         success: false,
@@ -59,12 +108,13 @@ async function deductBet(userId, betAmount, options = {}) {
     logger.info('Bet deducted', {
       userId,
       betAmount,
-      newBalance,
+      newBalance: placed.balance,
     });
 
     return {
       success: true,
-      newBalance,
+      newBalance: placed.balance,
+      stake,
     };
   } catch (error) {
     logger.error('Error deducting bet', { userId, betAmount, error: error.message });
@@ -213,6 +263,7 @@ function calculateBlackjackTotal(cards) {
 }
 
 module.exports = {
+  createStake,
   deductBet,
   validateBetAmount,
   createPlayAgainCollector,

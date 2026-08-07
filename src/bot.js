@@ -9,13 +9,20 @@ const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
 const logger = require('./utils/logger');
 const { validateEnvironmentVars } = require('./utils/validateEnvironment');
-const { pool } = require('./utils/db');
+const { pool, refundOwnStakes, refundOpenStakes } = require('./utils/db');
 const { stopJanitor } = require('./utils/janitor');
 const { flush: activityFlush, stopAutoFlush: stopActivityFlush } = require('./utils/joinGate/activity');
 const { startDashboard } = require('./web/server');
 
 /** Railway allows roughly 10s between SIGTERM and SIGKILL; stay inside it. */
 const SHUTDOWN_TIMEOUT_MS = 8000;
+/**
+ * How stale an unfinished wager has to be before a fresh process assumes the
+ * game behind it is dead. Comfortably past the longest collector in the casino
+ * (blackjack, two minutes per action), because Railway overlaps the old and
+ * new containers during a deploy and a live hand must never be swept.
+ */
+const STALE_STAKE_MS = 10 * 60 * 1000;
 
 // Use console as fallback for critical startup errors
 console.log('[STARTUP] Starting Moksi\'s Bazaar bot...');
@@ -89,6 +96,16 @@ function initializeBot() {
   client.handleEvents();
   client.handleCommands();
 
+  // Anything a previous process took and never resolved. The shutdown hook
+  // below covers clean deploys; this covers the crashes and hard kills it
+  // cannot, and the staleness bound keeps it off games another container may
+  // still be dealing during a deploy overlap.
+  refundOpenStakes({ olderThanMs: STALE_STAKE_MS })
+    .then(({ stakes, total }) => {
+      if (stakes > 0) logger.info('Returned wagers abandoned by a previous run', { stakes, total });
+    })
+    .catch(error => logger.error('Stale stake sweep failed', { error: error.message }));
+
   // The owner dashboard, sharing this process. startDashboard() returns null
   // (and the bot runs exactly as before) unless its env vars are all set; it
   // catches its own failures, so nothing on this path can prevent login.
@@ -156,6 +173,18 @@ function initializeBot() {
         dashboard.closeIdleConnections?.();
         logger.info('Dashboard closed to new connections');
       } catch { /* already down is fine */ }
+    }
+
+    // First, because it is the one thing here that costs a member money if it
+    // is skipped. Every game in flight dies with this process, and its wager
+    // already left the balance; hand it back before anything else competes
+    // for the budget. Only this process's own stakes, so a container that is
+    // already serving the next deploy keeps its live hands.
+    try {
+      const { stakes, users, total } = await refundOwnStakes();
+      if (stakes > 0) logger.info('Returned wagers from games killed by shutdown', { stakes, users, total });
+    } catch (error) {
+      logger.error('Could not refund open wagers on shutdown', { error: error.message });
     }
 
     // Before the pool closes: a minute of buffered message counts is cheap to

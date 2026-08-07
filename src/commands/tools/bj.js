@@ -78,12 +78,18 @@ module.exports = {
       return interaction.editReply('💰 That comes to nothing. Bet something you have.');
     }
 
-    const opening = await deductBet(userId, openingBet);
+    const opening = await deductBet(userId, openingBet, { game: 'blackjack' });
     if (!opening.success) {
       return interaction.editReply(`💰 ${opening.error}`);
     }
 
     let balance = opening.newBalance;
+    /**
+     * What the table owes back if the process dies mid-hand. Held per round,
+     * grown by doubles and splits, discharged by settle() once the payout has
+     * landed. A deploy used to keep the whole thing.
+     */
+    let roundStake = opening.stake;
     // Everything staked and everything returned across this /bj session, so the
     // footer can show what the seat has actually cost.
     const session = { wagered: openingBet, returned: 0 };
@@ -322,24 +328,24 @@ module.exports = {
           current.surrendered = true;
           current.done = true;
         } else if (btn.customId === 'bj_double') {
-          const after = await adjustBalance(userId, -current.bet);
+          const after = await roundStake.place(current.bet);
           if (after === null) {
             await btn.followUp({ content: 'Not enough to double.', flags: MessageFlags.Ephemeral });
             return playHand(state, message);
           }
-          balance = after;
+          balance = after.balance;
           session.wagered += current.bet;
           current.bet *= 2;
           current.doubled = true;
           current.cards.push(BJ.drawCard(state.deck));
           current.done = true;
         } else if (btn.customId === 'bj_split') {
-          const after = await adjustBalance(userId, -current.bet);
+          const after = await roundStake.place(current.bet);
           if (after === null) {
             await btn.followUp({ content: 'Not enough to split.', flags: MessageFlags.Ephemeral });
             return playHand(state, message);
           }
-          balance = after;
+          balance = after.balance;
           session.wagered += current.bet;
           const aces = current.cards[0].rank === 'A';
           const left = BJ.makeHand(
@@ -399,6 +405,9 @@ module.exports = {
         const after = await adjustBalance(userId, returned);
         if (after !== null) balance = after;
       }
+      // Paid out, win or lose: the table owes nothing back now. Settled after
+      // the payout rather than before, so a crash in between still refunds.
+      await roundStake?.settle();
       session.returned += returned;
 
       const staked = state.hands.reduce((sum, h) => sum + h.bet, 0);
@@ -458,11 +467,12 @@ module.exports = {
           : btn.customId === 'bj_again_half' ? Math.max(1, Math.floor(lastBet / 2))
             : lastBet;
 
-        const deducted = await deductBet(userId, next);
+        const deducted = await deductBet(userId, next, { game: 'blackjack' });
         if (!deducted.success) {
           return btn.followUp({ content: `💰 ${deducted.error}`, flags: MessageFlags.Ephemeral });
         }
         balance = deducted.newBalance;
+        roundStake = deducted.stake;
         session.wagered += next;
         collector.stop('next_round');
         logger.info('Blackjack: next round', { userId, bet: next });

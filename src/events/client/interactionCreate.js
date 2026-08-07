@@ -108,7 +108,8 @@ module.exports = {
                         // button dies seconds old. Claiming it timed out sends
                         // the owner hunting a cooldown bug that is not there.
                         content: 'That one\'s dead. Either it timed out, or the bot restarted and forgot '
-                            + 'the game (a deploy does that). Run the command again.',
+                            + 'the game (a deploy does that). Any bet still on the table was returned to '
+                            + 'your balance. Run the command again.',
                         flags: MessageFlags.Ephemeral,
                     });
                 } catch {
