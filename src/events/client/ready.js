@@ -8,6 +8,7 @@ const { initWarnReminderScheduler } = require('../../utils/warnReminderScheduler
 const { initJoinGate } = require('../../utils/joinGate');
 const { startJanitor } = require('../../utils/janitor');
 const { startBackupScheduler } = require('../../utils/backup');
+const { startTweetMirror } = require('../../utils/tweetMirror');
 const { loadModes } = require('../../utils/ui/mode');
 const { ui } = require('../../utils/ui/panel');
 const { EMBED_COLORS } = require('../../utils/constants');
@@ -97,6 +98,9 @@ module.exports = {
     await runBootStep(results, 'Join gate', () => initJoinGate(client));
     await runBootStep(results, 'Janitor', () => startJanitor());
     await runBootStep(results, 'Backup scheduler', () => startBackupScheduler(client));
+    // Costs money per request, so it stays inert until a channel is set and
+    // goes quiet again the moment the monthly cap is reached.
+    await runBootStep(results, 'Tweet mirror', () => startTweetMirror(client));
 
     const ok = results.filter(r => r.ok).length;
     console.log(`✅ Boot complete: ${ok}/${results.length} subsystems started`);

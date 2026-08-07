@@ -11,6 +11,7 @@ const logger = require('./utils/logger');
 const { validateEnvironmentVars } = require('./utils/validateEnvironment');
 const { pool, refundOwnStakes, refundOpenStakes } = require('./utils/db');
 const { stopJanitor } = require('./utils/janitor');
+const { stopTweetMirror } = require('./utils/tweetMirror');
 const { flush: activityFlush, stopAutoFlush: stopActivityFlush } = require('./utils/joinGate/activity');
 const { startDashboard } = require('./web/server');
 
@@ -168,6 +169,9 @@ function initializeBot() {
     deadline.unref();
 
     try { stopJanitor(); } catch { /* nothing worth reporting at this point */ }
+    // Stops a poll from starting inside the shutdown window and paying for a
+    // request whose results this process will not live long enough to post.
+    try { stopTweetMirror(); } catch { /* nothing worth reporting at this point */ }
 
     // The dashboard goes first: stop accepting requests while the gateway and
     // the pool are still alive to finish the ones in flight. Not awaited: a

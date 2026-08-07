@@ -428,6 +428,14 @@ const init = async () => {
             key   TEXT PRIMARY KEY,
             value JSONB NOT NULL
         );
+        -- Every X post the tweet mirror has already put in the channel. This
+        -- exists purely so a post cannot appear twice; see claimTweet.
+        CREATE TABLE IF NOT EXISTS mirrored_tweets (
+            tweet_id     TEXT PRIMARY KEY,
+            posted_at_ms BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS mirrored_tweets_posted_idx
+            ON mirrored_tweets (posted_at_ms);
     `);
 
     // Default Settings
@@ -1645,6 +1653,46 @@ function invalidateSpeakConfig(key) {
     else speakConfigCache.clear();
 }
 
+// ── TWEET MIRROR ────────────────────────────────────────────────────────────
+
+/**
+ * Claims a tweet id for posting, atomically.
+ *
+ * Railway keeps the old container alive while the new one boots, so for a
+ * minute or so on every deploy there are two pollers running, both holding the
+ * same cursor and both about to post the same thing. Nothing in the poller can
+ * prevent that on its own, because neither process can see the other.
+ *
+ * The insert is the claim. Exactly one caller gets a row back, whichever
+ * process it belongs to, and only that one posts. It also makes the cursor
+ * safe to rewind: re-reading a window that was already delivered costs a
+ * fraction of a cent and produces no duplicate messages.
+ *
+ * @param {string} tweetId
+ * @returns {Promise<boolean>} true if this process is the one that may post it
+ */
+async function claimTweet(tweetId) {
+    const { rows } = await pool.query(
+        `INSERT INTO mirrored_tweets (tweet_id, posted_at_ms) VALUES ($1, $2)
+         ON CONFLICT (tweet_id) DO NOTHING
+         RETURNING tweet_id`,
+        [String(tweetId), Date.now()]
+    );
+    return rows.length > 0;
+}
+
+/**
+ * Drops claim rows old enough that the cursor can never reach them again.
+ * @returns {Promise<number>} rows removed
+ */
+async function pruneMirroredTweets(olderThanMs = 30 * 24 * 60 * 60 * 1000) {
+    const { rowCount } = await pool.query(
+        'DELETE FROM mirrored_tweets WHERE posted_at_ms < $1',
+        [Date.now() - olderThanMs]
+    );
+    return rowCount ?? 0;
+}
+
 async function getSpeakProfile(userId) {
     const { rows } = await pool.query(
         'SELECT profile, exchanges_at_distill, updated_at_ms FROM speak_profiles WHERE user_id = $1',
@@ -2136,6 +2184,9 @@ module.exports = {
     getSpeakConfigValue,
     setSpeakConfigValue,
     invalidateSpeakConfig,
+    // Tweet mirror
+    claimTweet,
+    pruneMirroredTweets,
     getSpeakProfile,
     saveSpeakProfile,
     deleteSpeakProfile,

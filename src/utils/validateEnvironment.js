@@ -18,6 +18,9 @@ function validateEnvironmentVars() {
     // The owner dashboard. All three (plus CLIENT_ID) must be set for it to
     // start; with any missing it logs one line and the bot runs unchanged.
     'DISCORD_CLIENT_SECRET', 'SESSION_SECRET', 'DASHBOARD_BASE_URL',
+    // twitterapi.io, for the X mirror. Without it the mirror never fires a
+    // request and the rest of the bot is unaffected.
+    'TWITTERAPI_KEY',
   ];
 
   logger.info('Validating environment variables...');
