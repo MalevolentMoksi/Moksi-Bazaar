@@ -8,6 +8,7 @@ require('dotenv').config();
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const fs = require('fs');
 const logger = require('./utils/logger');
+const { registerBundledFonts } = require('./utils/media/fontSetup');
 const { validateEnvironmentVars } = require('./utils/validateEnvironment');
 const { pool, refundOwnStakes, refundOpenStakes } = require('./utils/db');
 const { stopJanitor } = require('./utils/janitor');
@@ -27,6 +28,11 @@ const STALE_STAKE_MS = 10 * 60 * 1000;
 
 // Use console as fallback for critical startup errors
 console.log('[STARTUP] Starting Moksi\'s Bazaar bot...');
+
+// Before anything renders text: fontconfig reads its config once, on first
+// use, so this has to happen ahead of the first /caption rather than lazily
+// inside it.
+registerBundledFonts();
 
 // Perform startup validations
 (async () => {
