@@ -9,6 +9,7 @@ const {
   MessageFlags
 } = require('discord.js');
 const { getBalance, adjustBalance, recordGameResult } = require('../../utils/db');
+const { ui, retireControls } = require('../../utils/ui/panel');
 const crypto = require('crypto');
 
 // -- SYMBOL DEFINITIONS --------------------------------------------------
@@ -46,7 +47,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       `${preview[6]} ${preview[7]} ${preview[8]}`;
     spinEmbed.data.fields[2].value = grid;
     spinEmbed.setFooter({ text: `Balance: $${balanceAfterBet}` });
-    await msg.edit({ embeds: [spinEmbed], components: [] });
+    await msg.edit(ui(spinEmbed, [], { like: msg }));
     await new Promise(r => setTimeout(r, 400));
   }
 
@@ -138,7 +139,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     );
   }
 
-  await msg.edit({ embeds: [resultEmbed], components: [row] });
+  await msg.edit(ui(resultEmbed, [row], { like: msg }));
 
   // Step 7) Collector for Double/Collect/Play Again
   const collector = msg.createMessageComponentCollector({
@@ -162,7 +163,7 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
       }
       collector.stop('superseded');
       for (const btn of row.components) btn.setDisabled(true);
-      await msg.edit({ components: [row] });
+      await msg.edit(retireControls(msg, [row]));
       return handleSpin(msg, spinEmbed, bet, userId, newBal);
     }
 
@@ -197,12 +198,12 @@ async function handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet) {
     const againRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('play_again').setLabel('Play Again').setStyle(ButtonStyle.Success)
     );
-    await msg.edit({ embeds: [resultEmbed], components: [againRow] });
+    await msg.edit(ui(resultEmbed, [againRow], { like: msg }));
   });
 
   collector.on('end', async (_, reason) => {
     if (reason !== 'time') return;
-    try { await msg.edit({ components: [] }); } catch {}
+    try { await msg.edit(retireControls(msg)); } catch {}
   });
 }
 
@@ -237,7 +238,7 @@ module.exports = {
       );
 
     // define msg here so handleSpin() can use it
-    const msg = await interaction.reply({ embeds: [spinEmbed], fetchReply: true });
+    const msg = await interaction.reply({ ...ui(spinEmbed, [], { scope: 'casino' }), fetchReply: true });
     await handleSpin(msg, spinEmbed, bet, userId, balanceAfterBet);
   }
 };

@@ -8,6 +8,8 @@ const { initWarnReminderScheduler } = require('../../utils/warnReminderScheduler
 const { initJoinGate } = require('../../utils/joinGate');
 const { startJanitor } = require('../../utils/janitor');
 const { startBackupScheduler } = require('../../utils/backup');
+const { loadModes } = require('../../utils/ui/mode');
+const { ui } = require('../../utils/ui/panel');
 const { EMBED_COLORS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
 
@@ -59,7 +61,7 @@ async function reportBootFailures(client, results) {
 
   try {
     const owner = await client.users.fetch(ownerId);
-    await owner.send({ embeds: [embed] });
+    await owner.send(ui(embed, [], { scope: 'misc' }));
   } catch (error) {
     // Closed DMs are the owner's choice; the log line above already has it all.
     logger.warn('Could not DM boot report to owner', { error: error.message });
@@ -84,6 +86,9 @@ module.exports = {
 
     const results = [];
 
+    // Before anything can render a panel, so the very first message of the
+    // session already agrees with the toggle.
+    await runBootStep(results, 'Embed mode', () => loadModes());
     await runBootStep(results, 'Presence', () => initUptimePresence(client));
     await runBootStep(results, 'Reminder scheduler', () => startReminderScheduler(client));
     await runBootStep(results, 'Warn reminder scheduler', () => initWarnReminderScheduler(client));

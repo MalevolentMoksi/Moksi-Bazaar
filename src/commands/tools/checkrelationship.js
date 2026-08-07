@@ -8,6 +8,7 @@ const { createRelationshipEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
 const { isOwner, ATTITUDE_INSTRUCTIONS } = require('../../utils/constants');
 const { trendDirection } = require('../../utils/trend');
+const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
 // ── TREND CALCULATION ───────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ module.exports = {
         }
       }
 
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply(ui(embed, [], { scope: 'speak' }));
     } catch (error) {
       await handleCommandError(interaction, error, {
         targetUser: interaction.options.getUser('user')?.id

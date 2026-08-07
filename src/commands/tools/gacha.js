@@ -12,6 +12,7 @@ const {
 } = require('../../utils/db');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
+const { ui } = require('../../utils/ui/panel');
 
 function getTierRewardBounds(tier) {
   if (Array.isArray(tier?.range) && tier.range.length >= 2) {
@@ -123,6 +124,6 @@ module.exports = {
         inline: false
       });
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply(ui(embed, [], { scope: 'casino' }));
   }
 };

@@ -1,6 +1,7 @@
 // src/commands/tools/currency.js
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { getBalance, updateBalance, getTopBalances } = require('../../utils/db');
+const { ui } = require('../../utils/ui/panel');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -80,7 +81,7 @@ module.exports = {
         )
         .setColor('Gold');
 
-      return interaction.editReply({ embeds: [embed] });
+      return interaction.editReply(ui(embed, [], { scope: 'casino' }));
     }
   }
 };

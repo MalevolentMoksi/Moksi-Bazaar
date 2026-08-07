@@ -3,6 +3,7 @@ const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { getUserContext, getRecentMemories, pool } = require('../../utils/db.js');
 const { createStatsEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
+const { ui } = require('../../utils/ui/panel');
 
 
 module.exports = {
@@ -40,7 +41,7 @@ module.exports = {
 
             const embed = createStatsEmbed(userContext, interaction.user, recentSentiments);
 
-            await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply(ui(embed, [], { scope: 'speak' }));
         } catch (error) {
             await handleCommandError(interaction, error);
         }

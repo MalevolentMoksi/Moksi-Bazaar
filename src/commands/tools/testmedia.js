@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const { processMediaInMessage, getMediaAnalysisProvider } = require('../../utils/db.js');
+const { ui } = require('../../utils/ui/panel');
 
 const TRUNC = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
@@ -171,7 +172,7 @@ module.exports = {
           }
         }
 
-        await interaction.editReply({ embeds });
+        await interaction.editReply(ui(embeds, [], { scope: 'media' }));
 
     } catch (error) { // <--- CATCH BLOCK
         console.error("TestMedia Error:", error);

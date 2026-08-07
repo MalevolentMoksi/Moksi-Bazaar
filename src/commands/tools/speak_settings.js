@@ -26,6 +26,7 @@ const {
 } = require('../../utils/db.js');
 const { DISTILL_EVERY_N } = require('../../utils/speakProfile');
 const { OWNER_REJECTION_JOKES, isOwner, EMBED_COLORS } = require('../../utils/constants');
+const { ui, retireControls, isV2Message } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
 const PANEL_TIMEOUT_MS = 15 * 60_000;
@@ -370,9 +371,13 @@ async function buildPanel(section) {
         case 'users': built = renderUsers(state.blacklist); break;
         default: built = await renderOverview(state);
     }
+    // Embed and rows stay separate: the send site is the only place that knows
+    // whether it is creating a message or editing an existing one, and under
+    // Components V2 that choice cannot be revisited.
     return {
         state,
-        payload: { content: '', embeds: [built.embed], components: [sectionRow(section), ...built.rows].slice(0, 5) },
+        embed: built.embed,
+        rows: [sectionRow(section), ...built.rows].slice(0, 5),
     };
 }
 
@@ -392,8 +397,8 @@ module.exports = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const panel = { section: 'overview' };
-        const { payload } = await buildPanel(panel.section);
-        const message = await interaction.editReply(payload);
+        const opening = await buildPanel(panel.section);
+        const message = await interaction.editReply(ui(opening.embed, opening.rows, { scope: 'speak' }));
 
         const collector = message.createMessageComponentCollector({
             filter: i => i.user.id === interaction.user.id && isOwner(i.user.id),
@@ -402,7 +407,8 @@ module.exports = {
         });
 
         const refresh = async (respondTo) => {
-            const { payload: next } = await buildPanel(panel.section);
+            const rebuilt = await buildPanel(panel.section);
+            const next = ui(rebuilt.embed, rebuilt.rows, { like: message });
             const canUpdate = respondTo && !respondTo.replied && !respondTo.deferred
                 && (typeof respondTo.isFromMessage !== 'function' || respondTo.isFromMessage());
             if (canUpdate) {
@@ -610,6 +616,12 @@ module.exports = {
         });
 
         collector.on('end', async () => {
+            // Under Components V2 there is no `content`, and blanking
+            // `components` would erase the panel rather than its buttons.
+            if (isV2Message(message)) {
+                await interaction.editReply(retireControls(message)).catch(() => {});
+                return;
+            }
             await interaction.editReply({
                 components: [],
                 content: '*Panel timed out. Run `/speak_settings` again to make more changes.*',

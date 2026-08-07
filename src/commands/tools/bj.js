@@ -18,6 +18,7 @@ const { deductBet } = require('../../utils/gameHelpers');
 const { considerHeckle } = require('../../utils/casinoHeckle');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
+const { ui, retireControls } = require('../../utils/ui/panel');
 const BJ = require('../../utils/blackjack');
 
 const TIMEOUT = GAME_CONFIG.BLACKJACK.COLLECTOR_TIMEOUT;
@@ -223,7 +224,11 @@ module.exports = {
       const playerNatural = state.hands[0].natural;
       const upcard = state.dealerCards[0];
 
-      const board = { embeds: [buildEmbed(state)], components: [] };
+      // A rematch edits the table it was dealt on, so it has to keep that
+      // message's rendering; the first deal follows the current setting.
+      const board = gameMessage
+        ? ui(buildEmbed(state), [], { like: gameMessage })
+        : ui(buildEmbed(state), [], { scope: 'casino' });
       if (gameMessage) await gameMessage.edit(board);
       else gameMessage = await interaction.editReply(board);
       const message = gameMessage;
@@ -251,15 +256,13 @@ module.exports = {
         + `Take even money for a certain **${money(bet)}**, or play it out: `
         + `**${money(natural)}** if the dealer has no blackjack, **nothing** if they do.`;
 
-      await message.edit({
-        embeds: [buildEmbed(state, { description })],
-        components: [new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('bj_even_yes')
-            .setLabel(`Take ${money(bet)}`).setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId('bj_even_no')
-            .setLabel('Play it out').setStyle(ButtonStyle.Secondary),
-        )],
-      });
+      const evenRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('bj_even_yes')
+          .setLabel(`Take ${money(bet)}`).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('bj_even_no')
+          .setLabel('Play it out').setStyle(ButtonStyle.Secondary),
+      );
+      await message.edit(ui(buildEmbed(state, { description }), [evenRow], { like: message }));
 
       const collector = message.createMessageComponentCollector({
         componentType: ComponentType.Button, time: TIMEOUT,
@@ -293,7 +296,7 @@ module.exports = {
         return advance(state, message);
       }
 
-      await message.edit({ embeds: [buildEmbed(state)], components: actionRow(actions) });
+      await message.edit(ui(buildEmbed(state), actionRow(actions), { like: message }));
 
       if (roundCollector) roundCollector.stop('superseded');
       const collector = message.createMessageComponentCollector({
@@ -419,10 +422,9 @@ module.exports = {
       });
 
       const lastBet = state.hands[0].doubled ? state.hands[0].bet / 2 : state.hands[0].bet;
-      await message.edit({
-        embeds: [buildEmbed(state, { reveal: true, description })],
-        components: rebetRow(lastBet),
-      });
+      await message.edit(
+        ui(buildEmbed(state, { reveal: true, description }), rebetRow(lastBet), { like: message }),
+      );
       return handleRebet(message, lastBet);
     }
 
@@ -449,7 +451,7 @@ module.exports = {
             .setDescription(`Seat closed. **${signedMoney(net)}** across the session.`)
             .addFields({ name: 'Balance', value: money(balance), inline: true });
           logger.info('Blackjack: player cashed out', { userId, net, balance });
-          return message.edit({ embeds: [summary], components: [] });
+          return message.edit(ui(summary, [], { like: message }));
         }
 
         const next = btn.customId === 'bj_again_double' ? lastBet * 2
@@ -469,7 +471,7 @@ module.exports = {
 
       collector.on('end', async (_c, reason) => {
         if (reason !== 'time') return;
-        try { await message.edit({ components: [] }); } catch { /* message may be gone */ }
+        try { await message.edit(retireControls(message)); } catch { /* message may be gone */ }
       });
     }
 

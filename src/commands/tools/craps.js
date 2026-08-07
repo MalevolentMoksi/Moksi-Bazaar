@@ -12,6 +12,7 @@ const {
   MessageFlags
 } = require('discord.js');
 const { adjustBalance, recordGameResult } = require('../../utils/db');
+const { ui } = require('../../utils/ui/panel');
 const { considerHeckle } = require('../../utils/casinoHeckle');
 const { deductBet } = require('../../utils/gameHelpers');
 const logger = require('../../utils/logger');
@@ -126,10 +127,11 @@ module.exports = {
           .setStyle(ButtonStyle.Danger)
       );
 
+      const payload = ui(embed, [row], { scope: 'casino' });
       if (interaction.replied || interaction.deferred) {
-        await interaction.editReply({ embeds: [embed], components: [row] });
+        await interaction.editReply(payload);
       } else {
-        await interaction.reply({ embeds: [embed], components: [row] });
+        await interaction.reply(payload);
       }
 
       const message = await interaction.fetchReply();

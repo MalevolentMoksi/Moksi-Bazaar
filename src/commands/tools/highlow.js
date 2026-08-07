@@ -11,6 +11,7 @@ const {
 const { adjustBalance, recordGameResult } = require('../../utils/db');
 const { deductBet } = require('../../utils/gameHelpers');
 const { considerHeckle } = require('../../utils/casinoHeckle');
+const { ui, retireControls } = require('../../utils/ui/panel');
 
 const SUITS = ['♠', '♥', '♦', '♣'];
 const RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
@@ -84,10 +85,11 @@ module.exports = {
         new ButtonBuilder().setCustomId('lower').setLabel('Lower').setStyle(ButtonStyle.Danger)
       );
 
+      const opened = ui(promptEmbed, [row], { scope: 'casino' });
       if (interaction.replied || interaction.deferred) {
-        await interaction.editReply({ embeds: [promptEmbed], components: [row] });
+        await interaction.editReply(opened);
       } else {
-        await interaction.reply({ embeds: [promptEmbed], components: [row] });
+        await interaction.reply(opened);
       }
 
       const message = await interaction.fetchReply();
@@ -99,7 +101,7 @@ module.exports = {
       collector.on('end', async (_collected, reason) => {
         if (reason === 'time') {
           for (const btn of row.components) btn.setDisabled(true);
-          await message.edit({ components: [row] }).catch(() => {});
+          await message.edit(retireControls(message, [row])).catch(() => {});
         }
       });
 
@@ -153,14 +155,14 @@ module.exports = {
           new ButtonBuilder().setCustomId('play_again').setLabel('Play Again').setStyle(ButtonStyle.Primary)
         );
 
-        await interaction.editReply({ embeds: [resultEmbed], components: [againRow] });
+        await interaction.editReply(ui(resultEmbed, [againRow], { like: message }));
 
         const againCollector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
 
         againCollector.on('end', async (_collected, reason) => {
           if (reason === 'time') {
             for (const btn of againRow.components) btn.setDisabled(true);
-            await message.edit({ components: [againRow] }).catch(() => {});
+            await message.edit(retireControls(message, [againRow])).catch(() => {});
           }
         });
 

@@ -4,6 +4,7 @@ const {
     adjustBalance, recordGameResult, setUserCooldown, getUserCooldownRemaining,
 } = require('../../utils/db');
 const logger = require('../../utils/logger');
+const { ui } = require('../../utils/ui/panel');
 
 /**
  * Tetris is the one game here that costs nothing to play, so it had nothing to
@@ -503,7 +504,7 @@ module.exports = {
                 )
                 .setFooter({ text: 'Good luck! Try to clear lines by filling entire rows.' });
 
-            return interaction.reply({ embeds: [helpEmbed], flags: MessageFlags.Ephemeral });
+            return interaction.reply(ui(helpEmbed, [], { scope: 'casino', ephemeral: true }));
         }
 
         let game = activeGames.get(gameKey);
@@ -525,10 +526,7 @@ module.exports = {
         const embed = createGameEmbed(game);
         const buttons = createControlButtons(game.gameOver, game.paused);
 
-        await interaction.reply({
-            embeds: [embed],
-            components: buttons
-        });
+        await interaction.reply(ui(embed, buttons, { scope: 'casino' }));
 
         // Handle button interactions
         const collector = interaction.channel.createMessageComponentCollector({
@@ -597,7 +595,7 @@ module.exports = {
                             { name: 'Level Reached', value: game.level.toString(), inline: true }
                         );
                     if (receipt) endEmbed.addFields({ name: '💰 Payout', value: receipt, inline: false });
-                    return buttonInteraction.update({ embeds: [endEmbed], components: [] });
+                    return buttonInteraction.update(ui(endEmbed, [], { like: buttonInteraction.message }));
                 }
             }
 
@@ -611,10 +609,9 @@ module.exports = {
                 const newEmbed = createGameEmbed(game);
                 const newButtons = createControlButtons(game.gameOver, game.paused);
                 
-                await buttonInteraction.update({
-                    embeds: [newEmbed],
-                    components: newButtons
-                });
+                await buttonInteraction.update(
+                    ui(newEmbed, newButtons, { like: buttonInteraction.message }),
+                );
             } else {
                 await buttonInteraction.deferUpdate();
             }

@@ -14,6 +14,7 @@ const logger = require('../../utils/logger');
 const guard = require('../../utils/joinGate/guard');
 const modlog = require('../../utils/joinGate/modlog');
 const { getSettings } = require('../../utils/joinGate/config');
+const { ui } = require('../../utils/ui/panel');
 
 const ALERT_COLOR = 0xd64545;
 
@@ -55,7 +56,7 @@ async function alert(guild, settings, verdict, client) {
         const channel = guild.channels.cache.get(channelId)
             ?? await guild.channels.fetch(channelId).catch(() => null);
         if (channel?.isTextBased()) {
-            await channel.send({ embeds: [embed] }).catch(error =>
+            await channel.send(ui(embed, [], { scope: 'mod' })).catch(error =>
                 logger.warn('[GUARD] Could not post alert', { error: error.message }));
         }
     }
@@ -64,7 +65,7 @@ async function alert(guild, settings, verdict, client) {
     // unreadable, so the DM is the copy that actually arrives.
     if (settings.guard_dm_owner && process.env.OWNER_ID) {
         const owner = await client.users.fetch(process.env.OWNER_ID).catch(() => null);
-        await owner?.send({ embeds: [embed] }).catch(() => { /* DMs closed */ });
+        await owner?.send(ui(embed, [], { scope: 'mod' })).catch(() => { /* DMs closed */ });
     }
 }
 

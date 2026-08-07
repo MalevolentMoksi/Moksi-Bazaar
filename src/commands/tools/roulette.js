@@ -6,6 +6,7 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js'
 const { adjustBalance, recordGameResult } = require('../../utils/db');
 const { considerHeckle } = require('../../utils/casinoHeckle');
 const { deductBet } = require('../../utils/gameHelpers');
+const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
 // Numbers colored red in European roulette
@@ -181,6 +182,6 @@ module.exports = {
         }
       );
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply(ui(embed, [], { scope: 'casino' }));
   }
 };

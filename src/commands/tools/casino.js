@@ -18,6 +18,7 @@ const {
 const { bestTitle } = require('../../utils/shopCatalogue');
 const { getAllSettings, setSetting, DEFAULTS, LIMITS } = require('../../utils/casinoConfig');
 const { lastHeckleResult } = require('../../utils/casinoHeckle');
+const { ui, retireControls } = require('../../utils/ui/panel');
 const { promptModal } = require('../../utils/panelHelpers');
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
@@ -99,7 +100,7 @@ async function renderProfile(interaction, target) {
     if (daily) footer.push(`daily streak ${daily.streak} (best ${daily.bestStreak})`);
     embed.setFooter({ text: footer.join(' · ') });
 
-    return interaction.editReply({ embeds: [embed] });
+    return interaction.editReply(ui(embed, [], { scope: 'casino' }));
 }
 
 // ── Leaderboard ─────────────────────────────────────────────────────────────
@@ -114,13 +115,13 @@ async function renderLeaderboard(interaction, direction) {
         return `${rank} <@${r.userId}> ${signed(r.net)} -# over ${r.rounds.toLocaleString()} rounds`;
     });
 
-    return interaction.editReply({
-        embeds: [new EmbedBuilder()
-            .setColor(direction === 'down' ? EMBED_COLORS.ERROR : EMBED_COLORS.SUCCESS)
-            .setTitle(title)
-            .setDescription(lines.join('\n'))
-            .setFooter({ text: 'Lifetime net across every game' })],
-    });
+    const board = new EmbedBuilder()
+        .setColor(direction === 'down' ? EMBED_COLORS.ERROR : EMBED_COLORS.SUCCESS)
+        .setTitle(title)
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: 'Lifetime net across every game' });
+
+    return interaction.editReply(ui(board, [], { scope: 'casino' }));
 }
 
 // ── Owner config panel ──────────────────────────────────────────────────────
@@ -200,10 +201,9 @@ const range = key => `${LIMITS[key].min} to ${LIMITS[key].max}`;
 async function renderConfig(interaction) {
     let settings = await getAllSettings();
     let lastResult = await lastHeckleResult().catch(() => null);
-    const message = await interaction.editReply({
-        embeds: [configEmbed(settings, lastResult)],
-        components: configRows(settings),
-    });
+    const message = await interaction.editReply(
+        ui(configEmbed(settings, lastResult), configRows(settings), { scope: 'casino' }),
+    );
 
     const collector = message.createMessageComponentCollector({
         componentType: ComponentType.Button,
@@ -213,7 +213,10 @@ async function renderConfig(interaction) {
     const refresh = async (source) => {
         settings = await getAllSettings();
         lastResult = await lastHeckleResult().catch(() => null);
-        const payload = { embeds: [configEmbed(settings, lastResult)], components: configRows(settings) };
+        // `like` pins the rendering to whatever this message was born as: the
+        // Components V2 flag cannot be added or removed after the fact, so a
+        // toggle flipped mid-panel must not change the shape of an edit.
+        const payload = ui(configEmbed(settings, lastResult), configRows(settings), { like: message });
         // A modal submission has its own token and has to answer itself; a
         // plain button press edits the panel it came from.
         if (source?.isModalSubmit?.()) return source.update(payload);
@@ -292,7 +295,7 @@ async function renderConfig(interaction) {
 
     collector.on('end', async (_c, reason) => {
         if (reason !== 'time') return;
-        try { await message.edit({ components: [] }); } catch { /* panel may be gone */ }
+        try { await message.edit(retireControls(message)); } catch { /* panel may be gone */ }
     });
 }
 

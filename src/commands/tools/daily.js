@@ -10,6 +10,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { adjustBalance, claimDaily, getDailyState } = require('../../utils/db');
 const { getSetting } = require('../../utils/casinoConfig');
+const { ui } = require('../../utils/ui/panel');
 const { EMBED_COLORS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
 
@@ -57,16 +58,15 @@ module.exports = {
             const nextReset = new Date();
             nextReset.setUTCHours(24, 0, 0, 0);
             const stamp = Math.floor(nextReset.getTime() / 1000);
-            return interaction.editReply({
-                embeds: [new EmbedBuilder()
-                    .setColor(EMBED_COLORS.NEUTRAL)
-                    .setTitle('Already claimed today')
-                    .setDescription(`Next one <t:${stamp}:R>.`)
-                    .addFields(
-                        { name: 'Streak', value: `${state?.streak ?? 0} days`, inline: true },
-                        { name: 'Best', value: `${state?.bestStreak ?? 0} days`, inline: true },
-                    )],
-            });
+            const claimed = new EmbedBuilder()
+                .setColor(EMBED_COLORS.NEUTRAL)
+                .setTitle('Already claimed today')
+                .setDescription(`Next one <t:${stamp}:R>.`)
+                .addFields(
+                    { name: 'Streak', value: `${state?.streak ?? 0} days`, inline: true },
+                    { name: 'Best', value: `${state?.bestStreak ?? 0} days`, inline: true },
+                );
+            return interaction.editReply(ui(claimed, [], { scope: 'casino' }));
         }
 
         const amount = await payoutFor(result.streak);
@@ -90,6 +90,6 @@ module.exports = {
         embed.setFooter({ text: `${result.totalClaims} claimed in total` });
 
         logger.info('Daily claimed', { userId, amount, streak: result.streak });
-        return interaction.editReply({ embeds: [embed] });
+        return interaction.editReply(ui(embed, [], { scope: 'casino' }));
     },
 };

@@ -12,6 +12,7 @@ const {
     ComponentType, MessageFlags,
 } = require('discord.js');
 const { getBalance, getInventory, purchaseItem } = require('../../utils/db');
+const { ui, retireControls } = require('../../utils/ui/panel');
 const {
     TIERS, TIER_ORDER, ITEMS, getItem, priceOf, bestTitle,
 } = require('../../utils/shopCatalogue');
@@ -81,10 +82,9 @@ async function runShop(interaction) {
     let balance = await getBalance(userId);
     let ownedIds = new Set((await getInventory(userId)).map(i => i.itemId));
 
-    const message = await interaction.editReply({
-        embeds: [shopEmbed(balance, ownedIds)],
-        components: shopRows(balance, ownedIds),
-    });
+    const message = await interaction.editReply(
+        ui(shopEmbed(balance, ownedIds), shopRows(balance, ownedIds), { scope: 'casino' }),
+    );
 
     const collector = message.createMessageComponentCollector({
         componentType: ComponentType.StringSelect,
@@ -110,10 +110,9 @@ async function runShop(interaction) {
             ownedIds = new Set((await getInventory(userId)).map(inv => inv.itemId));
             logger.info('Shop purchase', { userId, itemId: item.id, price: priceOf(item) });
 
-            await message.edit({
-                embeds: [shopEmbed(balance, ownedIds)],
-                components: shopRows(balance, ownedIds),
-            });
+            await message.edit(
+                ui(shopEmbed(balance, ownedIds), shopRows(balance, ownedIds), { like: message }),
+            );
             return i.followUp({
                 content: `${item.emoji} **${item.name}** is yours. ${money(balance)} left.`
                     + (item.title ? `\n-# You may now be addressed as **${item.title}**.` : ''),
@@ -126,7 +125,7 @@ async function runShop(interaction) {
 
     collector.on('end', async (_c, reason) => {
         if (reason !== 'time') return;
-        try { await message.edit({ components: [] }); } catch { /* message may be gone */ }
+        try { await message.edit(retireControls(message)); } catch { /* message may be gone */ }
     });
 }
 
@@ -173,7 +172,7 @@ async function renderCollection(interaction, target) {
         + (title ? `\nCarries the title **${title}**.` : '')
     );
 
-    return interaction.editReply({ embeds: [embed] });
+    return interaction.editReply(ui(embed, [], { scope: 'casino' }));
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────

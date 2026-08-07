@@ -10,6 +10,7 @@
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { transferBalance, getBalance } = require('../../utils/db');
 const { EMBED_COLORS } = require('../../utils/constants');
+const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
 const money = n => `$${Number(n).toLocaleString()}`;
@@ -56,11 +57,11 @@ module.exports = {
 
         logger.info('Payment sent', { from: from.id, to: to.id, amount });
 
-        return interaction.editReply({
-            embeds: [new EmbedBuilder()
-                .setColor(EMBED_COLORS.SUCCESS)
-                .setDescription(`${from} handed ${to} **${money(amount)}**.`)
-                .setFooter({ text: `${from.username} now has $${transfer.fromBalance.toLocaleString()}` })],
-        });
+        const receipt = new EmbedBuilder()
+            .setColor(EMBED_COLORS.SUCCESS)
+            .setDescription(`${from} handed ${to} **${money(amount)}**.`)
+            .setFooter({ text: `${from.username} now has $${transfer.fromBalance.toLocaleString()}` });
+
+        return interaction.editReply(ui(receipt, [], { scope: 'casino' }));
     },
 };

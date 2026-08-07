@@ -4,6 +4,7 @@ const { pool } = require('../../utils/db.js');
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { createOverviewEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
+const { ui, retireControls } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
 // ── DATA GATHERING ────────────────────────────────────────────────────────────
@@ -148,7 +149,7 @@ module.exports = {
             .setDisabled(totalPages === 1)
         );
 
-        const message = await interaction.editReply({ embeds: [embed], components: [row] });
+        const message = await interaction.editReply(ui(embed, [row], { scope: 'speak' }));
 
         const collector = message.createMessageComponentCollector({
           time: 120000 // 2 minutes
@@ -171,15 +172,15 @@ module.exports = {
           row.components[0].setDisabled(currentPage === 1);
           row.components[1].setDisabled(currentPage === totalPages);
 
-          await i.update({ embeds: [newEmbed], components: [row] });
+          await i.update(ui(newEmbed, [row], { like: message }));
         });
 
         collector.on('end', async () => {
           row.components.forEach(btn => btn.setDisabled(true));
-          await message.edit({ components: [row] }).catch(() => {});
+          await message.edit(retireControls(message, [row])).catch(() => {});
         });
       } else {
-        await interaction.editReply({ embeds: [embed] });
+        await interaction.editReply(ui(embed, [], { scope: 'speak' }));
       }
     } catch (error) {
       await handleCommandError(interaction, error);

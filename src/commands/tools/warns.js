@@ -10,6 +10,7 @@
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { getWarns } = require('../../utils/db');
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
+const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
 const RECENT_WINDOW_MS = 90 * 86_400_000;
@@ -81,7 +82,7 @@ module.exports = {
                 embed.setFooter({ text: `Showing the 10 most recent of ${warns.length}` });
             }
 
-            return interaction.editReply({ embeds: [embed] });
+            return interaction.editReply(ui(embed, [], { scope: 'mod' }));
         } catch (error) {
             logger.error('Warn lookup failed', { error: error.message, stack: error.stack });
             return interaction.editReply(`Could not read that: ${error.message}`);

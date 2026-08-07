@@ -5,14 +5,28 @@ const {
     scheduleNext,
 } = require('../../utils/warnReminderScheduler');
 const { isOwner } = require('../../utils/constants');
+const { ui, retireControls, isV2Message } = require('../../utils/ui/panel');
 
 const WARN_GUILD_ID = '1271818662839451699';
+const EMPTY_TEXT = 'No pending warn reminders.';
+
+/**
+ * Components V2 forbids `content` outright, so the empty state cannot stay a
+ * bare string once a panel is rendering that way. On classic embeds it still
+ * is one, exactly as before.
+ */
+function emptyPayload(message) {
+    if (message && isV2Message(message)) {
+        return ui(new EmbedBuilder().setDescription(EMPTY_TEXT), [], { like: message });
+    }
+    return { content: EMPTY_TEXT, embeds: [], components: [] };
+}
 
 async function buildListEmbed(client) {
     const reminders = await getAllWarnReminders();
 
     if (reminders.length === 0) {
-        return { content: 'No pending warn reminders.', embeds: [], components: [] };
+        return { embed: null, rows: [] };
     }
 
     const embed = new EmbedBuilder()
@@ -51,7 +65,7 @@ async function buildListEmbed(client) {
         rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
     }
 
-    return { content: null, embeds: [embed], components: rows };
+    return { embed, rows };
 }
 
 module.exports = {
@@ -73,13 +87,13 @@ module.exports = {
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const { content, embeds, components } = await buildListEmbed(interaction.client);
+        const { embed, rows: components } = await buildListEmbed(interaction.client);
 
-        if (!embeds.length) {
-            return interaction.editReply({ content });
+        if (!embed) {
+            return interaction.editReply({ content: EMPTY_TEXT });
         }
 
-        const reply = await interaction.editReply({ embeds, components });
+        const reply = await interaction.editReply(ui(embed, components, { scope: 'mod' }));
 
         const collector = reply.createMessageComponentCollector({
             filter: i => i.user.id === interaction.user.id,
@@ -93,11 +107,11 @@ module.exports = {
                 await deleteWarnReminder(reminderId);
                 await scheduleNext(interaction.client);
                 const refreshed = await buildListEmbed(interaction.client);
-                if (!refreshed.embeds.length) {
-                    await btn.update({ content: 'No pending warn reminders.', embeds: [], components: [] });
+                if (!refreshed.embed) {
+                    await btn.update(emptyPayload(btn.message));
                     collector.stop();
                 } else {
-                    await btn.update(refreshed);
+                    await btn.update(ui(refreshed.embed, refreshed.rows, { like: btn.message }));
                 }
             } catch {
                 await btn.reply({ content: 'Failed to cancel reminder.', flags: MessageFlags.Ephemeral });
@@ -110,7 +124,7 @@ module.exports = {
                 row.components.forEach(btn => newRow.addComponents(ButtonBuilder.from(btn).setDisabled(true)));
                 return newRow;
             });
-            await interaction.editReply({ components: disabledRows }).catch(() => {});
+            await interaction.editReply(retireControls(reply, disabledRows)).catch(() => {});
         });
     },
 };

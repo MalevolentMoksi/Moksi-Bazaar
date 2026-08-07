@@ -3,6 +3,7 @@
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db.js');
 const { SLEEPY_GUILDS } = require('../../utils/constants');
+const { ui } = require('../../utils/ui/panel');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -113,7 +114,7 @@ module.exports = {
           );
         }
 
-        return interaction.editReply({ embeds: [embed] });
+        return interaction.editReply(ui(embed, [], { scope: 'misc' }));
       }
     } catch (err) {
       console.error('Sleepy command error:', err);

@@ -6,6 +6,7 @@ const { isGifInput } = require('../../utils/media/formatHelpers');
 const { probeFile } = require('../../utils/media/ffmpegUtils');
 const { cleanup } = require('../../utils/media/tempFiles');
 const { uncaption } = require('../../utils/media/uncaptionUtils');
+const { ui } = require('../../utils/ui/panel');
 
 const uncaptionCmd = {
     data: new SlashCommandBuilder()
@@ -106,7 +107,7 @@ const info = {
                 .setTitle('📊 Media Info')
                 .setDescription(lines.join('\n'))
                 .setColor(0x5865F2);
-            await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply(ui(embed, [], { scope: 'media' }));
         } catch (err) {
             try { await interaction.editReply(`❌ Could not read that media: ${err.message}`); } catch {}
         } finally {

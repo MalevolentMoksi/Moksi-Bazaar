@@ -3,6 +3,7 @@
 
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db');
+const { ui } = require('../../utils/ui/panel');
 const { randomUUID } = require('crypto');
 
 let schedulerTimer = null;
@@ -422,10 +423,7 @@ module.exports = {
 
             if (sub === 'list') {
                 const { embed, components } = await createRemindersEmbed(interaction.user.id, interaction.client);
-                const reply = await interaction.editReply({
-                    embeds: [embed],
-                    components: components
-                });
+                const reply = await interaction.editReply(ui(embed, components, { scope: 'misc' }));
 
                 if (components.length > 0) {
                     // Create collector for button interactions
@@ -444,10 +442,9 @@ module.exports = {
 
                                 // Update the embed
                                 const { embed: newEmbed, components: newComponents } = await createRemindersEmbed(interaction.user.id, interaction.client);
-                                await buttonInteraction.update({
-                                    embeds: [newEmbed],
-                                    components: newComponents
-                                });
+                                await buttonInteraction.update(
+                                    ui(newEmbed, newComponents, { like: buttonInteraction.message }),
+                                );
                             } catch (error) {
                                 console.error('Error deleting reminder:', error);
                                 await buttonInteraction.reply({
@@ -471,10 +468,7 @@ module.exports = {
                         });
 
                         try {
-                            await interaction.editReply({
-                                embeds: [embed],
-                                components: disabledComponents
-                            });
+                            await interaction.editReply(ui(embed, disabledComponents, { like: reply }));
                         } catch (error) {
                             // Interaction might be deleted, ignore error
                         }

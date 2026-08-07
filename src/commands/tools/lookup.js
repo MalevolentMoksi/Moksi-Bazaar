@@ -27,6 +27,7 @@ const { getPendingUnbans } = require('../../utils/joinGate/unbanScheduler');
 const { bestTitle } = require('../../utils/shopCatalogue');
 const { trendDirection } = require('../../utils/trend');
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
+const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
 
 const DAY_MS = 86_400_000;
@@ -251,7 +252,7 @@ async function run(interaction, target) {
 
     try {
         const embed = await buildDossier(interaction, target);
-        return interaction.editReply({ embeds: [embed] });
+        return interaction.editReply(ui(embed, [], { scope: 'mod' }));
     } catch (error) {
         logger.error('Lookup failed', { targetId: target.id, error: error.message, stack: error.stack });
         return interaction.editReply(`Could not assemble that: ${error.message}`);

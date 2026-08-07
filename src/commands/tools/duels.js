@@ -16,6 +16,7 @@ const {
 } = require('../../utils/db');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
+const { ui } = require('../../utils/ui/panel');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -68,15 +69,13 @@ module.exports = {
       const duelTimeout = GAME_CONFIG.DUELS.DUEL_TIMEOUT;
       await createPendingDuel(me.id, target.id, amount, duelTimeout);
 
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('⚔️ Duel Challenge!')
-            .setDescription(`${me} has challenged ${target} to a duel for **$${amount.toLocaleString()}**!\n\n` +
-                            `Type \`/duel accept\` or \`/duel decline\` within ${duelTimeout / 1000} seconds.`)
-            .setColor('Blue')
-        ]
-      });
+      const challenge = new EmbedBuilder()
+        .setTitle('⚔️ Duel Challenge!')
+        .setDescription(`${me} has challenged ${target} to a duel for **$${amount.toLocaleString()}**!\n\n` +
+                        `Type \`/duel accept\` or \`/duel decline\` within ${duelTimeout / 1000} seconds.`)
+        .setColor('Blue');
+
+      return interaction.reply(ui(challenge, [], { scope: 'casino' }));
     }
 
     // ─── ACCEPT ────────────────────────────────────────────────────────────
@@ -127,18 +126,16 @@ module.exports = {
 
       logger.info('Duel settled', { winner: winner.id, loser: loser.id, amount });
 
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('🏆 Duel Result')
-            .setDescription(
-              `${winner} won **$${amount.toLocaleString()}** from ${loser}!\n\n` +
-              `• ${winner.user.username}: $${winBal.toLocaleString()}\n` +
-              `• ${loser.user.username}: $${loseBal.toLocaleString()}`
-            )
-            .setColor('Green')
-        ]
-      });
+      const result = new EmbedBuilder()
+        .setTitle('🏆 Duel Result')
+        .setDescription(
+          `${winner} won **$${amount.toLocaleString()}** from ${loser}!\n\n` +
+          `• ${winner.user.username}: $${winBal.toLocaleString()}\n` +
+          `• ${loser.user.username}: $${loseBal.toLocaleString()}`
+        )
+        .setColor('Green');
+
+      return interaction.reply(ui(result, [], { scope: 'casino' }));
     }
 
     // ─── DECLINE ───────────────────────────────────────────────────────────
@@ -151,14 +148,12 @@ module.exports = {
       await deleteDuel(duel.id);
 
       const challenger = await guild.members.fetch(duel.challenger_id);
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle('❌ Duel Declined')
-            .setDescription(`${me} declined the duel request from ${challenger}.`)
-            .setColor('DarkRed')
-        ]
-      });
+      const declined = new EmbedBuilder()
+        .setTitle('❌ Duel Declined')
+        .setDescription(`${me} declined the duel request from ${challenger}.`)
+        .setColor('DarkRed');
+
+      return interaction.reply(ui(declined, [], { scope: 'casino' }));
     }
   }
 };

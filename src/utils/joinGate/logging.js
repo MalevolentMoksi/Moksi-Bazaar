@@ -13,6 +13,7 @@
  */
 
 const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { ui } = require('../ui/panel');
 const logger = require('../logger');
 const { formatDays, DAY_MS } = require('./config');
 
@@ -171,7 +172,7 @@ async function logOutcome(guild, settings, entry) {
         embed.addFields({ name: 'How to fix', value: result.hint.slice(0, 1024), inline: false });
     }
 
-    return send(guild, settings, category, { embeds: [embed] });
+    return send(guild, settings, category, ui(embed, [], { scope: 'mod' }));
 }
 
 const TIER_STYLE = {
@@ -271,7 +272,7 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         });
     }
 
-    return send(guild, settings, 'suspicion', { embeds: [embed] });
+    return send(guild, settings, 'suspicion', ui(embed, [], { scope: 'mod' }));
 }
 
 /** Raid alert. Routed to the failure channel; it is a "look at me" event. */
@@ -286,7 +287,7 @@ async function logBurst(guild, settings, { count, windowSeconds }) {
         )
         .setTimestamp();
 
-    return send(guild, settings, 'failure', { embeds: [embed] });
+    return send(guild, settings, 'failure', ui(embed, [], { scope: 'mod' }));
 }
 
 /** Audit trail for panel edits. */
@@ -302,7 +303,7 @@ async function logConfigChange(guild, settings, { actor, summary, details }) {
         embed.addFields({ name: 'Details', value: details.slice(0, 1024), inline: false });
     }
 
-    return send(guild, settings, 'config', { embeds: [embed] });
+    return send(guild, settings, 'config', ui(embed, [], { scope: 'mod' }));
 }
 
 /**
@@ -327,10 +328,10 @@ async function logTest(guild, settings, category, actor) {
         const channel = guild.channels.cache.get(channelId)
             ?? await guild.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased() || channel.guild?.id !== guild.id) return false;
-        return channel.send({ embeds: [embed] }).then(() => true).catch(() => false);
+        return channel.send(ui(embed, [], { scope: 'mod' })).then(() => true).catch(() => false);
     }
 
-    return send(guild, settings, category, { embeds: [embed] });
+    return send(guild, settings, category, ui(embed, [], { scope: 'mod' }));
 }
 
 /** Reports an automatic unban after a temp-ban expires. */
@@ -346,7 +347,7 @@ async function logUnban(guild, settings, { userId, bannedAtMs, ok, error }) {
         .addFields({ name: 'Banned', value: `<t:${toUnix(bannedAtMs)}:R>`, inline: true })
         .setTimestamp();
 
-    return send(guild, settings, ok ? 'kick' : 'failure', { embeds: [embed] });
+    return send(guild, settings, ok ? 'kick' : 'failure', ui(embed, [], { scope: 'mod' }));
 }
 
 module.exports = {

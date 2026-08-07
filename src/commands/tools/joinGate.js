@@ -38,6 +38,7 @@ const { describeRouting, logConfigChange, logTest, CATEGORIES } = require('../..
 const { getPendingUnbans, deletePendingUnban, recomputePendingUnbans, scheduleNext } =
     require('../../utils/joinGate/unbanScheduler');
 const { checkGuildHealth } = require('../../utils/joinGate/diagnostics');
+const { ui, isV2Message } = require('../../utils/ui/panel');
 
 const PANEL_TIMEOUT_MS = 15 * 60_000;
 const PANEL_IDLE_MS = 5 * 60_000;
@@ -873,13 +874,13 @@ async function buildPanel(guild, state) {
             built = renderOverview(guild, settings);
     }
 
+    // The embed and its rows are returned separately rather than as a finished
+    // payload: only the send site knows whether it is creating a message or
+    // editing one, and under Components V2 that decision is permanent.
     return {
         settings,
-        payload: {
-            content: '',
-            embeds: [built.embed],
-            components: fitRows([sectionRow(state.section), ...built.rows], `joingate:${state.section}`),
-        },
+        embed: built.embed,
+        rows: fitRows([sectionRow(state.section), ...built.rows], `joingate:${state.section}`),
     };
 }
 
@@ -911,8 +912,8 @@ module.exports = {
         const guild = interaction.guild;
         const state = { section: 'overview', logCategory: 'default', watchDetail: false };
 
-        const { payload } = await buildPanel(guild, state);
-        const message = await interaction.editReply(payload);
+        const opening = await buildPanel(guild, state);
+        const message = await interaction.editReply(ui(opening.embed, opening.rows, { scope: 'mod' }));
 
         const collector = message.createMessageComponentCollector({
             filter: i => i.user.id === interaction.user.id && isOwner(i.user.id),
@@ -931,7 +932,8 @@ module.exports = {
          * "interaction failed" on a change that actually saved.
          */
         const refresh = async (respondTo) => {
-            const { payload: next } = await buildPanel(guild, state);
+            const rebuilt = await buildPanel(guild, state);
+            const next = ui(rebuilt.embed, rebuilt.rows, { like: message });
 
             const canUpdate = respondTo
                 && !respondTo.replied
@@ -1744,7 +1746,7 @@ module.exports = {
                         ));
                     }
 
-                    const reportMessage = await i.editReply({ embeds: [embed], components });
+                    const reportMessage = await i.editReply(ui(embed, components, { scope: 'mod' }));
                     if (!components.length) return;
 
                     // The result lives in its own ephemeral message, so it needs
@@ -2011,11 +2013,20 @@ module.exports = {
 
         collector.on('end', async () => {
             // Leave the last view readable, just inert.
-            const { payload: last } = await buildPanel(guild, state).catch(() => ({ payload: null }));
+            const last = await buildPanel(guild, state).catch(() => null);
+            const notice = 'Panel timed out. Run /joingate again to make more changes.';
+
+            // Components V2 has no `content` at all, so the notice has to move
+            // inside the panel rather than sit above it.
+            if (last?.embed && isV2Message(message)) {
+                last.embed.setFooter({ text: notice });
+                await interaction.editReply(ui(last.embed, [], { like: message })).catch(() => {});
+                return;
+            }
             await interaction.editReply({
-                embeds: last?.embeds ?? [],
+                embeds: last?.embed ? [last.embed] : [],
                 components: [],
-                content: '*Panel timed out. Run `/joingate` again to make more changes.*',
+                content: `*${notice}*`,
             }).catch(() => {});
         });
     },
