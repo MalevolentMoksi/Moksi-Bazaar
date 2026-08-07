@@ -10,6 +10,7 @@ const logger = require('./logger');
 const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY } = require('./constants');
 const { downloadToTemp, createTempPath, cleanup, extFromUrl } = require('./media/tempFiles');
 const { runFFmpeg } = require('./media/ffmpegUtils');
+const { firstFrameDataUri } = require('./media/videoFrame');
 
 // Single source of truth for score → attitude level mapping
 function scoreToAttitudeLevel(score) {
@@ -785,59 +786,92 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
     if (activeMedia === false) return [];
 
     const descriptions = [];
-    // Helper to process a URL
-    const processUrl = async (url, type, name, mediaMeta = {}) => {
+
+    // The prompt tells the model to treat these tags as if it saw the thing, so
+    // a tag that names a file type instead of contents is worse than useless:
+    // it reacts to "mp4" with total confidence. When there is nothing to
+    // describe, say that in words the model cannot mistake for a description.
+    const unseen = what => `[${what} shared, contents not seen]`;
+
+    const MEDIA_PROMPT = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared. Prioritize anything visually striking, emotionally notable, or culturally significant. Name any recognizable characters, memes, or public figures. If text is visible in the image, include it.";
+
+    const remember = (mediaId, desc, kind, url) => pool.query(
+        `INSERT INTO media_cache (media_id, description, media_type, original_url)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (media_id)
+         DO UPDATE SET
+            description = EXCLUDED.description,
+            media_type = EXCLUDED.media_type,
+            original_url = EXCLUDED.original_url,
+            last_accessed = CURRENT_TIMESTAMP`,
+        [mediaId, desc, kind, url]
+    );
+
+    // These return their tag rather than pushing it, so a message carrying
+    // several items can describe them concurrently and still keep them in the
+    // order they were posted. Four videos in one message used to mean four
+    // downloads and four encodes back to back, with a reply waiting on all of
+    // them.
+    const describeUrl = async (url, type, name, mediaMeta = {}) => {
         const mediaId = generateMediaId(url, null, name);
         const cached = await getCachedMediaDescription(mediaId);
 
-        if (!forceReanalyze && cached) {
-            descriptions.push(`[${type}: ${cached.description}]`);
-        } else if (shouldAnalyze) {
-            const prompt = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared. Prioritize anything visually striking, emotionally notable, or culturally significant. Name any recognizable characters, memes, or public figures. If text is visible in the image, include it.";
+        if (!forceReanalyze && cached) return `[${type}: ${cached.description}]`;
+        if (!shouldAnalyze) return unseen(type);
 
-            const desc = mediaMeta.isGif
-                ? await analyzeGifWithOpenRouter(url, prompt)
-                : await analyzeImageWithOpenRouter(url, prompt);
+        const desc = mediaMeta.isGif
+            ? await analyzeGifWithOpenRouter(url, MEDIA_PROMPT)
+            : await analyzeImageWithOpenRouter(url, MEDIA_PROMPT);
 
-            if (desc) {
-                descriptions.push(`[${type}: ${desc}]`);
-                await pool.query(
-                    `INSERT INTO media_cache (media_id, description, media_type, original_url) 
-                     VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (media_id)
-                     DO UPDATE SET
-                        description = EXCLUDED.description,
-                        media_type = EXCLUDED.media_type,
-                        original_url = EXCLUDED.original_url,
-                        last_accessed = CURRENT_TIMESTAMP`,
-                    [mediaId, desc, mediaMeta.isGif ? 'gif' : 'image', url]
-                );
-            } else {
-                descriptions.push(`[${type} (Analysis Failed)]`);
-            }
-        } else {
-            descriptions.push(`[Unanalyzed ${type}]`);
-        }
+        if (!desc) return unseen(type);
+        await remember(mediaId, desc, mediaMeta.isGif ? 'gif' : 'image', url);
+        return `[${type}: ${desc}]`;
     };
 
-    // 1. Attachments (Images & VIDEOS)
+    const processUrl = async (...args) => { descriptions.push(await describeUrl(...args)); };
+
+    /**
+     * A video uploaded straight to Discord has no embed and so no thumbnail.
+     * Rather than fall back to the filename, pull a frame out of it with ffmpeg
+     * and describe that like any other image.
+     */
+    const describeVideo = async (att) => {
+        const mediaId = generateMediaId(att.url, null, att.name);
+        const cached = await getCachedMediaDescription(mediaId);
+
+        if (!forceReanalyze && cached) return `[Video: ${cached.description}]`;
+        if (!shouldAnalyze) return unseen('Video');
+
+        const frame = await firstFrameDataUri(att.url, { sizeBytes: att.size });
+        if (!frame) return unseen('Video');
+
+        const desc = await analyzeImageWithOpenRouter(frame, MEDIA_PROMPT);
+        if (!desc) return unseen('Video');
+
+        // Keyed on the attachment URL, not the data URI: the frame is temporary
+        // and would never match again.
+        await remember(mediaId, desc, 'video', att.url);
+        return `[Video: ${desc}]`;
+    };
+
+    // 1. Attachments (Images & VIDEOS), all at once rather than one after
+    // another: an album of four is one wait, not four.
     if (message.attachments?.size > 0) {
-        for (const [_, att] of message.attachments) {
-            // Handle Images
+        const attachmentTags = await Promise.all([...message.attachments.values()].map(async (att) => {
             if (att.contentType?.startsWith('image/')) {
                 const gifLike = isGifMedia(att.url, att.name, att.contentType);
-                await processUrl(att.url, gifLike ? "GIF Attachment" : "Image Attachment", att.name, { isGif: gifLike });
+                return describeUrl(att.url, gifLike ? "GIF Attachment" : "Image Attachment", att.name, { isGif: gifLike });
             }
-            // Handle Videos (Try to find a thumbnail)
-            else if (att.contentType?.startsWith('video/')) {
+            // A supplied thumbnail is free; otherwise sample a frame.
+            if (att.contentType?.startsWith('video/')) {
                 const videoThumbnail = message.embeds.find(e => e.video)?.thumbnail?.url;
-                if (videoThumbnail) {
-                    await processUrl(videoThumbnail, "Video Thumbnail", att.name);
-                } else {
-                    descriptions.push(`[Video File: ${att.name}]`);
-                }
+                return videoThumbnail
+                    ? describeUrl(videoThumbnail, "Video", att.name)
+                    : describeVideo(att);
             }
-        }
+            return null;
+        }));
+        descriptions.push(...attachmentTags.filter(Boolean));
     }
 
     // 2. Embeds
