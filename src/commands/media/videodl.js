@@ -11,10 +11,36 @@ const { mediaSemaphore } = require('../../utils/media/concurrency');
 const MAX_FILE_SIZE = 24 * 1024 * 1024;
 
 // Basic sanity check so we only hand real http(s) URLs to yt-dlp.
+/**
+ * Hosts that are not on the public internet.
+ *
+ * yt-dlp fetches whatever it is handed, and this command is open to every
+ * member, so a bare protocol check let anyone aim the container's own network
+ * stack at itself: the dashboard on localhost, a Railway private service at
+ * `something.railway.internal`, or a cloud metadata endpoint. None of that is
+ * a video, but the failure text comes back to the caller, and the request
+ * happens either way.
+ */
+const PRIVATE_HOST_RE = new RegExp([
+    '^localhost$',
+    '\\.local$', '\\.internal$', '\\.localhost$',
+    '^127\\.', '^0\\.', '^10\\.',
+    '^169\\.254\\.',                       // link-local, including cloud metadata
+    '^192\\.168\\.',
+    '^172\\.(1[6-9]|2\\d|3[01])\\.',       // 172.16.0.0/12
+    '^\\[?::1\\]?$', '^\\[?f[cd]',          // IPv6 loopback and unique-local
+].join('|'), 'i');
+
 function looksLikeUrl(s) {
     try {
         const u = new URL(s);
-        return u.protocol === 'http:' || u.protocol === 'https:';
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+        const host = u.hostname;
+        if (!host || PRIVATE_HOST_RE.test(host)) return false;
+        // A hostname with no dot is a bare service name, which only resolves
+        // on a private network. Public sites always have one.
+        if (!host.includes('.') && !host.includes(':')) return false;
+        return true;
     } catch {
         return false;
     }
@@ -81,3 +107,5 @@ const videodl = {
 };
 
 module.exports = videodl;
+// Exported for the tests; the command loader ignores anything but data/execute.
+module.exports.looksLikeUrl = looksLikeUrl;
