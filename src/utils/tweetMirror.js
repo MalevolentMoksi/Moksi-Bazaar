@@ -245,11 +245,31 @@ async function searchTweets({ apiKey, query }) {
             return { ok: false, status: res.status, error: 'response was not JSON' };
         }
 
+        // A 200 carrying an error body. Left unhandled this is the worst
+        // failure available: it reads as "nothing new", so the mirror looks
+        // healthy, posts nothing forever, and still pays for every poll.
+        if (data?.status === 'error' || data?.error) {
+            return {
+                ok: false,
+                status: res.status,
+                error: String(data.msg ?? data.message ?? data.error ?? 'API reported an error').slice(0, 300),
+            };
+        }
+
+        // Advanced Search puts `tweets` at the root, confirmed against
+        // twitterapi.io's own reference script. Other endpoints on the same
+        // host wrap the payload in {status, data, msg} instead: /twitter/user/
+        // info does exactly that. Reading both shapes costs one line and
+        // covers them ever making the two consistent.
+        const payload = Array.isArray(data?.tweets) ? data
+            : Array.isArray(data?.data?.tweets) ? data.data
+                : data;
+
         return {
             ok: true,
             status: res.status,
-            tweets: Array.isArray(data.tweets) ? data.tweets : [],
-            hasNextPage: Boolean(data.has_next_page),
+            tweets: Array.isArray(payload?.tweets) ? payload.tweets : [],
+            hasNextPage: Boolean(payload?.has_next_page),
         };
     } catch (error) {
         const reason = error.name === 'AbortError' ? `timed out after ${API_TIMEOUT_MS}ms` : error.message;

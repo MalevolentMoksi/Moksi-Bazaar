@@ -219,6 +219,20 @@ describe('conditions that must never fire a request', () => {
 // ── Posting ─────────────────────────────────────────────────────────────────
 
 describe('what reaches the channel', () => {
+    test('finds the tweets whether or not they arrive wrapped in an envelope', async () => {
+        // Advanced Search returns them at the root; /twitter/user/info on the
+        // same host wraps its payload in {status, data, msg}. Both are real
+        // shapes observed from this vendor, so both are read.
+        respond({ body: JSON.stringify({ tweets: [apiTweet('root')], has_next_page: false }) });
+        await runOnce(client);
+        expect(sent.map(s => s.content)).toEqual(['https://fxtwitter.com/HYPEX/status/root']);
+
+        sent = [];
+        respond({ body: JSON.stringify({ status: 'success', data: { tweets: [apiTweet('wrapped')] }, msg: 'success' }) });
+        await runOnce(client);
+        expect(sent.map(s => s.content)).toEqual(['https://fxtwitter.com/HYPEX/status/wrapped']);
+    });
+
     test('posts the fxtwitter link by default, so video plays', async () => {
         respond({ tweets: [apiTweet('1', { handle: 'HYPEX' })] });
         const result = await runOnce(client);
@@ -405,6 +419,17 @@ describe('when the API says no', () => {
         client.channels.fetch = broken;
         respond({ tweets: [apiTweet('4')] }); await runOnce(client);
         expect(complaints()).toBe(2);
+    });
+
+    test('a 200 carrying an error body is a failure, not an empty result', async () => {
+        // The worst available failure: it would read as "nothing new", so the
+        // mirror looks healthy, posts nothing forever, and still pays per poll.
+        respond({ body: JSON.stringify({ status: 'error', msg: 'insufficient credits' }) });
+
+        const result = await runOnce(client);
+
+        expect(result.skipped).toBe('request failed');
+        expect(result.error).toContain('insufficient credits');
     });
 
     test('a deleted channel is reported without losing the cursor', async () => {
