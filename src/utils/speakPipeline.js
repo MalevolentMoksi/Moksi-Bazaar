@@ -126,7 +126,7 @@ tone: how ${askerName} is treating the bot here, -1 (hostile) to 1 (warm), 0 if 
     try {
         const reply = await callOpenRouterAPI(utilityModel, [
             { role: 'user', content: prompt },
-        ], { maxTokens: 120, temperature: 0, timeout: timeoutMs });
+        ], { maxTokens: 120, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'room_read' } });
 
         const parsed = extractJson(reply);
         if (!parsed) return null;
@@ -201,7 +201,7 @@ Answer with the winning number alone.`;
     try {
         const verdict = await callOpenRouterAPI(utilityModel, [
             { role: 'user', content: prompt },
-        ], { maxTokens: 6, temperature: 0, timeout: timeoutMs });
+        ], { maxTokens: 6, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'judge', extra: { candidates: drafts.length } } });
 
         const match = String(verdict ?? '').match(/\d+/);
         const index = match ? Number(match[0]) - 1 : -1;

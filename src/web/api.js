@@ -344,6 +344,43 @@ function createApi(client) {
         });
     }));
 
+    // ── Telemetry verdicts ──────────────────────────────────────────────
+    // The quick ✓/✗ from the Brain list. Parameters ride in the query
+    // because data-action buttons post an empty body.
+    router.post('/guild/:g/telemetry/rate', wrap(async (req, res) => {
+        const telemetry = require('../utils/telemetry');
+        const traceId = String(req.query.trace ?? '');
+        const rating = Number(req.query.rating);
+        if (!/^[0-9a-f-]{36}$/i.test(traceId) || ![1, -1].includes(rating)) {
+            return res.status(400).json({ error: 'Bad verdict.' });
+        }
+        const found = await telemetry.rateTrace(traceId, { rating });
+        if (!found) return res.status(404).json({ error: 'That trace is gone.' });
+        logger.info('[DASHBOARD] Trace rated', { traceId, rating, by: req.owner.uid });
+        return res.json({ ok: true, summary: rating === 1 ? 'Marked good.' : 'Marked bad.' });
+    }));
+
+    // The full verdict form on a trace page: rating, comment, judge audit.
+    router.post('/guild/:g/telemetry/verdict', wrap(async (req, res) => {
+        const telemetry = require('../utils/telemetry');
+        const f = fieldsOf(req);
+        const traceId = String(f.trace ?? '');
+        if (!/^[0-9a-f-]{36}$/i.test(traceId)) {
+            return res.status(400).json({ error: 'That is not a trace id.' });
+        }
+        const rating = f.rating === '1' ? 1 : f.rating === '-1' ? -1 : null;
+        const found = await telemetry.rateTrace(traceId, {
+            rating,
+            comment: String(f.comment ?? '').trim(),
+            // An unchecked checkbox is absent from the form; absence means
+            // cleared, so the audit flag can be taken back.
+            judgeWrongPick: f.wrongpick === '1',
+        });
+        if (!found) return res.status(404).json({ error: 'That trace is gone.' });
+        logger.info('[DASHBOARD] Trace verdict saved', { traceId, rating, by: req.owner.uid });
+        return res.json({ ok: true, summary: 'Verdict saved.' });
+    }));
+
     // ── Watch-window channel exemptions ─────────────────────────────────
     router.post('/guild/:g/watch-exempt-channels', wrap(async (req, res) => {
         const guild = guildOf(req);

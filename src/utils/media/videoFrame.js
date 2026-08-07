@@ -67,12 +67,21 @@ function withTimeout(promise, ms, label) {
  * @returns {Promise<string|null>} a jpeg data URI, or null if nothing could be read
  */
 async function firstFrameDataUri(url, { sizeBytes = 0 } = {}) {
+    // Lazy: telemetry lazy-requires db, which requires this module.
+    const telemetry = require('../telemetry');
+
     if (sizeBytes && sizeBytes > MAX_VIDEO_BYTES) {
         logger.debug('[MEDIA] Video too large to sample', { sizeBytes });
+        telemetry.logCall({ kind: 'video_frame', outcome: 'oversize', extra: { sizeBytes } });
         return null;
     }
 
     return withSampleSlot(async () => {
+        const startedAt = Date.now();
+        const record = (outcome, error = null) => telemetry.logCall({
+            kind: 'video_frame', outcome, error,
+            latencyMs: Date.now() - startedAt, extra: { sizeBytes },
+        });
         let videoPath = null;
         let framePath = null;
         try {
@@ -91,11 +100,13 @@ async function firstFrameDataUri(url, { sizeBytes = 0 } = {}) {
                 }, { timeoutMs: ENCODE_TIMEOUT_MS });
 
                 const bytes = fs.readFileSync(framePath);
-                if (!bytes.length) return null;
+                if (!bytes.length) { record('empty_frame'); return null; }
+                record('ok');
                 return `data:image/jpeg;base64,${bytes.toString('base64')}`;
             })(), EXTRACT_TIMEOUT_MS, 'Video frame extraction');
         } catch (error) {
             logger.warn('[MEDIA] Could not sample a video frame', { error: error.message });
+            record('failed', error.message);
             return null;
         } finally {
             await cleanup(videoPath, framePath).catch(() => {});

@@ -20,6 +20,7 @@ const { maybeDistillProfile } = require('../../utils/speakProfile');
 const {
   normalisePipeline, readRoom, readBlock, pickBestDraft, attitudeSentence,
 } = require('../../utils/speakPipeline');
+const telemetry = require('../../utils/telemetry');
 
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { handleCommandError, sendError } = require('../../utils/errorHandler');
@@ -517,6 +518,18 @@ module.exports = {
         return await interaction.editReply(`${randomReply}\n-# _(The bot is in maintenance mode. Try again later.)_`);
       }
 
+      // Telemetry trace: everything below (drafts, judge, vision, sentiment,
+      // media sampling) attaches itself to this reply through the async
+      // context, however deeply nested. Entered after the refusal paths so
+      // blacklists and maintenance mode never produce empty traces.
+      telemetry.enterTrace({
+        kind: 'reply',
+        userId,
+        channelId,
+        trigger: interaction._interjection ? 'interjection' : (interaction._sourceMessage ? 'mention' : 'slash'),
+        startedAt,
+      });
+
       // 2. Parallelize independent fetches. excludeContext keeps memory slots
       //    filled with real exchanges, not "user was lurking" rows.
       const [messages, userContext, recentMemories, speakProfile, deliveryConfig, pipelineConfigRaw] = await Promise.all([
@@ -751,10 +764,14 @@ ${memoryText}`;
 
       let rawContent;
       let sentimentAnalysis;
+      let generation;
       if (pipeline.drafts) {
         const [draftResults, sentimentResult] = await Promise.all([
-          Promise.all(pipeline.writers.map(model =>
-            callOpenRouterAPI(model, writerMessages, writerOptions))),
+          Promise.all(pipeline.writers.map((model, index) =>
+            callOpenRouterAPI(model, writerMessages, {
+              ...writerOptions,
+              telemetry: { kind: 'draft', extra: { index: index + 1 } },
+            }))),
           sentimentPromise,
         ]);
         sentimentAnalysis = sentimentResult;
@@ -769,19 +786,42 @@ ${memoryText}`;
             utilityModel: pipeline.utilityModel,
             timeoutMs: Math.min(5000, timeLeft - 2000),
           });
+          generation = { mode: 'drafts', produced: drafts.length, judge: 'consulted' };
         } else {
           rawContent = drafts[0] ?? null;
+          generation = {
+            mode: 'drafts',
+            produced: drafts.length,
+            judge: drafts.length > 1 ? 'deadline_skipped' : 'too_few_drafts',
+          };
         }
       } else {
         [rawContent, sentimentAnalysis] = await Promise.all([
-          callOpenRouterAPI('deepseek/deepseek-chat', writerMessages, writerOptions),
+          callOpenRouterAPI('deepseek/deepseek-chat', writerMessages, {
+            ...writerOptions,
+            telemetry: { kind: 'chat' },
+          }),
           sentimentPromise
         ]);
+        generation = { mode: 'legacy' };
       }
+
+      const traceFlags = {
+        pipeline: {
+          prepass: pipeline.prepass, drafts: pipeline.drafts,
+          memory: pipeline.memory, attitude: pipeline.attitude,
+        },
+        roomRead: roomRead
+          ? { mode: roomRead.mode, tone: roomRead.tone }
+          : (pipeline.prepass ? 'skipped_or_failed' : 'off'),
+        generation,
+        adaptiveLength,
+      };
 
 
       if (!rawContent) {
         logger.error('OpenRouter returned null', { userId, hasRequest: !!userRequest });
+        telemetry.finishTrace({ outcome: 'no_reply', error: 'every writer returned null', flags: traceFlags });
         return await sendError(
           interaction,
           'My brain timed out. The AI servers might be slow right now. Try again?'
@@ -859,7 +899,10 @@ ${memoryText}`;
         await interaction.followUp(part);
       }
 
+      telemetry.finishTrace({ replyText, emojiKey, flags: traceFlags });
+
     } catch (error) {
+      telemetry.finishTrace({ outcome: 'error', error: error.message });
       await handleCommandError(interaction, error, {
         hasRequest: !!interaction.options.getString('request')
       });

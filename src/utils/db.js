@@ -12,6 +12,8 @@ const { downloadToTemp, createTempPath, cleanup, extFromUrl } = require('./media
 const { runFFmpeg } = require('./media/ffmpegUtils');
 const { firstFrameDataUri, MAX_VIDEO_BYTES } = require('./media/videoFrame');
 const { withSampleSlot } = require('./media/sampleGate');
+// Lazy-requires this module back; safe to require at the top from here.
+const telemetry = require('./telemetry');
 
 // Single source of truth for score → attitude level mapping
 function scoreToAttitudeLevel(score) {
@@ -95,6 +97,51 @@ const init = async () => {
             last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_media_cache_accessed ON media_cache(last_accessed);
+        -- Telemetry: one trace per reply, one row per model/media call inside
+        -- it, inputs deduped per trace by hash. See utils/telemetry.js.
+        CREATE TABLE IF NOT EXISTS telemetry_traces (
+            trace_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL DEFAULT 'reply',
+            version TEXT,
+            user_id TEXT,
+            channel_id TEXT,
+            trigger TEXT,
+            started_at_ms BIGINT NOT NULL,
+            total_ms INTEGER,
+            reply_text TEXT,
+            emoji_key TEXT,
+            flags JSONB,
+            outcome TEXT,
+            error TEXT,
+            rating SMALLINT,
+            rating_comment TEXT,
+            judge_wrong_pick BOOLEAN,
+            rated_at_ms BIGINT
+        );
+        CREATE TABLE IF NOT EXISTS telemetry_calls (
+            id BIGSERIAL PRIMARY KEY,
+            trace_id TEXT NOT NULL REFERENCES telemetry_traces(trace_id) ON DELETE CASCADE,
+            at_ms BIGINT NOT NULL,
+            kind TEXT NOT NULL,
+            model TEXT,
+            input_hash TEXT,
+            output_text TEXT,
+            latency_ms INTEGER,
+            tokens_in INTEGER,
+            tokens_out INTEGER,
+            cost_usd NUMERIC(12, 8),
+            outcome TEXT NOT NULL,
+            error TEXT,
+            extra JSONB
+        );
+        CREATE TABLE IF NOT EXISTS telemetry_inputs (
+            trace_id TEXT NOT NULL REFERENCES telemetry_traces(trace_id) ON DELETE CASCADE,
+            input_hash TEXT NOT NULL,
+            input_text TEXT NOT NULL,
+            PRIMARY KEY (trace_id, input_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_telemetry_traces_started ON telemetry_traces(started_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_telemetry_calls_trace ON telemetry_calls(trace_id);
         CREATE INDEX IF NOT EXISTS idx_conversation_memories_user ON conversation_memories(user_id);
         CREATE INDEX IF NOT EXISTS idx_conversation_memories_timestamp ON conversation_memories(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_user_preferences_composite ON user_preferences(attitude_level, interaction_count DESC);
@@ -599,6 +646,20 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
     const MAX_ATTEMPTS = 2;
     const BACKOFF_BASE = 100; // milliseconds
 
+    const VISION_MODEL = 'google/gemini-3.1-flash-lite';
+    const visionInput = [{
+        role: 'user',
+        content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageUrl } }
+        ]
+    }];
+    const startedAt = Date.now();
+    const record = fields => telemetry.logCall({
+        kind: 'vision', model: VISION_MODEL, input: visionInput,
+        latencyMs: Date.now() - startedAt, ...fields,
+    });
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
@@ -613,17 +674,10 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             },
             signal: controller.signal,
             body: JSON.stringify({
-                model: 'google/gemini-3.1-flash-lite',
-                messages: [
-                    {
-                        role: 'user',
-                        content: [
-                            { type: 'text', text: prompt },
-                            { type: 'image_url', image_url: { url: imageUrl } }
-                        ]
-                    }
-                ],
-                max_tokens: 300
+                model: VISION_MODEL,
+                messages: visionInput,
+                max_tokens: 300,
+                usage: { include: true }
             })
         });
 
@@ -632,6 +686,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         if (!response.ok) {
             // HTTP error, try fallback
             logger.warn('[MEDIA] Gemini HTTP error, attempting fallback', { status: response.status, attempt });
+            record({ outcome: `http_${response.status}` });
             return await analyzeImageFallback(imageUrl, prompt);
         }
 
@@ -639,11 +694,18 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         const result = data.choices?.[0]?.message?.content?.trim();
         if (result) {
             logger.debug('[MEDIA] Gemini primary success', { urlLength: imageUrl.length });
+            record({
+                output: result, outcome: 'ok',
+                tokensIn: data.usage?.prompt_tokens ?? null,
+                tokensOut: data.usage?.completion_tokens ?? null,
+                costUsd: Number.isFinite(data.usage?.cost) ? data.usage.cost : null,
+            });
             return result;
         }
 
         // Empty response, try fallback
         logger.warn('[MEDIA] Gemini returned empty response, trying fallback');
+        record({ outcome: 'empty' });
         return await analyzeImageFallback(imageUrl, prompt);
     } catch (e) {
         clearTimeout(timeoutId);
@@ -659,6 +721,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
         }
 
         logger.error('[MEDIA] Gemini failed, trying fallback', { error: e.message });
+        record({ outcome: e.name === 'AbortError' ? 'timeout' : 'exception', error: e.message });
         return await analyzeImageFallback(imageUrl, prompt);
     }
 }
@@ -666,13 +729,26 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
 // FALLBACK: Qwen3 VL 8B (current-gen, cheap, strong on text/memes)
 async function analyzeImageFallback(imageUrl, prompt) {
     const FALLBACK_TIMEOUT = 8000; // Slightly shorter timeout than primary
-    
+    const FALLBACK_MODEL = 'qwen/qwen3-vl-8b-instruct';
+    const visionInput = [{
+        role: 'user',
+        content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageUrl } }
+        ]
+    }];
+    const startedAt = Date.now();
+    const record = fields => telemetry.logCall({
+        kind: 'vision_fallback', model: FALLBACK_MODEL, input: visionInput,
+        latencyMs: Date.now() - startedAt, ...fields,
+    });
+
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), FALLBACK_TIMEOUT);
-        
+
         logger.debug('[MEDIA] Qwen fallback attempt', { urlLength: imageUrl.length });
-        
+
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -683,38 +759,40 @@ async function analyzeImageFallback(imageUrl, prompt) {
             },
             signal: controller.signal,
             body: JSON.stringify({
-                model: 'qwen/qwen3-vl-8b-instruct',
-                messages: [
-                    {
-                        role: 'user',
-                        content: [
-                            { type: 'text', text: prompt },
-                            { type: 'image_url', image_url: { url: imageUrl } }
-                        ]
-                    }
-                ],
-                max_tokens: 200
+                model: FALLBACK_MODEL,
+                messages: visionInput,
+                max_tokens: 200,
+                usage: { include: true }
             })
         });
-        
+
         clearTimeout(timeoutId);
-        
+
         if (!response.ok) {
             logger.warn('[MEDIA] Qwen HTTP error', { status: response.status });
+            record({ outcome: `http_${response.status}` });
             return null;
         }
-        
+
         const data = await response.json();
         const result = data.choices?.[0]?.message?.content?.trim();
         if (result) {
             logger.info('[MEDIA] Qwen fallback success');
+            record({
+                output: result, outcome: 'ok',
+                tokensIn: data.usage?.prompt_tokens ?? null,
+                tokensOut: data.usage?.completion_tokens ?? null,
+                costUsd: Number.isFinite(data.usage?.cost) ? data.usage.cost : null,
+            });
             return result;
         }
-        
+
         logger.warn('[MEDIA] Qwen returned empty result');
+        record({ outcome: 'empty' });
         return null;
     } catch (e) {
         logger.error('[MEDIA] Qwen fallback exception', { error: e.message });
+        record({ outcome: e.name === 'AbortError' ? 'timeout' : 'exception', error: e.message });
         return null;
     }
 }
@@ -763,6 +841,7 @@ async function buildGifStoryboard(gifUrl) {
     return withSampleSlot(async () => {
         let inputPath = null;
         let storyboardPath = null;
+        const startedAt = Date.now();
 
         try {
             const sourceExt = extFromUrl(gifUrl) || 'gif';
@@ -779,9 +858,17 @@ async function buildGifStoryboard(gifUrl) {
                     .outputOptions(['-frames:v 1']);
             }, { timeoutMs: 8_000 });
 
+            telemetry.logCall({
+                kind: 'gif_storyboard', outcome: 'ok',
+                latencyMs: Date.now() - startedAt, extra: { url: gifUrl.slice(0, 200) },
+            });
             return { inputPath, storyboardPath };
         } catch (e) {
             logger.warn('[MEDIA] GIF storyboard generation failed', { error: e.message });
+            telemetry.logCall({
+                kind: 'gif_storyboard', outcome: 'failed', error: e.message,
+                latencyMs: Date.now() - startedAt, extra: { url: gifUrl.slice(0, 200) },
+            });
             await cleanup(inputPath, storyboardPath);
             return null;
         }
@@ -848,7 +935,10 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         const cached = await getCachedMediaDescription(mediaId);
 
         if (!forceReanalyze && cached) return `[${type}: ${cached.description}]`;
-        if (!shouldAnalyze || outOfTime()) return unseen(type);
+        if (!shouldAnalyze || outOfTime()) {
+            if (outOfTime()) telemetry.logCall({ kind: 'media_skip', outcome: 'deadline', extra: { type } });
+            return unseen(type);
+        }
 
         const desc = mediaMeta.isGif
             ? await analyzeGifWithOpenRouter(url, MEDIA_PROMPT)
@@ -869,7 +959,10 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         const cached = await getCachedMediaDescription(mediaId);
 
         if (!forceReanalyze && cached) return `[Video: ${cached.description}]`;
-        if (!shouldAnalyze || outOfTime()) return unseen('Video');
+        if (!shouldAnalyze || outOfTime()) {
+            if (outOfTime()) telemetry.logCall({ kind: 'media_skip', outcome: 'deadline', extra: { type: 'Video' } });
+            return unseen('Video');
+        }
 
         const frame = await firstFrameDataUri(att.url, { sizeBytes: att.size });
         if (!frame) return unseen('Video');
@@ -981,7 +1074,8 @@ Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
         ], {
             maxTokens: 100,
             temperature: 0.1,
-            timeout: 8000
+            timeout: 8000,
+            telemetry: { kind: 'sentiment' }
         });
         if (result) {
             const parsed = JSON.parse(result);
@@ -1002,7 +1096,8 @@ Return JSON only: {"sentiment": 0.0, "reasoning": "..."}`;
         ], {
             maxTokens: 100,
             temperature: 0.1,
-            timeout: 8000
+            timeout: 8000,
+            telemetry: { kind: 'sentiment', extra: { fallbackFor: 'xiaomi/mimo-v2-flash' } }
         });
         if (result) {
             const parsed = JSON.parse(result);

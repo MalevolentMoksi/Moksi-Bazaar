@@ -18,6 +18,7 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { pool, cleanupMediaCache, clearExpiredCooldowns } = require('./db');
+const { pruneTelemetry } = require('./telemetry');
 const logger = require('./logger');
 
 const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
@@ -101,6 +102,8 @@ async function runJanitorCycle() {
         ['mediaCache', async () => { await cleanupMediaCache(); return 'ok'; }],
         ['cooldowns', async () => { await clearExpiredCooldowns(); return 'ok'; }],
         ['deadDuels', async () => purgeDeadDuels()],
+        // Keeps the newest 1000 telemetry traces; rated ones are immortal.
+        ['telemetry', async () => pruneTelemetry()],
         ['tempFiles', async () => {
             const { removed, bytes } = await sweepTempFiles();
             return removed ? `${removed} (${(bytes / 1048576).toFixed(1)} MB)` : 0;

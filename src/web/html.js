@@ -130,6 +130,7 @@ const NAV = [
     { href: '/modlog', label: 'Mod History', match: p => p.startsWith('/modlog') },
     { href: '/members', label: 'Members', match: p => p.startsWith('/members') },
     { href: '/guard', label: 'Guard', match: p => p.startsWith('/guard') },
+    { href: '/brain', label: 'Brain', match: p => p.startsWith('/brain') },
 ];
 
 const LANTERN = raw(

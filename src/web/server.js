@@ -262,6 +262,39 @@ function buildApp(client, config) {
         respond(req, res, { title: 'Guard', body: guard.render(model) });
     }));
 
+    const brain = require('./pages/brain');
+    app.get('/brain', wrap(async (req, res) => {
+        const model = await brain.data(client, req.guildId);
+        respond(req, res, { title: 'Brain', body: brain.render(model) });
+    }));
+
+    // Registered before /brain/:traceId so "export" is never read as an id.
+    app.get('/brain/export/:name', wrap(async (req, res) => {
+        const name = req.params.name;
+        if (!['traces.csv', 'calls.csv', 'inputs.csv'].includes(name)) {
+            return res.status(404).send('No such export file.');
+        }
+        const telemetry = require('../utils/telemetry');
+        const days = Number(req.query.days) || 0;
+        const sinceMs = days > 0 ? Date.now() - days * 86_400_000 : 0;
+        const { files } = await telemetry.exportFiles({ sinceMs });
+        const file = files.find(f => f.name === name);
+        res.set('Content-Type', 'text/csv; charset=utf-8');
+        res.set('Content-Disposition', `attachment; filename="${name}"`);
+        res.send(file.text);
+    }));
+
+    app.get('/brain/:traceId', wrap(async (req, res) => {
+        if (!/^[0-9a-f-]{36}$/i.test(req.params.traceId)) {
+            return respond(req, res, {
+                title: 'Brain',
+                body: card({ title: 'Not a trace', body: html`<p class="empty">That is not a trace id.</p>` }),
+            });
+        }
+        const model = await brain.detailData(req.params.traceId, req.guildId);
+        respond(req, res, { title: 'Trace', body: brain.renderDetail(model) });
+    }));
+
     const backtest = require('./pages/backtest');
     app.get('/gate/backtest', wrap(async (req, res) => {
         const { query, notice } = vetBacktestRun(req);

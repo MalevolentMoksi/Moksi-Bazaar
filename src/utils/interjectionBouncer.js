@@ -15,6 +15,7 @@
  */
 
 const { callOpenRouterAPI } = require('./apiHelpers');
+const telemetry = require('./telemetry');
 const logger = require('./logger');
 
 const BOUNCER_MODEL = 'xiaomi/mimo-v2-flash';
@@ -44,6 +45,18 @@ Answer with exactly one word, YES or NO.`;
  * @returns {Promise<boolean>} true when the interjection should proceed
  */
 async function passesBouncer(message) {
+    // Its own small trace: the interjection it may green-light gets a fresh
+    // one, so a refused moment still shows up in the telemetry export.
+    return telemetry.runWithTrace(
+        { kind: 'bouncer', channelId: message.channelId },
+        () => bouncerVerdict(message).then((passed) => {
+            telemetry.finishTrace({ flags: { passed }, outcome: 'ok' });
+            return passed;
+        })
+    );
+}
+
+async function bouncerVerdict(message) {
     try {
         const fetched = await message.channel.messages
             .fetch({ limit: CONTEXT_MESSAGES })
@@ -66,7 +79,7 @@ async function passesBouncer(message) {
         const verdict = await callOpenRouterAPI(
             BOUNCER_MODEL,
             [{ role: 'user', content: PROMPT.replace('{transcript}', lines.join('\n')) }],
-            { maxTokens: 4, temperature: 0, timeout: 8000 }
+            { maxTokens: 4, temperature: 0, timeout: 8000, telemetry: { kind: 'bouncer' } }
         );
 
         if (verdict === null) return true; // model unreachable; fail open

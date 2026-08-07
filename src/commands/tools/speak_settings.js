@@ -26,6 +26,8 @@ const {
 } = require('../../utils/db.js');
 const { DISTILL_EVERY_N } = require('../../utils/speakProfile');
 const { normalisePipeline } = require('../../utils/speakPipeline');
+const telemetry = require('../../utils/telemetry');
+const zlib = require('node:zlib');
 const { OWNER_REJECTION_JOKES, isOwner, EMBED_COLORS } = require('../../utils/constants');
 const { ui, retireControls, isV2Message } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
@@ -45,6 +47,7 @@ const DEFAULT_INTERJECTIONS = Object.freeze({
 const SECTIONS = [
     { value: 'overview', label: 'Overview', emoji: '📋', description: 'Master switches, health summary' },
     { value: 'brain', label: 'Brain', emoji: '🧪', description: 'Draft pipeline, room read, models' },
+    { value: 'telemetry', label: 'Telemetry', emoji: '📊', description: 'Trace log, verdicts, CSV export' },
     { value: 'interject', label: 'Interjections', emoji: '💬', description: 'Let it butt in, on your terms' },
     { value: 'memory', label: 'Memory', emoji: '🧠', description: 'Long-term profiles, raw memory, vision cache' },
     { value: 'delivery', label: 'Delivery', emoji: '⌨️', description: 'Typing beats & reply length' },
@@ -301,6 +304,44 @@ function renderBrain(pipeline) {
     return { embed, rows };
 }
 
+function renderTelemetry(state) {
+    const enabled = state.telemetryCfg?.enabled !== false;
+    const stats = state.telemetryStats;
+
+    const embed = new EmbedBuilder()
+        .setTitle('📊 Telemetry')
+        .setColor(enabled ? EMBED_COLORS.SUCCESS : EMBED_COLORS.NEUTRAL)
+        .setDescription(
+            'Every reply is a trace; every model call, vision pass and media sampling job inside '
+            + 'it is a row tied to that trace, with real token counts and the actual dollar cost. '
+            + 'Inputs are stored once per trace and every row carries the git version that '
+            + 'produced it.\n\n'
+            + 'Rate replies on the dashboard (**Brain** page) and the export arrives with your '
+            + 'verdicts attached. Pruning keeps the newest 1000 traces; rated ones are kept '
+            + 'forever. Export here as CSV attachments, or download from the dashboard.'
+        )
+        .addFields(
+            { name: 'Status', value: onOff(enabled), inline: true },
+            { name: 'Traces', value: `${stats.traces} (${stats.rated} rated)`, inline: true },
+            { name: 'Calls', value: `${stats.calls}`, inline: true },
+            { name: 'Running version', value: `\`${telemetry.VERSION}\``, inline: true },
+        );
+
+    const rows = [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('ss_tel_toggle')
+                .setLabel(enabled ? 'Disable telemetry' : 'Enable telemetry')
+                .setStyle(enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('ss_tel_export_1').setLabel('Export 24h').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('ss_tel_export_2').setLabel('Export 48h').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('ss_tel_export_all').setLabel('Export everything').setStyle(ButtonStyle.Secondary)
+        ),
+    ];
+
+    return { embed, rows };
+}
+
 function renderMemory(state) {
     const { distill, memoryStats, mediaStats, profileCount } = state;
 
@@ -402,7 +443,7 @@ function renderUsers(blacklist) {
 // ── Panel assembly ──────────────────────────────────────────────────────────
 
 async function loadState() {
-    const [activeSpeak, activeMedia, interjections, distill, delivery, pipelineRaw, blacklist, mediaStats, memoryStats, profileCount] =
+    const [activeSpeak, activeMedia, interjections, distill, delivery, pipelineRaw, telemetryCfg, telemetryStats, blacklist, mediaStats, memoryStats, profileCount] =
         await Promise.all([
             getSettingState('active_speak'),
             getSettingState('active_media_analysis'),
@@ -410,6 +451,8 @@ async function loadState() {
             getSpeakConfigValue('distill', { enabled: false }),
             getSpeakConfigValue('delivery', { multiMessage: false }),
             getSpeakConfigValue('pipeline', null),
+            getSpeakConfigValue('telemetry', { enabled: true }),
+            telemetry.telemetryStats().catch(() => ({ traces: 0, calls: 0, rated: 0 })),
             getBlacklistSummary(),
             getMediaCacheStats(),
             getMemoryStats(),
@@ -422,6 +465,8 @@ async function loadState() {
         distill: distill ?? { enabled: false },
         delivery: delivery ?? { multiMessage: false },
         pipeline: normalisePipeline(pipelineRaw),
+        telemetryCfg: telemetryCfg ?? { enabled: true },
+        telemetryStats,
         blacklist, mediaStats, memoryStats, profileCount,
     };
 }
@@ -431,6 +476,7 @@ async function buildPanel(section) {
     let built;
     switch (section) {
         case 'brain': built = renderBrain(state.pipeline); break;
+        case 'telemetry': built = renderTelemetry(state); break;
         case 'interject': built = renderInterjections(state.interjections); break;
         case 'memory': built = renderMemory(state); break;
         case 'delivery': built = renderDelivery(state.delivery); break;
@@ -624,6 +670,38 @@ module.exports = {
                         content: `✅ Writers: ${next.writers.map(w => `\`${w}\``).join(', ')}\nUtility: \`${next.utilityModel}\``
                             + (dropped > 0 ? `\n⚠️ ${dropped} entr${dropped === 1 ? 'y' : 'ies'} did not look like a model id and ${dropped === 1 ? 'was' : 'were'} dropped.` : ''),
                         flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                // ── Telemetry ───────────────────────────────────────────────
+                if (id === 'ss_tel_toggle') {
+                    const cfg = await getSpeakConfigValue('telemetry', { enabled: true }) ?? { enabled: true };
+                    const enabled = cfg.enabled !== false;
+                    await setSpeakConfigValue('telemetry', { ...cfg, enabled: !enabled });
+                    logger.info('Telemetry toggled', { enabled: !enabled, by: i.user.id });
+                    return refresh(i);
+                }
+
+                if (id === 'ss_tel_export_1' || id === 'ss_tel_export_2' || id === 'ss_tel_export_all') {
+                    await i.deferReply({ flags: MessageFlags.Ephemeral });
+                    const days = id === 'ss_tel_export_1' ? 1 : id === 'ss_tel_export_2' ? 2 : 0;
+                    const sinceMs = days > 0 ? Date.now() - days * 86_400_000 : 0;
+                    const { files, meta } = await telemetry.exportFiles({ sinceMs });
+
+                    // Discord's attachment cap is 10MB; a CSV of repeated text
+                    // gzips roughly 10:1, so compress anything that gets close.
+                    const attachments = files.map((f) => {
+                        const buf = Buffer.from(f.text, 'utf8');
+                        return buf.length > 8 * 1024 * 1024
+                            ? { attachment: zlib.gzipSync(buf), name: `${f.name}.gz` }
+                            : { attachment: buf, name: f.name };
+                    });
+
+                    return i.editReply({
+                        content: `📊 ${days ? `Last ${days * 24}h` : 'Everything retained'}: `
+                            + `${meta.traces} traces, ${meta.calls} calls, ${meta.inputs} distinct inputs. `
+                            + 'Joined by trace_id; inputs keyed by (trace_id, input_hash).',
+                        files: attachments,
                     });
                 }
 

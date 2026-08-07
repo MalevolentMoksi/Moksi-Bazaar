@@ -1,5 +1,6 @@
 // src/utils/apiHelpers.js - Shared API Call Utilities
 const logger = require('./logger');
+const telemetry = require('./telemetry');
 const { TIMEOUTS } = require('./constants');
 
 // DEPRECATED (April 2026): Groq API removed. All models migrated to OpenRouter.
@@ -27,13 +28,26 @@ async function callOpenRouterAPI(model, messages, options = {}) {
         temperature = 1.0,
         timeout = TIMEOUTS.API_CALL,
         cacheControl = false,
-        fallbackModel = null
+        fallbackModel = null,
+        // {kind, extra}: names this call in telemetry. Rows are only written
+        // when a telemetry trace is active (i.e. inside the speak pipeline).
+        telemetry: telemetryMeta = null
     } = options;
 
     if (!OPENROUTER_API_KEY) {
         logger.error('OpenRouter API key not configured');
         return null;
     }
+
+    const startedAt = Date.now();
+    const record = (fields) => telemetry.logCall({
+        kind: telemetryMeta?.kind ?? 'model_call',
+        model,
+        input: messages,
+        latencyMs: Date.now() - startedAt,
+        extra: telemetryMeta?.extra ?? null,
+        ...fields,
+    });
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -49,9 +63,12 @@ async function callOpenRouterAPI(model, messages, options = {}) {
             model,
             messages: resolvedMessages,
             max_tokens: maxTokens,
-            temperature
+            temperature,
+            // Usage accounting: the response reports real token counts and the
+            // actual dollar cost, so telemetry records facts, not estimates.
+            usage: { include: true }
         };
-        
+
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -69,22 +86,38 @@ async function callOpenRouterAPI(model, messages, options = {}) {
         if (!response.ok) {
             const errorText = await response.text();
             logger.error('OpenRouter API error', { status: response.status, error: errorText, model });
-            
+            record({ outcome: `http_${response.status}`, error: errorText.slice(0, 300) });
+
             // Try fallback model if primary failed
             if (fallbackModel && fallbackModel !== model) {
                 logger.info('Attempting OpenRouter fallback model', { primary: model, fallback: fallbackModel });
-                return await callOpenRouterAPI(fallbackModel, messages, { ...options, fallbackModel: null });
+                return await callOpenRouterAPI(fallbackModel, messages, {
+                    ...options,
+                    fallbackModel: null,
+                    telemetry: telemetryMeta
+                        ? { ...telemetryMeta, extra: { ...(telemetryMeta.extra ?? {}), fallbackFor: model } }
+                        : null,
+                });
             }
-            
+
             return null;
         }
 
         const data = await response.json();
         const content = data.choices?.[0]?.message?.content?.trim();
-        
+
         // Remove thinking blocks if present (DeepSeek sometimes adds these)
         const cleanContent = content ? content.replace(/<think>[\s\S]*?<\/think>/g, '').trim() : null;
-        
+
+        const usage = data.usage ?? {};
+        record({
+            output: cleanContent,
+            tokensIn: Number.isFinite(usage.prompt_tokens) ? usage.prompt_tokens : null,
+            tokensOut: Number.isFinite(usage.completion_tokens) ? usage.completion_tokens : null,
+            costUsd: Number.isFinite(usage.cost) ? usage.cost : null,
+            outcome: cleanContent ? 'ok' : 'empty',
+        });
+
         // Log cache performance if caching was enabled
         if (cacheControl) {
             const cacheReadTokens = response.headers.get('openrouter-x-cache-read-input-tokens') || 0;
@@ -97,7 +130,7 @@ async function callOpenRouterAPI(model, messages, options = {}) {
                 });
             }
         }
-        
+
         if (cleanContent) {
             logger.debug('OpenRouter API success', { model, tokens: maxTokens });
         }
@@ -105,13 +138,15 @@ async function callOpenRouterAPI(model, messages, options = {}) {
         return cleanContent || null;
     } catch (error) {
         clearTimeout(timeoutId);
-        
+
         if (error.name === 'AbortError') {
             logger.warn('OpenRouter API timeout', { timeout, model });
+            record({ outcome: 'timeout', error: `timed out after ${timeout}ms` });
         } else {
             logger.error('OpenRouter API exception', { error: error.message, model });
+            record({ outcome: 'exception', error: error.message });
         }
-        
+
         return null;
     }
 }
