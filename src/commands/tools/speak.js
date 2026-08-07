@@ -44,6 +44,10 @@ const REPLY_DEADLINE_MS = 20_000;
 const PREPASS_LATEST_START_MS = 8_000;
 /** The judge needs at least this much runway to be worth consulting. */
 const JUDGE_MIN_BUDGET_MS = 4_000;
+/** Fresh media analysis stops starting once this much of the reply window is
+ *  spent; anything still unanalysed goes out as an honest "not seen" tag and
+ *  is picked up next time. Cached descriptions are exempt: they are free. */
+const MEDIA_STAGE_BUDGET_MS = 12_000;
 /** Memory v2 shows this many raw exchange pairs; profiles carry the rest. */
 const MEMORY_V2_RAW_PAIRS = 2;
 
@@ -243,7 +247,7 @@ function buildReplyMarker(msg, messagesMap, botId) {
  *
  * @returns {Promise<{text: string, participants: Map<string, string>, oldestTimestamp: number}>}
  */
-async function buildConversationContext(messages, botId, pinnedIds = new Set()) {
+async function buildConversationContext(messages, botId, pinnedIds = new Set(), { mediaDeadlineAt = 0 } = {}) {
   const sorted = Array.from(messages.values())
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
@@ -290,7 +294,7 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set()) 
         // reached the model as an "unseen" tag forever, and it answered a
         // picture it had never been shown. Descriptions are cached
         // permanently, so the recurring cost is only genuinely new media.
-        const descriptions = await processMediaInMessage(msg, true);
+        const descriptions = await processMediaInMessage(msg, true, { deadlineAt: mediaDeadlineAt });
         if (descriptions.length > 0) mediaContent = ` ${descriptions.join(' ')}`;
       } catch (e) {
         logger.warn('Media processing failed in context builder', { error: e.message, messageId: msg.id });
@@ -554,7 +558,9 @@ module.exports = {
       // 3. Build conversation context, then pull the bot's relationship with
       //    everyone else in the room in a single batched query.
       const { text: conversationContext, participants, oldestTimestamp } =
-        await buildConversationContext(messages, botId, pinnedIds);
+        await buildConversationContext(messages, botId, pinnedIds, {
+          mediaDeadlineAt: startedAt + MEDIA_STAGE_BUDGET_MS,
+        });
 
       const otherIds = [...participants.keys()].filter(id => id !== userId);
       const [participantContexts, participantProfiles] = await Promise.all([

@@ -17,6 +17,7 @@
 const fs = require('fs');
 const { downloadToTemp, createTempPath, cleanup } = require('./tempFiles');
 const { runFFmpeg, probeFile } = require('./ffmpegUtils');
+const { withSampleSlot } = require('./sampleGate');
 const logger = require('../logger');
 
 /** Bigger than this and the download costs more than the joke is worth. */
@@ -31,33 +32,6 @@ const EXTRACT_TIMEOUT_MS = 20_000;
 /** Inner deadlines that actually abort the work; the outer timeout only stops waiting. */
 const DOWNLOAD_TIMEOUT_MS = 12_000;
 const ENCODE_TIMEOUT_MS = 8_000;
-
-/**
- * The context builder describes every message in the window at once, and each
- * message its attachments at once. Without a gate, a cold channel full of
- * fresh videos means a dozen simultaneous 40 MB downloads and a dozen ffmpeg
- * processes on a small container. Two at a time keeps the burst bounded;
- * everything else queues, and cached videos never come through here at all.
- */
-const MAX_CONCURRENT_SAMPLES = 2;
-let activeSamples = 0;
-const sampleQueue = [];
-
-function acquireSampleSlot() {
-    if (activeSamples < MAX_CONCURRENT_SAMPLES) {
-        activeSamples += 1;
-        return Promise.resolve();
-    }
-    // The releaser hands its slot straight to the next waiter, so the waiter
-    // must not increment: the slot was never freed.
-    return new Promise(resolve => sampleQueue.push(resolve));
-}
-
-function releaseSampleSlot() {
-    const next = sampleQueue.shift();
-    if (next) { next(); return; }
-    activeSamples -= 1;
-}
 
 /**
  * Videos routinely open on black, a logo, or a fade. A little way in is far
@@ -98,35 +72,35 @@ async function firstFrameDataUri(url, { sizeBytes = 0 } = {}) {
         return null;
     }
 
-    await acquireSampleSlot();
-    let videoPath = null;
-    let framePath = null;
-    try {
-        return await withTimeout((async () => {
-            videoPath = await downloadToTemp(url, 'mp4', {
-                maxBytes: MAX_VIDEO_BYTES,
-                timeoutMs: DOWNLOAD_TIMEOUT_MS,
-            });
-            const seek = await pickSeekSeconds(videoPath);
-            framePath = createTempPath('jpg');
+    return withSampleSlot(async () => {
+        let videoPath = null;
+        let framePath = null;
+        try {
+            return await withTimeout((async () => {
+                videoPath = await downloadToTemp(url, 'mp4', {
+                    maxBytes: MAX_VIDEO_BYTES,
+                    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+                });
+                const seek = await pickSeekSeconds(videoPath);
+                framePath = createTempPath('jpg');
 
-            await runFFmpeg(videoPath, framePath, (cmd) => {
-                cmd.seekInput(seek)
-                    .frames(1)
-                    .outputOptions(['-vf', `scale=${FRAME_WIDTH}:-2`, '-q:v', '4']);
-            }, { timeoutMs: ENCODE_TIMEOUT_MS });
+                await runFFmpeg(videoPath, framePath, (cmd) => {
+                    cmd.seekInput(seek)
+                        .frames(1)
+                        .outputOptions(['-vf', `scale=${FRAME_WIDTH}:-2`, '-q:v', '4']);
+                }, { timeoutMs: ENCODE_TIMEOUT_MS });
 
-            const bytes = fs.readFileSync(framePath);
-            if (!bytes.length) return null;
-            return `data:image/jpeg;base64,${bytes.toString('base64')}`;
-        })(), EXTRACT_TIMEOUT_MS, 'Video frame extraction');
-    } catch (error) {
-        logger.warn('[MEDIA] Could not sample a video frame', { error: error.message });
-        return null;
-    } finally {
-        await cleanup(videoPath, framePath).catch(() => {});
-        releaseSampleSlot();
-    }
+                const bytes = fs.readFileSync(framePath);
+                if (!bytes.length) return null;
+                return `data:image/jpeg;base64,${bytes.toString('base64')}`;
+            })(), EXTRACT_TIMEOUT_MS, 'Video frame extraction');
+        } catch (error) {
+            logger.warn('[MEDIA] Could not sample a video frame', { error: error.message });
+            return null;
+        } finally {
+            await cleanup(videoPath, framePath).catch(() => {});
+        }
+    });
 }
 
 module.exports = { firstFrameDataUri, MAX_VIDEO_BYTES, pickSeekSeconds };

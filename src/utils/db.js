@@ -10,7 +10,8 @@ const logger = require('./logger');
 const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY, MEMORY_LIMITS } = require('./constants');
 const { downloadToTemp, createTempPath, cleanup, extFromUrl } = require('./media/tempFiles');
 const { runFFmpeg } = require('./media/ffmpegUtils');
-const { firstFrameDataUri } = require('./media/videoFrame');
+const { firstFrameDataUri, MAX_VIDEO_BYTES } = require('./media/videoFrame');
+const { withSampleSlot } = require('./media/sampleGate');
 
 // Single source of truth for score → attitude level mapping
 function scoreToAttitudeLevel(score) {
@@ -537,7 +538,7 @@ async function removeUserFromBlacklist(userId) {
     logger.info('User removed from blacklist', { userId });
 }
 
-// ── MEDIA ANALYSIS (LLAMA VISION) ───────────────────────────────────────────
+// ── MEDIA ANALYSIS (VISION) ─────────────────────────────────────────────────
 
 /**
  * Discord signs CDN links with `?ex=&is=&hm=` and re-signs them on every
@@ -576,22 +577,30 @@ async function getCachedMediaDescription(mediaId) {
     );
 
     if (rows.length > 0) {
-        pool.query(`UPDATE media_cache SET accessed_count = accessed_count + 1, last_accessed = CURRENT_TIMESTAMP WHERE media_id = $1`, [mediaId]).catch(console.error);
+        pool.query(`UPDATE media_cache SET accessed_count = accessed_count + 1, last_accessed = CURRENT_TIMESTAMP WHERE media_id = $1`, [mediaId])
+            .catch(e => logger.warn('Media cache touch failed', { mediaId, error: e.message }));
         return rows[0];
     }
     return null;
 }
 
-// PRIMARY: Gemini 3.1 Flash-Lite (2.5X faster TTFT, 45% faster output, $0.25/$1.50/1M, replaces deprecated Gemini 2.0)
-// FALLBACK: Qwen 2.5 VL 7B ($0.12/$0.36/1M). Excellent for text/memes, proven reliable
-// RETRY: Exponential backoff (100ms, 200ms, 400ms) for transient failures
+// PRIMARY: Gemini 3.1 Flash-Lite, the STABLE id ($0.25/$1.50/M). The old
+//   -preview id worked until the day Google retired it, which is what preview
+//   ids do; same price, so there was never a reason to be on it.
+// FALLBACK: Qwen3 VL 8B ($0.12/$0.46/M). Replaces Qwen 2.5 VL 7B, which was
+//   DELISTED from OpenRouter: every fallback call had been 404ing silently,
+//   so any Gemini hiccup became "contents not seen".
+// RETRY POLICY: a timeout is NOT retried. It means the provider is slow right
+//   now, and a reply is waiting; the fallback is the retry. Only fast network
+//   failures get one more attempt. Worst case per item is ~16s where the old
+//   ladder (three 10s timeout retries plus fallback) could reach ~38s.
 async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this image in a concise way, focusing on the main subject.", attempt = 1) {
     if (!OPENROUTER_API_KEY) return null;
-    const MAX_ATTEMPTS = 3;
+    const MAX_ATTEMPTS = 2;
     const BACKOFF_BASE = 100; // milliseconds
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 Seconds Max
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     try {
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -604,7 +613,7 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             },
             signal: controller.signal,
             body: JSON.stringify({
-                model: 'google/gemini-3.1-flash-lite-preview',
+                model: 'google/gemini-3.1-flash-lite',
                 messages: [
                     {
                         role: 'user',
@@ -632,28 +641,29 @@ async function analyzeImageWithOpenRouter(imageUrl, prompt = "Describe this imag
             logger.debug('[MEDIA] Gemini primary success', { urlLength: imageUrl.length });
             return result;
         }
-        
+
         // Empty response, try fallback
         logger.warn('[MEDIA] Gemini returned empty response, trying fallback');
         return await analyzeImageFallback(imageUrl, prompt);
     } catch (e) {
         clearTimeout(timeoutId);
-        
-        // Retry logic for transient errors (network, timeout, etc.)
-        if (attempt < MAX_ATTEMPTS && (e.name === 'AbortError' || e.message.includes('fetch'))) {
-            const backoffMs = BACKOFF_BASE * Math.pow(2, attempt - 1); // 100ms, 200ms, 400ms
-            logger.warn('[MEDIA] Transient error, retrying Gemini', { attempt, nextAttemptMs: backoffMs, error: e.message });
+
+        // One retry, and only for a fast network failure. A timeout goes
+        // straight to the fallback: retrying a slow provider stacks 8-second
+        // waits in front of a reply that has a 20-second deadline.
+        if (attempt < MAX_ATTEMPTS && e.name !== 'AbortError' && e.message.includes('fetch')) {
+            const backoffMs = BACKOFF_BASE * attempt;
+            logger.warn('[MEDIA] Network error, retrying Gemini once', { attempt, nextAttemptMs: backoffMs, error: e.message });
             await new Promise(resolve => setTimeout(resolve, backoffMs));
             return await analyzeImageWithOpenRouter(imageUrl, prompt, attempt + 1);
         }
-        
-        // Failed after retries, fall through to fallback
-        logger.error('[MEDIA] Gemini failed after retries, trying fallback', { error: e.message });
+
+        logger.error('[MEDIA] Gemini failed, trying fallback', { error: e.message });
         return await analyzeImageFallback(imageUrl, prompt);
     }
 }
 
-// FALLBACK: Qwen 2.5 VL 7B (excellent for text/memes, proven reliable, $0.12/$0.36/1M)
+// FALLBACK: Qwen3 VL 8B (current-gen, cheap, strong on text/memes)
 async function analyzeImageFallback(imageUrl, prompt) {
     const FALLBACK_TIMEOUT = 8000; // Slightly shorter timeout than primary
     
@@ -673,7 +683,7 @@ async function analyzeImageFallback(imageUrl, prompt) {
             },
             signal: controller.signal,
             body: JSON.stringify({
-                model: 'qwen/qwen-2.5-vl-7b-instruct', 
+                model: 'qwen/qwen3-vl-8b-instruct',
                 messages: [
                     {
                         role: 'user',
@@ -734,34 +744,48 @@ function isAnimatedEmbedCandidate(embed) {
         embed?.thumbnail?.proxyURL
     ].filter(Boolean).map(v => String(v).toLowerCase());
 
-    const hasAnimatedHost = candidates.some(u => /tenor\.com|giphy\.com|media\.discordapp\.net|cdn\.discordapp\.com/.test(u));
+    // Hosts whose page URLs carry no extension but are always animations.
+    // Discord's own CDN does NOT belong here: a pasted cdn.discordapp.com
+    // link is usually a plain image, and listing the host meant every one of
+    // them was downloaded, storyboarded through ffmpeg and labeled a GIF.
+    // Actual .gif links on any host are caught by the extension check.
+    const hasAnimatedHost = candidates.some(u => /tenor\.com|giphy\.com/.test(u));
     const hasAnimatedExt = candidates.some(u => u.includes('.gif') || u.includes('.webm') || u.includes('.mp4'));
 
     return embedType === 'gifv' || hasAnimatedHost || hasAnimatedExt;
 }
 
+// Same hardening as the video frame path, because this is the same shape of
+// work: a download and an ffmpeg pass with a reply waiting on them. The gate
+// is shared with video sampling, so GIFs and videos queue in one lane instead
+// of bursting side by side.
 async function buildGifStoryboard(gifUrl) {
-    let inputPath = null;
-    let storyboardPath = null;
+    return withSampleSlot(async () => {
+        let inputPath = null;
+        let storyboardPath = null;
 
-    try {
-        const sourceExt = extFromUrl(gifUrl) || 'gif';
-        inputPath = await downloadToTemp(gifUrl, sourceExt);
-        storyboardPath = createTempPath('jpg');
+        try {
+            const sourceExt = extFromUrl(gifUrl) || 'gif';
+            inputPath = await downloadToTemp(gifUrl, sourceExt, {
+                maxBytes: MAX_VIDEO_BYTES,
+                timeoutMs: 12_000,
+            });
+            storyboardPath = createTempPath('jpg');
 
-        // Sample animation across time and tile frames into one image (3x2).
-        await runFFmpeg(inputPath, storyboardPath, cmd => {
-            cmd
-                .videoFilters('fps=2,scale=320:-1:flags=lanczos,tile=3x2')
-                .outputOptions(['-frames:v 1']);
-        });
+            // Sample animation across time and tile frames into one image (3x2).
+            await runFFmpeg(inputPath, storyboardPath, cmd => {
+                cmd
+                    .videoFilters('fps=2,scale=320:-1:flags=lanczos,tile=3x2')
+                    .outputOptions(['-frames:v 1']);
+            }, { timeoutMs: 8_000 });
 
-        return { inputPath, storyboardPath };
-    } catch (e) {
-        logger.warn('[MEDIA] GIF storyboard generation failed', { error: e.message });
-        await cleanup(inputPath, storyboardPath);
-        return null;
-    }
+            return { inputPath, storyboardPath };
+        } catch (e) {
+            logger.warn('[MEDIA] GIF storyboard generation failed', { error: e.message });
+            await cleanup(inputPath, storyboardPath);
+            return null;
+        }
+    });
 }
 
 async function analyzeGifWithOpenRouter(gifUrl, prompt) {
@@ -781,7 +805,7 @@ async function analyzeGifWithOpenRouter(gifUrl, prompt) {
 }
 
 async function processMediaInMessage(message, shouldAnalyze = true, options = {}) {
-    const { forceReanalyze = false } = options;
+    const { forceReanalyze = false, deadlineAt = 0 } = options;
     const activeMedia = await getSettingState('active_media_analysis');
     if (activeMedia === false) return [];
 
@@ -792,6 +816,13 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
     // it reacts to "mp4" with total confidence. When there is nothing to
     // describe, say that in words the model cannot mistake for a description.
     const unseen = what => `[${what} shared, contents not seen]`;
+
+    // A reply is waiting on all of this. Cached lookups always go through;
+    // fresh analysis is skipped once the caller's media budget is spent, so a
+    // channel full of new media degrades to honest "not seen" tags instead of
+    // pushing the reply past its deadline. The skipped items are analysed the
+    // next time they come up with budget to spare, and cached from then on.
+    const outOfTime = () => deadlineAt > 0 && Date.now() > deadlineAt;
 
     const MEDIA_PROMPT = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared. Prioritize anything visually striking, emotionally notable, or culturally significant. Name any recognizable characters, memes, or public figures. If text is visible in the image, include it.";
 
@@ -817,7 +848,7 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         const cached = await getCachedMediaDescription(mediaId);
 
         if (!forceReanalyze && cached) return `[${type}: ${cached.description}]`;
-        if (!shouldAnalyze) return unseen(type);
+        if (!shouldAnalyze || outOfTime()) return unseen(type);
 
         const desc = mediaMeta.isGif
             ? await analyzeGifWithOpenRouter(url, MEDIA_PROMPT)
@@ -827,8 +858,6 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         await remember(mediaId, desc, mediaMeta.isGif ? 'gif' : 'image', url);
         return `[${type}: ${desc}]`;
     };
-
-    const processUrl = async (...args) => { descriptions.push(await describeUrl(...args)); };
 
     /**
      * A video uploaded straight to Discord has no embed and so no thumbnail.
@@ -840,7 +869,7 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         const cached = await getCachedMediaDescription(mediaId);
 
         if (!forceReanalyze && cached) return `[Video: ${cached.description}]`;
-        if (!shouldAnalyze) return unseen('Video');
+        if (!shouldAnalyze || outOfTime()) return unseen('Video');
 
         const frame = await firstFrameDataUri(att.url, { sizeBytes: att.size });
         if (!frame) return unseen('Video');
@@ -855,56 +884,59 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
     };
 
     // 1. Attachments (Images & VIDEOS), all at once rather than one after
-    // another: an album of four is one wait, not four.
+    // another: an album of four is one wait, not four. Videos are always
+    // sampled: attachment videos never generate embeds, so the old "borrow a
+    // thumbnail from message.embeds" shortcut could only ever match an
+    // UNRELATED embed. A YouTube link posted alongside an uploaded clip meant
+    // the clip was described from the YouTube thumbnail.
     if (message.attachments?.size > 0) {
         const attachmentTags = await Promise.all([...message.attachments.values()].map(async (att) => {
             if (att.contentType?.startsWith('image/')) {
                 const gifLike = isGifMedia(att.url, att.name, att.contentType);
                 return describeUrl(att.url, gifLike ? "GIF Attachment" : "Image Attachment", att.name, { isGif: gifLike });
             }
-            // A supplied thumbnail is free; otherwise sample a frame.
             if (att.contentType?.startsWith('video/')) {
-                const videoThumbnail = message.embeds.find(e => e.video)?.thumbnail?.url;
-                return videoThumbnail
-                    ? describeUrl(videoThumbnail, "Video", att.name)
-                    : describeVideo(att);
+                return describeVideo(att);
             }
             return null;
         }));
         descriptions.push(...attachmentTags.filter(Boolean));
     }
 
-    // 2. Embeds
+    // 2. Embeds, concurrently for the same reason. The sample gate bounds the
+    // heavy ones, so three tenor links are two ffmpeg passes and a queue, not
+    // three at once and not one after another.
     if (message.embeds?.length > 0) {
-        for (const embed of message.embeds) {
-            if (embed.video && message.attachments.size > 0) continue;
+        const embedTags = await Promise.all(message.embeds.map((embed) => {
+            if (embed.video && message.attachments.size > 0) return null;
 
             const gifLikeEmbed = isAnimatedEmbedCandidate(embed);
             const preferredUrl = embed.video?.url || embed.video?.proxyURL;
 
             if (gifLikeEmbed && preferredUrl) {
-                await processUrl(preferredUrl, "Embedded GIF", "embed-gifv", { isGif: true });
-                continue;
+                return describeUrl(preferredUrl, "Embedded GIF", "embed-gifv", { isGif: true });
             }
 
             const url = embed.image?.url || embed.thumbnail?.url;
             if (url) {
-                await processUrl(url, gifLikeEmbed ? "Embedded GIF" : "Embedded Image", "embed", { isGif: gifLikeEmbed });
+                return describeUrl(url, gifLikeEmbed ? "Embedded GIF" : "Embedded Image", "embed", { isGif: gifLikeEmbed });
             }
-        }
+            return null;
+        }));
+        descriptions.push(...embedTags.filter(Boolean));
     }
-    
-    // 3. Stickers (RESTORED AI ANALYSIS)
+
+    // 3. Stickers, concurrently too.
     if (message.stickers?.size > 0) {
-        for (const [_, s] of message.stickers) {
+        const stickerTags = await Promise.all([...message.stickers.values()].map((s) => {
             // Format 1=PNG, 2=APNG, 4=GIF. (Format 3 is Lottie/JSON which AI cannot see).
             if (s.format === 1 || s.format === 2 || s.format === 4) {
-                  await processUrl(s.url, "Sticker", s.name, { isGif: s.format === 4 });
-            } else {
-                 // Fallback for Lottie stickers
-                 descriptions.push(`[Sticker: ${s.name}]`);
+                return describeUrl(s.url, "Sticker", s.name, { isGif: s.format === 4 });
             }
-        }
+            // Fallback for Lottie stickers
+            return `[Sticker: ${s.name}]`;
+        }));
+        descriptions.push(...stickerTags.filter(Boolean));
     }
 
     // 4. Custom Emojis
@@ -1588,10 +1620,13 @@ async function clearExpiredCooldowns() {
 
 // ── MEDIA CACHE CLEANUP ──────────────────────────────────────────────────────
 /**
- * Cleans up old media cache entries (deterministic, not probabilistic)
- * Runs automatically if table has >1000 rows
+ * Cleans up old media cache entries (deterministic, not probabilistic),
+ * keeping the most recently touched rows. The cap is generous on purpose: a
+ * row is a couple hundred bytes, while a miss now costs a download, an ffmpeg
+ * pass and a vision call with a reply waiting on all three. Evicting to save
+ * kilobytes and paying seconds to earn them back was the wrong trade.
  */
-async function cleanupMediaCache(maxRows = 1000) {
+async function cleanupMediaCache(maxRows = 10_000) {
     try {
         // Check cache size
         const { rows: size } = await pool.query('SELECT COUNT(*) as count FROM media_cache');
@@ -1880,6 +1915,9 @@ module.exports = {
     processMediaInMessage,
     getMediaAnalysisProvider,
     cleanupMediaCache,
+    normalizeMediaUrl,
+    generateMediaId,
+    isAnimatedEmbedCandidate,
     // Memory & Sentiment
     storeConversationMemory,
     getRecentMemories,

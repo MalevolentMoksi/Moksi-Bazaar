@@ -114,7 +114,7 @@ describe('media tags never describe a file instead of a picture', () => {
 
     test('every message in the window gets described, not only the newest', () => {
         const source = read('src/commands/tools/speak.js');
-        expect(source).toContain('processMediaInMessage(msg, true)');
+        expect(source).toContain('processMediaInMessage(msg, true,');
         expect(source).not.toContain('newestUserMsgId');
     });
 });
