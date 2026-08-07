@@ -25,6 +25,7 @@ const {
     getSpeakProfile, deleteSpeakProfile, countSpeakProfiles,
 } = require('../../utils/db.js');
 const { DISTILL_EVERY_N } = require('../../utils/speakProfile');
+const { normalisePipeline } = require('../../utils/speakPipeline');
 const { OWNER_REJECTION_JOKES, isOwner, EMBED_COLORS } = require('../../utils/constants');
 const { ui, retireControls, isV2Message } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
@@ -43,6 +44,7 @@ const DEFAULT_INTERJECTIONS = Object.freeze({
 
 const SECTIONS = [
     { value: 'overview', label: 'Overview', emoji: '📋', description: 'Master switches, health summary' },
+    { value: 'brain', label: 'Brain', emoji: '🧪', description: 'Draft pipeline, room read, models' },
     { value: 'interject', label: 'Interjections', emoji: '💬', description: 'Let it butt in, on your terms' },
     { value: 'memory', label: 'Memory', emoji: '🧠', description: 'Long-term profiles, raw memory, vision cache' },
     { value: 'delivery', label: 'Delivery', emoji: '⌨️', description: 'Typing beats & reply length' },
@@ -240,6 +242,65 @@ function renderInterjections(interjections) {
     return { embed, rows };
 }
 
+function renderBrain(pipeline) {
+    const cfg = pipeline;
+    const anyOn = cfg.prepass || cfg.drafts || cfg.memory || cfg.attitude;
+
+    const embed = new EmbedBuilder()
+        .setTitle('🧪 Brain')
+        .setColor(anyOn ? EMBED_COLORS.WARNING : EMBED_COLORS.NEUTRAL)
+        .setDescription(
+            'The reply pipeline, piece by piece. Everything here is reversible: '
+            + 'with all four off, replies are generated exactly the way they always were '
+            + '(one DeepSeek V3 call, published unexamined).\n\n'
+            + '**Room read**: a fast pre-pass decides what kind of moment it is and what deserves '
+            + 'the reaction, before writing. **Drafts & judge**: every writer below drafts in '
+            + 'parallel and a judge picks the best; no reply ships as an unexamined first draft. '
+            + '**Memory v2**: distilled profiles become the primary memory (shown for everyone in '
+            + 'the room), raw quote-pairs demoted. **Attitude v2**: one honest relationship '
+            + 'sentence instead of five canned personas, fed by the room read instead of a '
+            + 'separate sentiment call.\n\n'
+            + 'The pre-pass and judge skip themselves when a reply is running late; the hard '
+            + 'deadline stays 20s regardless of what is switched on.'
+        )
+        .addFields(
+            { name: 'Room read', value: onOff(cfg.prepass), inline: true },
+            { name: 'Drafts & judge', value: onOff(cfg.drafts), inline: true },
+            { name: 'Memory v2', value: onOff(cfg.memory), inline: true },
+            { name: 'Attitude v2', value: onOff(cfg.attitude), inline: true },
+            { name: `Writers (${cfg.writers.length} drafts)`, value: cfg.writers.map(w => `\`${w}\``).join('\n'), inline: false },
+            { name: 'Utility model (read + judge)', value: `\`${cfg.utilityModel}\``, inline: false },
+        )
+        .setFooter({ text: 'Rough cost with everything on: ~$0.002 per reply. Legacy path: ~$0.0008.' });
+
+    const rows = [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('ss_pl_prepass')
+                .setLabel(cfg.prepass ? 'Room read off' : 'Room read on')
+                .setStyle(cfg.prepass ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('ss_pl_drafts')
+                .setLabel(cfg.drafts ? 'Drafts off' : 'Drafts on')
+                .setStyle(cfg.drafts ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('ss_pl_memory')
+                .setLabel(cfg.memory ? 'Memory v2 off' : 'Memory v2 on')
+                .setStyle(cfg.memory ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('ss_pl_attitude')
+                .setLabel(cfg.attitude ? 'Attitude v2 off' : 'Attitude v2 on')
+                .setStyle(cfg.attitude ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('ss_pl_models')
+                .setLabel('Edit models')
+                .setStyle(ButtonStyle.Secondary)
+        ),
+    ];
+
+    return { embed, rows };
+}
+
 function renderMemory(state) {
     const { distill, memoryStats, mediaStats, profileCount } = state;
 
@@ -323,13 +384,15 @@ function renderUsers(blacklist) {
         .addFields(
             { name: `Blacklist (${blacklist.count})`, value: truncate(preview, 1000), inline: false },
             { name: 'Attitude', value: 'Reset returns a user to neutral (sentiment 0), as if the bot had no opinion of them.', inline: false },
+            { name: '💣 Full reset', value: 'Wipes every memory, profile, attitude and ledger entry for everyone, in one transaction. Asks you to type RESET first.', inline: false },
         );
 
     const rows = [
         new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('ss_bl_add').setLabel('Block user').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId('ss_bl_remove').setLabel('Unblock user').setStyle(ButtonStyle.Secondary),
-            new ButtonBuilder().setCustomId('ss_attitude_reset').setLabel('Reset attitude').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('ss_attitude_reset').setLabel('Reset attitude').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('ss_reset_all').setLabel('Reset ALL relationships & memories').setStyle(ButtonStyle.Danger)
         ),
     ];
 
@@ -339,13 +402,14 @@ function renderUsers(blacklist) {
 // ── Panel assembly ──────────────────────────────────────────────────────────
 
 async function loadState() {
-    const [activeSpeak, activeMedia, interjections, distill, delivery, blacklist, mediaStats, memoryStats, profileCount] =
+    const [activeSpeak, activeMedia, interjections, distill, delivery, pipelineRaw, blacklist, mediaStats, memoryStats, profileCount] =
         await Promise.all([
             getSettingState('active_speak'),
             getSettingState('active_media_analysis'),
             getSpeakConfigValue('interjections', DEFAULT_INTERJECTIONS),
             getSpeakConfigValue('distill', { enabled: false }),
             getSpeakConfigValue('delivery', { multiMessage: false }),
+            getSpeakConfigValue('pipeline', null),
             getBlacklistSummary(),
             getMediaCacheStats(),
             getMemoryStats(),
@@ -357,6 +421,7 @@ async function loadState() {
         interjections: { ...DEFAULT_INTERJECTIONS, ...(interjections ?? {}) },
         distill: distill ?? { enabled: false },
         delivery: delivery ?? { multiMessage: false },
+        pipeline: normalisePipeline(pipelineRaw),
         blacklist, mediaStats, memoryStats, profileCount,
     };
 }
@@ -365,6 +430,7 @@ async function buildPanel(section) {
     const state = await loadState();
     let built;
     switch (section) {
+        case 'brain': built = renderBrain(state.pipeline); break;
         case 'interject': built = renderInterjections(state.interjections); break;
         case 'memory': built = renderMemory(state); break;
         case 'delivery': built = renderDelivery(state.delivery); break;
@@ -507,6 +573,60 @@ module.exports = {
                     return refresh(submitted);
                 }
 
+                // ── Brain (pipeline) ────────────────────────────────────────
+                if (id === 'ss_pl_prepass' || id === 'ss_pl_drafts' || id === 'ss_pl_memory' || id === 'ss_pl_attitude') {
+                    const key = id.slice('ss_pl_'.length);
+                    const cfg = normalisePipeline(await getSpeakConfigValue('pipeline', null));
+                    cfg[key] = !cfg[key];
+                    await setSpeakConfigValue('pipeline', cfg);
+                    logger.info('Speak pipeline toggled', { key, enabled: cfg[key], by: i.user.id });
+                    return refresh(i);
+                }
+
+                if (id === 'ss_pl_models') {
+                    const cfg = normalisePipeline(await getSpeakConfigValue('pipeline', null));
+                    const submitted = await promptModal(i, {
+                        title: 'Pipeline models',
+                        inputs: [
+                            {
+                                id: 'writers',
+                                label: 'Writers, comma separated (max 4)',
+                                paragraph: true,
+                                value: cfg.writers.join(', '),
+                                placeholder: 'vendor/model, vendor/model',
+                                maxLength: 400,
+                                required: true,
+                            },
+                            {
+                                id: 'utility',
+                                label: 'Utility model (room read + judge)',
+                                value: cfg.utilityModel,
+                                maxLength: 100,
+                                required: true,
+                            },
+                        ],
+                    });
+                    if (!submitted) return;
+
+                    const writersInput = submitted.fields.getTextInputValue('writers')
+                        .split(',').map(w => w.trim()).filter(Boolean);
+                    const next = normalisePipeline({
+                        ...cfg,
+                        writers: writersInput,
+                        utilityModel: submitted.fields.getTextInputValue('utility').trim(),
+                    });
+                    await setSpeakConfigValue('pipeline', next);
+                    logger.info('Speak pipeline models changed', { writers: next.writers, utility: next.utilityModel, by: i.user.id });
+
+                    await refresh(null);
+                    const dropped = writersInput.length - next.writers.length;
+                    return submitted.reply({
+                        content: `✅ Writers: ${next.writers.map(w => `\`${w}\``).join(', ')}\nUtility: \`${next.utilityModel}\``
+                            + (dropped > 0 ? `\n⚠️ ${dropped} entr${dropped === 1 ? 'y' : 'ies'} did not look like a model id and ${dropped === 1 ? 'was' : 'were'} dropped.` : ''),
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
                 // ── Memory ──────────────────────────────────────────────────
                 if (id === 'ss_distill_toggle') {
                     const cfg = await getSpeakConfigValue('distill', { enabled: false }) ?? { enabled: false };
@@ -583,6 +703,56 @@ module.exports = {
                     logger.info(adding ? 'User blacklisted' : 'User unblacklisted', { userId: uid, by: i.user.id });
                     await refresh(null);
                     return submitted.reply({ content: `✅ <@${uid}> ${adding ? 'blocked' : 'unblocked'}.`, flags: MessageFlags.Ephemeral });
+                }
+
+                if (id === 'ss_reset_all') {
+                    const submitted = await promptModal(i, {
+                        title: 'Reset ALL relationships & memories',
+                        inputs: [{
+                            id: 'confirm',
+                            label: 'Type RESET (uppercase) to confirm',
+                            required: true,
+                            maxLength: 10,
+                            placeholder: 'This wipes every user. There is no undo.',
+                        }],
+                    });
+                    if (!submitted) return;
+                    if (submitted.fields.getTextInputValue('confirm').trim() !== 'RESET') {
+                        return submitted.reply({ content: 'Not touched. It only listens to the exact word RESET.', flags: MessageFlags.Ephemeral });
+                    }
+
+                    // One transaction: a half-wiped memory system (profiles
+                    // gone, attitudes kept) would be worse than either state.
+                    const client = await pool.connect();
+                    let counts;
+                    try {
+                        await client.query('BEGIN');
+                        const memories = await client.query('DELETE FROM conversation_memories');
+                        const ledger = await client.query('DELETE FROM attitude_ledger');
+                        const profiles = await client.query('DELETE FROM speak_profiles');
+                        const prefs = await client.query(`
+                            UPDATE user_preferences
+                            SET sentiment_score = 0, attitude_level = 'neutral', interaction_count = 0,
+                                last_sentiment_update = NOW(), updated_at = NOW()
+                        `);
+                        await client.query('COMMIT');
+                        counts = {
+                            memories: memories.rowCount, ledger: ledger.rowCount,
+                            profiles: profiles.rowCount, users: prefs.rowCount,
+                        };
+                    } catch (txError) {
+                        await client.query('ROLLBACK').catch(() => {});
+                        throw txError;
+                    } finally {
+                        client.release();
+                    }
+
+                    logger.warn('FULL relationship & memory reset executed', { ...counts, by: i.user.id });
+                    await refresh(null);
+                    return submitted.reply({
+                        content: `💣 Done. ${counts.memories} memories, ${counts.profiles} profiles and ${counts.ledger} ledger entries deleted; ${counts.users} users back to neutral strangers.`,
+                        flags: MessageFlags.Ephemeral,
+                    });
                 }
 
                 if (id === 'ss_attitude_reset') {

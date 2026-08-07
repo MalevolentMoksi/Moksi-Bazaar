@@ -12,9 +12,14 @@ const {
   updateUserAttitudeWithAI,
   storeConversationMemory,
   getRecentMemories,
-  processMediaInMessage
+  processMediaInMessage,
+  getSpeakProfilesBulk,
+  applyAttitudeSignal
 } = require('../../utils/db.js');
 const { maybeDistillProfile } = require('../../utils/speakProfile');
+const {
+  normalisePipeline, readRoom, readBlock, pickBestDraft, attitudeSentence,
+} = require('../../utils/speakPipeline');
 
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { handleCommandError, sendError } = require('../../utils/errorHandler');
@@ -28,6 +33,19 @@ const {
   isOwner
 } = require('../../utils/constants');
 const logger = require('../../utils/logger');
+
+// ── LATENCY BUDGET ──────────────────────────────────────────────────────────
+// The pipeline's extra steps are luxuries, not dependencies: the pre-pass and
+// the judge each run only when the clock allows, so the reply can degrade to
+// a single unjudged draft but can never stack timeouts past the deadline.
+const REPLY_DEADLINE_MS = 20_000;
+/** After this much has already been spent (a cold video, a slow fetch), the
+ *  pre-pass is skipped rather than making a late reply later. */
+const PREPASS_LATEST_START_MS = 8_000;
+/** The judge needs at least this much runway to be worth consulting. */
+const JUDGE_MIN_BUDGET_MS = 4_000;
+/** Memory v2 shows this many raw exchange pairs; profiles carry the rest. */
+const MEMORY_V2_RAW_PAIRS = 2;
 
 // ── HELPERS ─────────────────────────────────────────────────────────────────
 // Strip the citation scaffolding the bot prepends to its own replies, so the
@@ -354,13 +372,25 @@ function formatMemories(memories, { channelId, oldestVisibleTs, limit }) {
  * One compact line per other person in the room the bot actually knows.
  * The asker is excluded: they already get the full CURRENT USER block.
  */
-function formatParticipants(participants, contexts, askerId) {
+function formatParticipants(participants, contexts, askerId, profiles = new Map()) {
   const lines = [];
   for (const [userId, name] of participants) {
     if (userId === askerId) continue;
     const ctx = contexts.get(userId);
-    if (!ctx || !ctx.interactionCount) continue; // strangers add nothing but tokens
-    lines.push(`- ${name}: attitude ${ctx.attitudeLevel}, ${ctx.interactionCount} past exchanges`);
+    const notes = profiles.get(userId);
+    if ((!ctx || !ctx.interactionCount) && !notes) continue; // strangers add nothing but tokens
+    let line = `- ${name}: attitude ${ctx?.attitudeLevel ?? 'neutral'}, ${ctx?.interactionCount ?? 0} past exchanges`;
+    if (notes) {
+      // Memory v2: what the bot knows about the OTHERS in the room, not just
+      // the asker. Two bullets flattened; recognition, not a dossier.
+      const flat = notes.split('\n')
+        .map(b => b.replace(/^- /, '').trim())
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('; ');
+      if (flat) line += `. you know: ${flat.slice(0, 160)}`;
+    }
+    lines.push(line);
     if (lines.length >= 6) break; // enough texture; the room is rarely bigger
   }
   return lines.length ? lines.join('\n') : null;
@@ -443,6 +473,10 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    // Everything below shares one reply deadline; optional pipeline steps
+    // check it before running rather than each bringing its own timeout.
+    const startedAt = Date.now();
+
     // Slash commands get Discord's native "is thinking..." state from this;
     // mention-triggered calls get a live typing indicator from the shim, which
     // reads as the bot actually typing rather than as a bot posting a status.
@@ -481,7 +515,7 @@ module.exports = {
 
       // 2. Parallelize independent fetches. excludeContext keeps memory slots
       //    filled with real exchanges, not "user was lurking" rows.
-      const [messages, userContext, recentMemories, speakProfile, deliveryConfig] = await Promise.all([
+      const [messages, userContext, recentMemories, speakProfile, deliveryConfig, pipelineConfigRaw] = await Promise.all([
         interaction.channel.messages.fetch({ limit: MEMORY_LIMITS.FETCH_LIMIT }),
         getUserContext(userId),
         // A couple extra rows, because the ones duplicating the live chat log
@@ -489,7 +523,9 @@ module.exports = {
         getRecentMemories(userId, MEMORY_LIMITS.RECENT_MEMORIES + 2, { excludeContext: true }),
         getSpeakProfile(userId).catch(() => null),
         getSpeakConfigValue('delivery', { multiMessage: false }).catch(() => ({ multiMessage: false })),
+        getSpeakConfigValue('pipeline', null).catch(() => null),
       ]);
+      const pipeline = normalisePipeline(pipelineConfigRaw);
 
       updateUserPreferences(userId, interaction).catch(e =>
         logger.error('Failed to update user preferences', { userId, error: e.message })
@@ -521,39 +557,81 @@ module.exports = {
         await buildConversationContext(messages, botId, pinnedIds);
 
       const otherIds = [...participants.keys()].filter(id => id !== userId);
-      const participantContexts = otherIds.length
-        ? await getUserContextsBulk(otherIds).catch(e => {
-            logger.warn('Bulk participant lookup failed', { error: e.message });
-            return new Map();
-          })
-        : new Map();
-
-      // 4. Sentiment analysis. Started here but deliberately NOT awaited: the
-      //    system prompt uses the attitude level already loaded by
-      //    getUserContext, so nothing below needs this result until after the
-      //    reply comes back. Awaiting it here used to add a whole round-trip
-      //    (up to three sequential model fallbacks) to every single reply.
-      const sentimentPromise = (userRequest && userRequest.trim())
-        ? updateUserAttitudeWithAI(userId, userRequest, conversationContext, userContext)
-            .catch(e => {
-              logger.warn('Sentiment analysis failed', { userId, error: e.message });
-              return { sentiment: 0, originalSentiment: 0, reasoning: 'analysis failed' };
+      const [participantContexts, participantProfiles] = await Promise.all([
+        otherIds.length
+          ? getUserContextsBulk(otherIds).catch(e => {
+              logger.warn('Bulk participant lookup failed', { error: e.message });
+              return new Map();
             })
-        : Promise.resolve({ sentiment: 0, originalSentiment: 0, reasoning: 'No message' });
+          : new Map(),
+        // Memory v2 only: what the bot knows about the others in the room.
+        (pipeline.memory && otherIds.length)
+          ? getSpeakProfilesBulk(otherIds).catch(() => new Map())
+          : new Map(),
+      ]);
 
-      // 5. Build AI Instructions
-      const attitudeInstruction =
-        ATTITUDE_INSTRUCTIONS[userContext.attitudeLevel] || ATTITUDE_INSTRUCTIONS.neutral;
+      // 3.5 Read the room (pipeline). One fast call that decides what kind of
+      //     moment this is and what deserves the reaction, before any writing
+      //     happens. Skipped outright when the reply is already running late:
+      //     a cold video may have eaten the budget, and a good read is not
+      //     worth a late answer.
+      let roomRead = null;
+      if (pipeline.prepass && Date.now() - startedAt < PREPASS_LATEST_START_MS) {
+        roomRead = await readRoom({
+          conversationContext,
+          askerName,
+          userRequest,
+          isInterjection: Boolean(interaction._interjection),
+          utilityModel: pipeline.utilityModel,
+        });
+      }
 
-      const relationshipContext = describeRelationship(userContext);
+      // 4. Sentiment analysis. Never awaited here: the system prompt uses the
+      //    attitude level already loaded by getUserContext, so nothing below
+      //    needs this result until after the reply comes back. With attitude
+      //    v2 + pre-pass on, the room read IS the signal and the dedicated
+      //    sentiment cascade is skipped entirely: same arithmetic, one fewer
+      //    model round-trip per reply.
+      const sentimentFallback = e => {
+        logger.warn('Sentiment analysis failed', { userId, error: e.message });
+        return { sentiment: 0, originalSentiment: 0, reasoning: 'analysis failed' };
+      };
+      let sentimentPromise;
+      if (!userRequest || !userRequest.trim()) {
+        sentimentPromise = Promise.resolve({ sentiment: 0, originalSentiment: 0, reasoning: 'No message' });
+      } else if (pipeline.attitude && roomRead && Number.isFinite(roomRead.tone)) {
+        sentimentPromise = applyAttitudeSignal(
+          userId,
+          roomRead.tone,
+          roomRead.focus ? `room read: ${roomRead.focus}` : 'room read',
+          userContext,
+          userRequest
+        ).catch(sentimentFallback);
+      } else {
+        sentimentPromise = updateUserAttitudeWithAI(userId, userRequest, conversationContext, userContext)
+          .catch(sentimentFallback);
+      }
 
+      // 5. Build AI Instructions.
+      //    Attitude v2 replaces the three-line block (relationship age, level
+      //    name, canned persona) with one composed sentence: the personas
+      //    contradicted the age line for anyone long-known but neutral, and
+      //    the model was fed the contradiction on every reply.
+      const relationshipBlock = pipeline.attitude
+        ? `- Relationship: ${attitudeSentence(userContext)}`
+        : `- Relationship: ${describeRelationship(userContext)}
+- Current attitude toward them: ${userContext.attitudeLevel}
+- How to behave: ${ATTITUDE_INSTRUCTIONS[userContext.attitudeLevel] || ATTITUDE_INSTRUCTIONS.neutral}`;
+
+      // Memory v2 trims the raw pairs: the distilled profile carries the
+      // durable facts, and four verbatim quotes taught the model to parrot.
       const memoryText = formatMemories(recentMemories, {
         channelId,
         oldestVisibleTs: oldestTimestamp,
-        limit: MEMORY_LIMITS.RECENT_MEMORIES,
+        limit: pipeline.memory ? MEMORY_V2_RAW_PAIRS : MEMORY_LIMITS.RECENT_MEMORIES,
       });
 
-      const othersText = formatParticipants(participants, participantContexts, userId);
+      const othersText = formatParticipants(participants, participantContexts, userId, participantProfiles);
 
       // Time and place. Europe/Paris because that is where this community
       // lives; "it's 3am" jokes only land in the room's own timezone.
@@ -621,9 +699,7 @@ SITUATION:
 CURRENT USER:
 - Name: ${askerName}
 - Role: ${userRoleContext}
-- Relationship: ${relationshipContext}
-- Current attitude toward them: ${userContext.attitudeLevel}
-- How to behave: ${attitudeInstruction}
+${relationshipBlock}
 ${speakProfile?.profile ? `
 WHAT YOU KNOW ABOUT ${askerName} (long-term notes you have kept; use naturally, never recite):
 ${speakProfile.profile}
@@ -639,32 +715,63 @@ ${memoryText}`;
 
       // Interjections get their own framing: nobody summoned the bot, so the
       // model must butt in like a bystander, not answer like it was asked.
+      // The room read, when there is one, rides in front as guidance: it goes
+      // in the USER message, not the system prompt, so the cacheable prefix
+      // stays byte-stable across calls.
       const userPrompt = interaction._interjection
         ? `(nobody asked you anything. you overheard the conversation above, and the last message caught your attention. interject with ONE short remark, the way someone butts into a conversation. if you have nothing worth saying, just say something minimal and dry)${interaction._interjectionAngle ? ` (your owner nudged you: react to ${flatten(interaction._interjectionAngle)})` : ''}`
         : userRequest
           ? `${askerName}: ${userRequest}`
           : `(${askerName} pinged you without saying anything; react to the chat log above)`;
+      const finalUserPrompt = `${readBlock(roomRead)}${userPrompt}`;
 
-      // 6. API CALL with context caching (system prompt is static, worth caching)
-      //    Runs concurrently with the sentiment pass started above, so the user
-      //    waits for whichever is slower rather than for both in sequence.
-      const [rawContent, sentimentAnalysis] = await Promise.all([
-        callOpenRouterAPI(
-          'deepseek/deepseek-chat',
-          [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          {
-            // Adaptive mode needs headroom for its occasional real answer;
-            // tokens are only billed when generated, so the gap costs nothing.
-            maxTokens: adaptiveLength ? 400 : 250,
-            temperature: 0.85,    // was 1.0, less chaotic, still varied
-            cacheControl: true    // Cache the large static system prompt (20% input cost saving on hits)
-          }
-        ),
-        sentimentPromise
-      ]);
+      // 6. GENERATION. Pipeline off: one call to the historical writer,
+      //    byte-identical behaviour. Pipeline on: every writer drafts in
+      //    parallel (same wall time as one call), then the judge picks,
+      //    unless the deadline says ship the first draft and be done.
+      //    Either way this runs concurrently with the sentiment pass, so the
+      //    user waits for whichever is slower rather than for both.
+      const writerMessages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: finalUserPrompt }
+      ];
+      const writerOptions = {
+        // Adaptive mode needs headroom for its occasional real answer;
+        // tokens are only billed when generated, so the gap costs nothing.
+        maxTokens: adaptiveLength ? 400 : 250,
+        temperature: 0.85,    // was 1.0, less chaotic, still varied
+        cacheControl: true    // Cache the large static system prompt (20% input cost saving on hits)
+      };
+
+      let rawContent;
+      let sentimentAnalysis;
+      if (pipeline.drafts) {
+        const [draftResults, sentimentResult] = await Promise.all([
+          Promise.all(pipeline.writers.map(model =>
+            callOpenRouterAPI(model, writerMessages, writerOptions))),
+          sentimentPromise,
+        ]);
+        sentimentAnalysis = sentimentResult;
+
+        const drafts = draftResults.filter(Boolean);
+        const timeLeft = REPLY_DEADLINE_MS - (Date.now() - startedAt);
+        if (drafts.length > 1 && timeLeft > JUDGE_MIN_BUDGET_MS) {
+          rawContent = await pickBestDraft({
+            drafts,
+            conversationContext,
+            userPrompt: finalUserPrompt,
+            utilityModel: pipeline.utilityModel,
+            timeoutMs: Math.min(5000, timeLeft - 2000),
+          });
+        } else {
+          rawContent = drafts[0] ?? null;
+        }
+      } else {
+        [rawContent, sentimentAnalysis] = await Promise.all([
+          callOpenRouterAPI('deepseek/deepseek-chat', writerMessages, writerOptions),
+          sentimentPromise
+        ]);
+      }
 
 
       if (!rawContent) {

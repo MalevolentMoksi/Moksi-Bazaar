@@ -127,8 +127,8 @@ const MEMORY_LIMITS = {
     FETCH_LIMIT: 25,              // Messages to fetch from Discord
     MESSAGE_CHAR_LIMIT: 600,      // Per-message truncation inside the chat log
     RECENT_MEMORIES: 4,           // Past conversations to include
-    MAX_STORED_MEMORIES: 1000,    // Total memories before cleanup
-    CLEANUP_BATCH: 200            // How many to delete during cleanup
+    PER_USER_KEPT: 30             // Raw exchanges retained per user (was a
+                                  // 1000-row cap for the entire server)
 };
 
 // ── API TIMEOUTS & LIMITS ───────────────────────────────────────────────────

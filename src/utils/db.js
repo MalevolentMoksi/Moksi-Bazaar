@@ -7,7 +7,7 @@ const { Pool, types } = require('pg');
 const crypto = require('crypto');
 const fs = require('fs');
 const logger = require('./logger');
-const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY } = require('./constants');
+const { SENTIMENT_THRESHOLDS, SENTIMENT_DECAY, MEMORY_LIMITS } = require('./constants');
 const { downloadToTemp, createTempPath, cleanup, extFromUrl } = require('./media/tempFiles');
 const { runFFmpeg } = require('./media/ffmpegUtils');
 const { firstFrameDataUri } = require('./media/videoFrame');
@@ -1054,19 +1054,23 @@ async function getUserContext(userId) {
     };
 }
 
-async function updateUserAttitudeWithAI(userId, userMessage, conversationContext, userContext) {
-    const analysis = await analyzeMessageSentiment(userMessage, conversationContext);
-    
+/**
+ * Applies one sentiment reading to a user's attitude: smoothing, clamping,
+ * persistence and the ledger entry. The reading can come from the dedicated
+ * sentiment cascade or from the speak pipeline's room read; the arithmetic is
+ * identical either way, which is the point of splitting this out.
+ */
+async function applyAttitudeSignal(userId, rawSentiment, reasoning, userContext, excerpt = '') {
     // Use provided userContext to eliminate N+1 query
     const currentScore = userContext.sentimentScore ?? 0;
-    const impactFactor = Math.abs(analysis.sentiment) > 0.8
+    const impactFactor = Math.abs(rawSentiment) > 0.8
         ? SENTIMENT_THRESHOLDS.HIGH_IMPACT
         : SENTIMENT_THRESHOLDS.LOW_IMPACT;
-    let newScore = (currentScore * (1 - impactFactor)) + (analysis.sentiment * impactFactor);
+    let newScore = (currentScore * (1 - impactFactor)) + (rawSentiment * impactFactor);
     newScore = Math.max(-1, Math.min(1, newScore));
 
     const newLevel = scoreToAttitudeLevel(newScore);
-    
+
     await pool.query(`
         INSERT INTO user_preferences (user_id, interaction_count, attitude_level, sentiment_score, last_sentiment_update)
         VALUES ($1, 1, $2, $3, NOW())
@@ -1086,13 +1090,18 @@ async function updateUserAttitudeWithAI(userId, userMessage, conversationContext
         delta: newScore - currentScore,
         newScore,
         newLevel,
-        rawSentiment: analysis.sentiment,
-        reason: analysis.reasoning,
-        excerpt: userMessage,
+        rawSentiment,
+        reason: reasoning,
+        excerpt,
     }).catch(error => logger.warn('Attitude ledger write failed', { userId, error: error.message }));
 
     // Return both smoothed score and original for proper recording
-    return { sentiment: newScore, originalSentiment: analysis.sentiment, reasoning: analysis.reasoning };
+    return { sentiment: newScore, originalSentiment: rawSentiment, reasoning };
+}
+
+async function updateUserAttitudeWithAI(userId, userMessage, conversationContext, userContext) {
+    const analysis = await analyzeMessageSentiment(userMessage, conversationContext);
+    return applyAttitudeSignal(userId, analysis.sentiment, analysis.reasoning, userContext, userMessage);
 }
 
 // ── WARNS ───────────────────────────────────────────────────────────────────
@@ -1266,19 +1275,22 @@ async function storeConversationMemory(userId, channelId, userMessage, botRespon
         VALUES ($1, $2, $3, $4, $5, $6, $7)
     `, [userId, channelId, userMessage, botResponse, sentimentScore, Date.now(), isContextOnly]);
 
-    // Deterministic cleanup: trigger when estimated row count is high
-    // Uses pg_class reltuples for fast approximate count instead of COUNT(*)
-    const { rows } = await pool.query(
-        `SELECT reltuples::bigint AS count FROM pg_class WHERE relname = 'conversation_memories'`
-    );
-    if (rows[0]?.count > 1000) {
-        await pool.query(`
-            DELETE FROM conversation_memories WHERE id IN (
-                SELECT id FROM conversation_memories ORDER BY timestamp ASC LIMIT 200
-            )
-        `);
-        logger.info('Cleaned up old conversation memories', { deleted: 200, remaining: rows[0].count - 200 });
-    }
+    // Retention is per user: the last N exchanges each. The old cap was
+    // GLOBAL (1000 rows for the whole server, oldest 200 deleted at a time),
+    // which meant every active week evicted everyone else's history and the
+    // bot genuinely remembered nothing about anyone for longer than a few
+    // days. Worst case is now bounded at N rows times however many people
+    // actually talk to it, which is smaller than the old cap ever was in
+    // practice and belongs to each user rather than to whoever spoke last.
+    await pool.query(`
+        DELETE FROM conversation_memories
+        WHERE user_id = $1 AND id NOT IN (
+            SELECT id FROM conversation_memories
+            WHERE user_id = $1
+            ORDER BY timestamp DESC
+            LIMIT ${MEMORY_LIMITS.PER_USER_KEPT}
+        )
+    `, [userId]);
 }
 
 /**
@@ -1402,6 +1414,27 @@ async function deleteSpeakProfile(userId) {
 async function countSpeakProfiles() {
     const { rows } = await pool.query('SELECT COUNT(*) AS n FROM speak_profiles');
     return Number(rows[0]?.n) || 0;
+}
+
+/**
+ * Distilled profiles for a set of users in one round-trip, keyed by id.
+ * Users without a profile are simply absent. Lets the prompt show what the
+ * bot knows about EVERYONE in the room, not only the asker: being remembered
+ * in front of others is where long-term memory visibly pays off.
+ */
+async function getSpeakProfilesBulk(userIds) {
+    const out = new Map();
+    const ids = [...new Set(userIds)].filter(Boolean);
+    if (ids.length === 0) return out;
+
+    const { rows } = await pool.query(
+        'SELECT user_id, profile FROM speak_profiles WHERE user_id = ANY($1)',
+        [ids]
+    );
+    for (const row of rows) {
+        if (row.profile) out.set(row.user_id, row.profile);
+    }
+    return out;
 }
 
 async function updateUserPreferences(userId, interaction) {
@@ -1840,7 +1873,9 @@ module.exports = {
     saveSpeakProfile,
     deleteSpeakProfile,
     countSpeakProfiles,
+    getSpeakProfilesBulk,
     updateUserAttitudeWithAI,
+    applyAttitudeSignal,
     // Media & Cache
     processMediaInMessage,
     getMediaAnalysisProvider,

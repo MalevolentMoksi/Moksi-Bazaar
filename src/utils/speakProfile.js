@@ -56,8 +56,14 @@ Rewrite the fact sheet. Rules:
  */
 async function maybeDistillProfile(userId) {
     try {
-        const config = await getSpeakConfigValue('distill', { enabled: false });
-        if (!config?.enabled) return 'disabled';
+        // Memory v2 makes distilled profiles the primary memory, so switching
+        // it on has to mean distillation actually runs; the standalone toggle
+        // stays as the master for the legacy mode.
+        const [config, pipelineCfg] = await Promise.all([
+            getSpeakConfigValue('distill', { enabled: false }),
+            getSpeakConfigValue('pipeline', null),
+        ]);
+        if (!config?.enabled && !pipelineCfg?.memory) return 'disabled';
 
         if (inFlight.has(userId)) return 'busy';
 
