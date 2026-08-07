@@ -11,10 +11,52 @@ function createTempPath(ext) {
     return path.join(os.tmpdir(), `mbazaar_${id}.${ext}`);
 }
 
-function downloadToTemp(url, ext) {
+/**
+ * @param {string} url
+ * @param {string} ext extension for the temp file name
+ * @param {object} [opts]
+ * @param {number} [opts.maxBytes] hard cap enforced on the wire, not just on a
+ *   declared header. A server that lies about (or omits) Content-Length gets
+ *   cut off mid-stream instead of filling the disk.
+ * @param {number} [opts.timeoutMs] overall deadline. Without it a server that
+ *   drips one byte a minute holds the socket, and the temp file, forever.
+ */
+function downloadToTemp(url, ext, { maxBytes = 0, timeoutMs = 0 } = {}) {
     const dest = createTempPath(ext || 'bin');
     return new Promise((resolve, reject) => {
         const MAX_REDIRECTS = 5;
+        let settled = false;
+        let timer = null;
+        let activeReq = null;
+        let activeFile = null;
+
+        // Every exit funnels through these two, so the timer is always
+        // cleared, the socket always destroyed, and the partial file always
+        // unlinked. Rejecting without aborting is how the old code kept
+        // downloading long after the caller had given up.
+        function fail(err) {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            try { activeReq?.destroy(); } catch {}
+            if (activeFile) {
+                activeFile.destroy();
+                activeFile.once('close', () => fs.unlink(dest, () => {}));
+            } else {
+                fs.unlink(dest, () => {});
+            }
+            reject(err);
+        }
+        function succeed() {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            resolve(dest);
+        }
+
+        if (timeoutMs > 0) {
+            timer = setTimeout(() => fail(new Error(`Download timed out after ${timeoutMs}ms`)), timeoutMs);
+        }
 
         function readSmallBody(res, maxChars = 400) {
             return new Promise((resResolve) => {
@@ -30,7 +72,7 @@ function downloadToTemp(url, ext) {
 
         function get(u, redirects = 0) {
             const mod = u.startsWith('https') ? https : http;
-            mod.get(u, {
+            activeReq = mod.get(u, {
                 headers: {
                     'User-Agent': 'MoksisBazaarBot/1.0',
                     Accept: '*/*',
@@ -39,19 +81,19 @@ function downloadToTemp(url, ext) {
                 if ([301, 302, 307, 308].includes(res.statusCode)) {
                     if (redirects >= MAX_REDIRECTS) {
                         res.resume();
-                        return reject(new Error('Too many redirects downloading media'));
+                        return fail(new Error('Too many redirects downloading media'));
                     }
                     const location = res.headers.location;
                     if (!location) {
                         res.resume();
-                        return reject(new Error('Redirect missing location header while downloading media'));
+                        return fail(new Error('Redirect missing location header while downloading media'));
                     }
                     let nextUrl;
                     try {
                         nextUrl = new URL(location, u).toString();
                     } catch {
                         res.resume();
-                        return reject(new Error('Invalid redirect URL while downloading media'));
+                        return fail(new Error('Invalid redirect URL while downloading media'));
                     }
                     res.resume();
                     return get(nextUrl, redirects + 1);
@@ -60,7 +102,13 @@ function downloadToTemp(url, ext) {
                 if (res.statusCode !== 200) {
                     const body = await readSmallBody(res);
                     const suffix = body ? `: ${body}` : '';
-                    return reject(new Error(`HTTP ${res.statusCode} downloading media${suffix}`));
+                    return fail(new Error(`HTTP ${res.statusCode} downloading media${suffix}`));
+                }
+
+                const declared = Number(res.headers['content-length'] || 0);
+                if (maxBytes > 0 && declared > maxBytes) {
+                    res.resume();
+                    return fail(new Error(`Media is ${declared} bytes, over the ${maxBytes} byte cap`));
                 }
 
                 const contentType = String(res.headers['content-type'] || '').toLowerCase();
@@ -72,14 +120,25 @@ function downloadToTemp(url, ext) {
                 if (looksLikeText) {
                     const body = await readSmallBody(res);
                     const suffix = body ? `: ${body}` : '';
-                    return reject(new Error(`Unexpected non-media download response (${contentType || 'unknown'})${suffix}`));
+                    return fail(new Error(`Unexpected non-media download response (${contentType || 'unknown'})${suffix}`));
                 }
 
                 const file = fs.createWriteStream(dest);
+                activeFile = file;
+                let received = 0;
+                if (maxBytes > 0) {
+                    res.on('data', chunk => {
+                        received += chunk.length;
+                        if (received > maxBytes) {
+                            fail(new Error(`Media exceeded the ${maxBytes} byte cap mid-download`));
+                        }
+                    });
+                }
                 res.pipe(file);
-                file.on('finish', () => file.close(() => resolve(dest)));
-                file.on('error', err => { fs.unlink(dest, () => {}); reject(err); });
-            }).on('error', reject);
+                file.on('finish', () => file.close(() => succeed()));
+                file.on('error', err => fail(err));
+            });
+            activeReq.on('error', err => fail(err));
         }
         get(url);
     });

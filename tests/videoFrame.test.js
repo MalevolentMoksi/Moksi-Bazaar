@@ -52,6 +52,7 @@ jest.mock('fs', () => ({
 
 const { firstFrameDataUri, pickSeekSeconds, MAX_VIDEO_BYTES } = require('../src/utils/media/videoFrame');
 const { cleanup, downloadToTemp } = require('../src/utils/media/tempFiles');
+const { runFFmpeg } = require('../src/utils/media/ffmpegUtils');
 
 beforeEach(() => {
     mockState.downloaded = [];
@@ -131,5 +132,58 @@ describe('refusing to be a liability', () => {
         mockState.ffmpegImpl = () => { throw new Error('boom'); };
         await firstFrameDataUri('https://cdn.invalid/clip.mp4');
         expect(cleanup).toHaveBeenCalled();
+    });
+
+    // Rejecting a promise stops nothing: the download and the encode need
+    // their own deadlines and the cap has to travel with the request, or a
+    // lying server streams past 40 MB while the outer timeout politely waits.
+    test('the cap and the deadlines ride along with the download and the encode', async () => {
+        await firstFrameDataUri('https://cdn.invalid/clip.mp4');
+
+        const downloadOpts = downloadToTemp.mock.calls[0][2];
+        expect(downloadOpts.maxBytes).toBe(MAX_VIDEO_BYTES);
+        expect(downloadOpts.timeoutMs).toBeGreaterThan(0);
+
+        const ffmpegOpts = runFFmpeg.mock.calls[0][3];
+        expect(ffmpegOpts.timeoutMs).toBeGreaterThan(0);
+    });
+
+    // The context builder fires every message's media at once. Five fresh
+    // videos must not mean five simultaneous downloads and five ffmpeg
+    // processes on a small container.
+    test('a channel full of fresh videos is sampled two at a time', async () => {
+        let inFlight = 0;
+        let peak = 0;
+        const gates = [];
+        mockState.downloadImpl = () => new Promise(resolve => {
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+            gates.push(() => { inFlight -= 1; resolve('/tmp/video.mp4'); });
+        });
+        const tick = () => new Promise(resolve => setImmediate(resolve));
+        const settle = async () => { for (let i = 0; i < 10; i += 1) await tick(); };
+
+        const jobs = Promise.all([1, 2, 3, 4, 5].map(
+            n => firstFrameDataUri(`https://cdn.invalid/${n}.mp4`)
+        ));
+
+        await settle();
+        expect(gates.length).toBe(2);
+
+        // Finishing one admits exactly one more.
+        gates.shift()();
+        await settle();
+        expect(gates.length).toBe(2);
+        expect(peak).toBe(2);
+
+        // Drain the rest so the gate is left clean for the other tests.
+        let done = false;
+        jobs.then(() => { done = true; });
+        while (!done) {
+            while (gates.length) gates.shift()();
+            await tick();
+        }
+        expect(peak).toBe(2);
+        expect(inFlight).toBe(0);
     });
 });

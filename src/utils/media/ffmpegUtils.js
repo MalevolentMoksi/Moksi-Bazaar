@@ -18,14 +18,27 @@ function nice(cmd) {
     return cmd;
 }
 
-// Promisified ffmpeg runner. configureFn receives the fluent-ffmpeg command object.
-function runFFmpeg(input, output, configureFn) {
+// Promisified ffmpeg runner. configureFn receives the fluent-ffmpeg command
+// object. timeoutMs, when set, actually kills the process: rejecting a promise
+// does not stop a subprocess, and a wedged ffmpeg would otherwise sit on the
+// CPU until the container restarts.
+function runFFmpeg(input, output, configureFn, { timeoutMs = 0 } = {}) {
     return new Promise((resolve, reject) => {
         const cmd = ffmpeg(input);
         configureFn(cmd);
+        let timer = null;
+        if (timeoutMs > 0) {
+            timer = setTimeout(() => {
+                try { cmd.kill('SIGKILL'); } catch {}
+                reject(new Error(`FFmpeg timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+        }
         nice(cmd)
-            .on('end', resolve)
-            .on('error', (err) => reject(new Error(`FFmpeg error: ${err.message}`)))
+            .on('end', () => { if (timer) clearTimeout(timer); resolve(); })
+            .on('error', (err) => {
+                if (timer) clearTimeout(timer);
+                reject(new Error(`FFmpeg error: ${err.message}`));
+            })
             .save(output);
     });
 }
