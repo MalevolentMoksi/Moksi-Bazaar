@@ -1,5 +1,5 @@
 // src/commands/media/mediaInfo.js
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const fs = require('fs');
 const { handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp } = require('../../utils/media/mediaHelpers');
 const { isGifInput } = require('../../utils/media/formatHelpers');

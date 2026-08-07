@@ -1,6 +1,7 @@
 // src/commands/media/magick.js
 const { SlashCommandBuilder } = require('discord.js');
 const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
+const { ackPublic, replyPublic } = require('../../utils/interactionAck');
 const { isGifImage } = require('../../utils/media/mediaProbe');
 const {
     magickAvailable,
@@ -23,10 +24,16 @@ const magick = {
                 .setMaxValue(99)
         ),
     async execute(interaction) {
+        // Claimed first: the availability check spawns a process to ask
+        // ImageMagick its version, and on a cold container that can outlast
+        // Discord's three-second window. It is cached, so only the first
+        // invocation after a deploy pays for it, which is exactly the one
+        // that would fail.
+        await ackPublic(interaction);
         if (!(await magickAvailable())) {
-            return interaction.reply({
-                content: '⚠️ The `magick` command requires ImageMagick, which is not available on this host. (It is enabled in the deployed bot.)',
-            });
+            return replyPublic(interaction,
+                '⚠️ The `magick` command requires ImageMagick, which is not available on this host. '
+                + '(It is enabled in the deployed bot.)');
         }
         const strength = interaction.options.getInteger('strength') ?? 50;
         await handleMediaCommand(interaction, {

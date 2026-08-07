@@ -54,7 +54,7 @@ async function validateDatabaseConnection() {
   logger.info('Testing database connection...');
 
   try {
-    const result = await pool.query('SELECT 1');
+    await pool.query('SELECT 1');
     logger.info('Database connection successful');
     return { valid: true };
   } catch (error) {

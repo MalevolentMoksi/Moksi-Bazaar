@@ -7,8 +7,21 @@ const { mediaFilePayload } = require('./formatHelpers');
 const { ensureMediaSize } = require('./ffmpegUtils');
 const { mediaSemaphore } = require('./concurrency');
 const { normalizeInput } = require('./inputGuards');
+const { ackPublic } = require('../interactionAck');
 
 const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24 MB. Discord bot upload limit is 25 MB
+
+/**
+ * Ceiling on what will be pulled down before processing, and how long that may
+ * take. Neither existed: downloadToTemp caps nothing unless told to, and this
+ * path never told it, so the caps added for video sampling protected only that
+ * one caller. Input does not all come from Discord (an embed can point at any
+ * host on the internet), so nothing else bounded it.
+ *
+ * Comfortably above any Discord attachment, including a tier-2 server's 50 MB.
+ */
+const MAX_INPUT_BYTES = 64 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 45_000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,12 +64,13 @@ function mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo = al
 }
 
 async function downloadMediaToTemp(mediaInfo) {
+    const limits = { maxBytes: MAX_INPUT_BYTES, timeoutMs: DOWNLOAD_TIMEOUT_MS };
     try {
-        return await downloadToTemp(mediaInfo.url, mediaInfo.ext);
+        return await downloadToTemp(mediaInfo.url, mediaInfo.ext, limits);
     } catch (primaryErr) {
         if (!mediaInfo.backupUrl || mediaInfo.backupUrl === mediaInfo.url) throw primaryErr;
         try {
-            return await downloadToTemp(mediaInfo.backupUrl, mediaInfo.ext);
+            return await downloadToTemp(mediaInfo.backupUrl, mediaInfo.ext, limits);
         } catch (secondaryErr) {
             const combinedErr = new Error(
                 `Failed to download media from both primary and proxy URLs: ${secondaryErr.message}`
@@ -180,7 +194,10 @@ async function handleMediaCommand(interaction, {
     normalizeInput: doNormalizeInput = true,
     useQueue = true,
 }) {
-    await interaction.deferReply();
+    // ackPublic rather than deferReply: a command that had to check something
+    // before delegating here (whether ImageMagick exists, say) has already
+    // claimed the interaction, and a second deferReply would throw.
+    await ackPublic(interaction);
 
     // 1. Explicit attachment takes priority
     let mediaInfo = null;

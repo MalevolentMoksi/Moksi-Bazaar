@@ -73,7 +73,7 @@ function createRelationshipEmbed(userContext, targetUser, options = {}) {
         }
 
         if (userContext.lastSeen) {
-            const timestamp = Math.floor(new Date(userContext.lastSeen).getTime() / 1000);
+            // The footer names it; setTimestamp below renders the date itself.
             embed.setFooter({ 
                 text: `Last seen` 
             });
@@ -266,7 +266,7 @@ function formatSentimentScore(score) {
     return `${emoji} ${prefix}${score.toFixed(2)}`;
 }
 
-function formatRelationshipLine(rel, index) {
+function formatRelationshipLine(rel) {
     const hasDisplayName = rel.displayName && rel.displayName.toLowerCase() !== 'user';
     const name = hasDisplayName ? rel.displayName : `<@${rel.userId}>`;
     const emoji = getEmojiForAttitude(rel.attitudeLevel);

@@ -55,21 +55,27 @@ const SPEAK_MODELS = Object.freeze({
 /**
  * What the bot can actually do, in its own words.
  *
- * It ships as part of the static prompt prefix, so it costs nothing after the
- * first cache hit. Deliberately a summary rather than the generated command
- * list: the point is that it stops inventing features and recognises its own
- * commands when somebody types one in the chat log, not that it can recite a
- * manual. Command names are named exactly so that "/bj" in a message is
- * something it knows rather than noise.
+ * Built from the commands that actually registered rather than written by
+ * hand. The hand-written version named 32 of them and the bot has 71: the
+ * media files each export a whole family, so reading one name per file missed
+ * roughly thirty. A list that is wrong about what it can do is worse than no
+ * list, because it makes the bot deny real features with confidence.
+ *
+ * It is fixed for the life of the process, so it sits in the cacheable prompt
+ * prefix and costs nothing after the first call.
+ *
+ * @param {Iterable<string>} names registered command names
  */
-const BOT_CAPABILITIES = `- What you can actually do, so you never invent a feature or deny a real one. `
-    + `You run this server's casino on a fake currency: /bj (blackjack), /slots, /roulette, /craps, `
-    + `/highlow, /duel, /tetris, /shop, /gacha, /daily, /pay, /currency, /casino. You edit media people `
-    + `post: /caption, /uncaption, /speechbubble, /blur, /hue, /reverse, /volume, /topng, /magick, `
-    + `/videodl. And the rest: /remind, /mystats, /checkrelation, /lookup, /randomyt, /sleepy, /say, `
-    + `/shh. You also quietly guard the door against sketchy new accounts, and Moksi runs you from `
-    + `/speak_settings. When someone names one of those in chat, you know what they mean. Never recite `
-    + `this list, never advertise it, and if something is not on it, you cannot do it.`
+function botCapabilities(names) {
+    const list = [...names].filter(Boolean).sort();
+    if (list.length === 0) return '';
+    return `- What you can actually do, so you never invent a feature or deny a real one. `
+        + `You run this server's casino on a fake currency, you edit images, video and audio people `
+        + `post, and you quietly guard the door against sketchy new accounts. These are every command `
+        + `you have, and you have no others: ${list.map(n => `/${n}`).join(' ')}. `
+        + `When someone names one in chat, you know what they mean. Never recite this list and never `
+        + `advertise it; if something is not on it, you cannot do it.`;
+}
 
 // Sleepy command allowed guilds
 const SLEEPY_GUILDS = ['1217066705537204325', '1347922267853553806'];
@@ -381,7 +387,7 @@ module.exports = {
     DEFAULT_TIMEOUT,
     SLEEPY_GUILDS,
     BOT_IDENTITY,
-    BOT_CAPABILITIES,
+    botCapabilities,
     SPEAK_MODELS,
     
     // Game Configuration

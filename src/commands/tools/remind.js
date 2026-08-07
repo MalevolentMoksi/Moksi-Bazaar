@@ -358,8 +358,10 @@ module.exports = {
         ),
 
     async execute(interaction) {
-        await initScheduler(interaction.client);
+        // Deferred first: initScheduler reads the reminder table and arms a
+        // timer, and it used to run before Discord had been told anything.
         await interaction.deferReply();
+        await initScheduler(interaction.client);
 
         try {
             const sub = interaction.options.getSubcommand();

@@ -1,6 +1,6 @@
 // src/commands/tools/mystats.js - View your own relationship stats
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
-const { getUserContext, getRecentMemories, pool } = require('../../utils/db.js');
+const { getUserContext, pool } = require('../../utils/db.js');
 const { createStatsEmbed } = require('../../utils/embedBuilder');
 const { handleCommandError } = require('../../utils/errorHandler');
 const { ui } = require('../../utils/ui/panel');

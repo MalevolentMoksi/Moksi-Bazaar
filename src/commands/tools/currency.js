@@ -1,6 +1,7 @@
 // src/commands/tools/currency.js
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
-const { getBalance, updateBalance, getTopBalances } = require('../../utils/db');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { getBalance, adjustBalance, getTopBalances } = require('../../utils/db');
+const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const { ui } = require('../../utils/ui/panel');
 
 module.exports = {
@@ -23,19 +24,26 @@ module.exports = {
     const mention = interaction.user.toString();
     const sub = interaction.options.getSubcommand();
 
+    // Both branches below read the balance first, and a database read is
+    // exactly the thing that can outlast Discord's three-second window.
+    if (sub === 'beg' || sub === 'balance') await ackPublic(interaction);
+
     if (sub === 'beg') {
       const bal = await getBalance(userId);
       if (bal > 0) {
-        return interaction.reply({ content: `${mention}, nice try, but you still have $${bal}! You can only beg when you’re flat broke.`, flags: MessageFlags.Ephemeral});
+        return replyPrivate(interaction, `${mention}, nice try, but you still have $${bal}! You can only beg when you’re flat broke.`);
       }
       const amount = Math.floor(Math.random() * 10000) + 1;
-      await updateBalance(userId, amount);
-      return interaction.reply(`${mention}, a benevolent stranger dropped $${amount} in your lap. Your new balance is $${amount}.`);
+      // Added, not assigned. Writing an absolute figure computed from a read
+      // taken moments earlier discards anything that landed in between: a
+      // daily claim, a payout, a gift.
+      const balance = await adjustBalance(userId, amount);
+      return replyPublic(interaction, `${mention}, a benevolent stranger dropped $${amount} in your lap. Your new balance is $${(balance ?? amount).toLocaleString()}.`);
     }
 
     if (sub === 'balance') {
       const bal = await getBalance(userId);
-      return interaction.reply(`${mention}, your current balance is $${bal}.`);
+      return replyPublic(interaction, `${mention}, your current balance is $${bal}.`);
     }
 
     if (sub === 'leaderboard') {

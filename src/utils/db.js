@@ -37,7 +37,7 @@ const pool = new Pool({
 });
 
 // ── POOL ERROR HANDLERS ──────────────────────────────────────────────────────
-pool.on('error', (err, client) => {
+pool.on('error', (err) => {
   logger.error('Unexpected error on idle client', { error: err.message, stack: err.stack });
 });
 
@@ -760,7 +760,7 @@ function normalizeMediaUrl(url) {
     }
 }
 
-function generateMediaId(url, contentHash = null, fileName = '') {
+function generateMediaId(url, _contentHash = null, fileName = '') {
     const uniqueString = `${normalizeMediaUrl(url)}_${fileName}`;
     return crypto.createHash('sha256').update(uniqueString).digest('hex').substring(0, 16);
 }

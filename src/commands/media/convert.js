@@ -4,7 +4,6 @@ const { handleMediaCommand } = require('../../utils/media/mediaHelpers');
 const { toFormat } = require('../../utils/media/imageUtils');
 const { runFFmpeg, videoToGif, mp4OutputOptions } = require('../../utils/media/ffmpegUtils');
 const { createTempPath } = require('../../utils/media/tempFiles');
-const { isGifInput } = require('../../utils/media/formatHelpers');
 
 const topng = {
     data: new SlashCommandBuilder()

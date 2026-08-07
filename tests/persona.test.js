@@ -98,30 +98,28 @@ describe('the bot has to actually say something', () => {
     });
 
     test('it knows which commands exist, so it stops inventing features', () => {
-        const { BOT_CAPABILITIES } = require('../src/utils/constants');
-        expect(speak()).toContain('BOT_CAPABILITIES');
+        const { botCapabilities } = require('../src/utils/constants');
+        expect(speak()).toContain('botCapabilities(interaction.client?.commands?.keys()');
         // A list it recites is worse than no list.
-        expect(BOT_CAPABILITIES).toMatch(/Never recite this list/);
+        expect(botCapabilities(['bj', 'caption'])).toMatch(/Never recite this list/);
     });
 
-    test('and every command it claims is one that actually registers', () => {
-        // The first draft of this list invented /videoedit and /imageeffects,
-        // which is precisely the failure it exists to prevent: a bot confidently
-        // naming a command nobody can run.
-        const { BOT_CAPABILITIES } = require('../src/utils/constants');
-        const dirs = ['src/commands/tools', 'src/commands/media'];
-        const real = new Set();
-        for (const dir of dirs) {
-            for (const file of fs.readdirSync(path.join(__dirname, '..', dir))) {
-                if (!file.endsWith('.js')) continue;
-                const source = read(`${dir}/${file}`);
-                const match = source.match(/new SlashCommandBuilder\(\)\s*(?:\r?\n\s*)?\.setName\(['"]([^'"]+)['"]\)/);
-                if (match) real.add(match[1]);
-            }
-        }
-        const claimed = [...BOT_CAPABILITIES.matchAll(/\/([a-z_]+)/g)].map(m => m[1]);
-        expect(claimed.length).toBeGreaterThan(10);
-        for (const command of claimed) expect([...real]).toContain(command);
+    test('the list is whatever actually registered, so it can never be wrong', () => {
+        // The hand-written version named 32 commands and the bot has 71: the
+        // media files each export a family, and reading one name per file
+        // missed about thirty. A capability list that is wrong makes the bot
+        // deny real features with confidence, which is worse than no list.
+        const { botCapabilities } = require('../src/utils/constants');
+        const line = botCapabilities(['tetris', 'bj', 'deepfry']);
+        expect(line).toContain('/bj');
+        expect(line).toContain('/deepfry');
+        expect(line).toContain('/tetris');
+        expect(line).toMatch(/you have no others/);
+    });
+
+    test('no commands means no claim at all, rather than an empty boast', () => {
+        const { botCapabilities } = require('../src/utils/constants');
+        expect(botCapabilities([])).toBe('');
     });
 
     test('one identity, not five: every prompt reads it from the same place', () => {

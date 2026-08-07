@@ -8,7 +8,7 @@ const fs = require('fs');
 const sharp = require('sharp');
 const { createTempPath, cleanup } = require('./tempFiles');
 const { runFFmpeg, probeFile, nice, ffmpeg, gifPaletteGen, gifPaletteUse } = require('./ffmpegUtils');
-const { getFrameRate, evenNumber } = require('./mediaProbe');
+const { evenNumber } = require('./mediaProbe');
 
 // Defaults chosen to be generous but safe for a Discord bot.
 const MAX_INPUT_DIMENSION = 2048; // longest side for images/video before processing
@@ -50,8 +50,7 @@ async function normalizeImageInput(inputPath, ext) {
 // Cap a video/GIF: resolution, FPS, then frame count (trim). Returns { path, notes }.
 async function normalizeVideoInput(inputPath, { isGif }) {
     const notes = [];
-    let current = inputPath;
-    let createdPaths = [];
+    const createdPaths = [];
 
     let probeData;
     try {

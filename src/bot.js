@@ -135,7 +135,7 @@ function initializeBot() {
   });
 
   // Handle unhandled rejections and exceptions
-  process.on('unhandledRejection', (reason, promise) => {
+  process.on('unhandledRejection', (reason) => {
     console.error('[UNHANDLED_REJECTION]', reason);
     logger.error('Unhandled Promise Rejection', { reason: String(reason), stack: reason?.stack });
   });
