@@ -1,67 +1,84 @@
 // src/utils/interjectionBouncer.js
 /**
- * A second opinion on whether an unprompted interjection is worth making.
+ * The scout that reads a moment before the bot butts into it.
  *
- * The existing gauntlet (channel allowlist, keywords, cooldown, dice roll)
- * controls how OFTEN Moksi butts in. It has nothing to say about whether the
- * particular moment it landed on is one anybody would want a remark about, so
- * a winning roll on "ok" or "gm" spends a full generation to produce a reply
- * nobody needed.
+ * The gauntlet in utils/interjections.js (channel allowlist, keywords,
+ * cooldown, dice roll) controls how OFTEN Moksi interjects. It has nothing to
+ * say about whether the particular moment it landed on is one anybody would
+ * want a remark about, so a winning roll on "ok" or "gm" spent a full
+ * generation on a reply nobody needed.
  *
- * This reads the last few messages with the cheap model and answers one
- * question: is there anything here to react to? It is off unless the owner
- * turns it on, and it fails open, because a bouncer that silently swallows
- * every interjection when the API is down is worse than no bouncer.
+ * This used to answer YES or NO and throw away everything it understood in
+ * the process, which was the waste: the model that decided the moment was
+ * interesting knew exactly WHAT was interesting about it, and the writer was
+ * then sent in blind. It now returns that judgment as well, which makes it
+ * the interjection path's whole pre-pass rather than a gate bolted in front
+ * of one.
+ *
+ * It fails open, because a scout that silently swallows every interjection
+ * when the API is down is worse than no scout at all.
  */
 
 const { callOpenRouterAPI } = require('./apiHelpers');
+const { extractJson } = require('./speakPipeline');
 const telemetry = require('./telemetry');
 const logger = require('./logger');
 
-const BOUNCER_MODEL = 'xiaomi/mimo-v2-flash';
-/** Enough to see what the conversation is, not enough to cost anything. */
-const CONTEXT_MESSAGES = 8;
-const MAX_LINE_CHARS = 200;
+/** Nobody is waiting on an interjection, so it reads more than a reply's gate would. */
+const CONTEXT_MESSAGES = 12;
+const MAX_LINE_CHARS = 220;
+
+/** Whatever the scout could not determine; the pipeline continues without it. */
+const OPEN = Object.freeze({ worth: true, hook: '', mode: 'banter' });
+const CLOSED = Object.freeze({ worth: false, hook: '', mode: 'banter' });
 
 const PROMPT = `Below is the tail of a Discord conversation. A dry, cynical bot is deciding
 whether to butt in uninvited with one remark.
 
-Answer YES only if there is something specific and concrete here to react to:
-an opinion, a claim, a story, a complaint, a joke, an argument, someone being
-wrong about something.
+Say it is worth it only if there is something specific and concrete to react
+to: an opinion, a claim, a story, a complaint, a joke, an argument, someone
+being wrong about something.
 
-Answer NO if it is small talk, greetings, goodbyes, one-word replies, logistics
-("anyone on tonight?"), link-dumps with no commentary, or a conversation that
-has clearly already ended. When in doubt, answer NO: an unprompted remark that
-adds nothing is worse than silence.
+Say it is not worth it if this is small talk, greetings, goodbyes, one-word
+replies, logistics ("anyone on tonight?"), link-dumps with no commentary, or a
+conversation that has clearly already ended. When in doubt, say it is not
+worth it: an unprompted remark that adds nothing is worse than silence.
 
 CONVERSATION:
 {transcript}
 
-Answer with exactly one word, YES or NO.`;
+Answer in strict JSON, nothing else, exactly this shape:
+{"worth": true, "hook": "the ONE concrete thing here worth reacting to, under 20 words", "mode": "banter"}
+
+mode: "question" = someone wants a real answer; "banter" = riffing or joking;
+"heavy" = something serious or emotional; "media" = the point is an image,
+video or link someone shared; "callout" = they are talking about the bot.
+hook: leave it empty when nothing is worth reacting to.`;
 
 /**
  * @param {import('discord.js').Message} message the message that won the roll
- * @returns {Promise<boolean>} true when the interjection should proceed
+ * @param {Object} options
+ * @param {string} options.model which model reads the room
+ * @returns {Promise<{worth: boolean, hook: string, mode: string}>}
  */
-async function passesBouncer(message) {
+async function scoutMoment(message, { model }) {
     // Its own small trace: the interjection it may green-light gets a fresh
     // one, so a refused moment still shows up in the telemetry export.
     return telemetry.runWithTrace(
         { kind: 'bouncer', channelId: message.channelId },
-        () => bouncerVerdict(message).then((passed) => {
-            telemetry.finishTrace({ flags: { passed }, outcome: 'ok' });
-            return passed;
+        () => readMoment(message, model).then((read) => {
+            telemetry.finishTrace({ flags: read, outcome: 'ok' });
+            return read;
         })
     );
 }
 
-async function bouncerVerdict(message) {
+async function readMoment(message, model) {
     try {
         const fetched = await message.channel.messages
             .fetch({ limit: CONTEXT_MESSAGES })
             .catch(() => null);
-        if (!fetched?.size) return true; // cannot judge; do not block
+        if (!fetched?.size) return OPEN; // cannot judge; do not block
 
         const lines = [...fetched.values()]
             .reverse()
@@ -74,24 +91,33 @@ async function bouncerVerdict(message) {
             .filter(Boolean);
 
         // Nothing but images and stickers: there is no text to have a take on.
-        if (lines.length < 2) return false;
+        if (lines.length < 2) return CLOSED;
 
         const verdict = await callOpenRouterAPI(
-            BOUNCER_MODEL,
+            model,
             [{ role: 'user', content: PROMPT.replace('{transcript}', lines.join('\n')) }],
-            { maxTokens: 4, temperature: 0, timeout: 8000, telemetry: { kind: 'bouncer' } }
+            { maxTokens: 120, temperature: 0, timeout: 10_000, telemetry: { kind: 'bouncer' } }
         );
 
-        if (verdict === null) return true; // model unreachable; fail open
-        const yes = /\byes\b/i.test(String(verdict));
-        logger.debug('Interjection bouncer verdict', {
-            channelId: message.channelId, verdict: String(verdict).trim(), passed: yes,
-        });
-        return yes;
+        if (verdict === null) return OPEN; // model unreachable; fail open
+        const parsed = extractJson(verdict);
+        if (!parsed) {
+            // Older prompts answered in bare words; honour that rather than
+            // failing open on a model that simply did not use JSON.
+            return /\bno\b/i.test(String(verdict)) ? CLOSED : OPEN;
+        }
+
+        const read = {
+            worth: parsed.worth !== false,
+            hook: String(parsed.hook ?? '').replace(/\s+/g, ' ').trim().slice(0, 160),
+            mode: typeof parsed.mode === 'string' ? parsed.mode.trim() : 'banter',
+        };
+        logger.debug('Interjection scout', { channelId: message.channelId, ...read });
+        return read;
     } catch (error) {
-        logger.warn('Interjection bouncer failed, allowing', { error: error.message });
-        return true;
+        logger.warn('Interjection scout failed, allowing', { error: error.message });
+        return OPEN;
     }
 }
 
-module.exports = { passesBouncer, CONTEXT_MESSAGES };
+module.exports = { scoutMoment, CONTEXT_MESSAGES };

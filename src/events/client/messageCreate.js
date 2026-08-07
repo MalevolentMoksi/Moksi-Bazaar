@@ -2,64 +2,12 @@
 const logger = require('../../utils/logger');
 const { handleWatchedMessage } = require('../../utils/joinGate/enforcement');
 const { noteMessage } = require('../../utils/joinGate/activity');
-const { getSpeakConfigValue } = require('../../utils/db');
-const { passesBouncer } = require('../../utils/interjectionBouncer');
+const { shouldInterject } = require('../../utils/interjections');
 
 /** Discord's typing indicator lasts ~10s; refresh just inside that. */
 const TYPING_REFRESH_MS = 8_000;
 /** Never leave the indicator running longer than this, whatever happens. */
 const TYPING_MAX_MS = 90_000;
-
-// ── Interjections ───────────────────────────────────────────────────────────
-// channelId -> last interjection timestamp. In-memory on purpose: a restart
-// resetting a cooldown is harmless, and this check runs per guild message.
-const lastInterjection = new Map();
-
-/**
- * Decides whether the bot should butt into a conversation it was not part of.
- * Ordered cheapest-first; the config read is cached in db.js.
- */
-async function shouldInterject(message) {
-    const config = await getSpeakConfigValue('interjections', null);
-    if (!config?.enabled) return false;
-
-    // Channel allowlist is mandatory: "everywhere" is not a mode this ships with.
-    if (!Array.isArray(config.channels) || !config.channels.includes(message.channelId)) return false;
-
-    // Keyword filter, when set, is a hard requirement (e.g. only when "moksi"
-    // comes up in the staff channel). Without keywords, any message may roll.
-    const keywords = Array.isArray(config.keywords) ? config.keywords.filter(Boolean) : [];
-    if (keywords.length > 0) {
-        const content = message.content?.toLowerCase() ?? '';
-        if (!keywords.some(kw => content.includes(String(kw).toLowerCase()))) return false;
-    }
-
-    // Cooldown before the dice roll, so a hot channel cannot brute-force it.
-    const cooldownMs = Math.max(1, Number(config.cooldownMinutes) || 10) * 60_000;
-    const last = lastInterjection.get(message.channelId) ?? 0;
-    if (Date.now() - last < cooldownMs) return false;
-
-    const chance = Math.min(100, Math.max(0, Number(config.chance) || 0));
-    if (Math.random() * 100 >= chance) return false;
-
-    // Last gate, and the only expensive one: everything above decides how
-    // often to interject, this decides whether this particular moment is worth
-    // it. Off unless switched on.
-    if (config.bouncer) {
-        const worthIt = await passesBouncer(message);
-        if (!worthIt) {
-            // A rejected roll costs a quarter of the window rather than all of
-            // it. Charging the full cooldown would let one dull moment buy
-            // silence through an interesting one; charging nothing would put
-            // the bouncer on every message in a busy channel.
-            lastInterjection.set(message.channelId, Date.now() - cooldownMs * 0.75);
-            return false;
-        }
-    }
-
-    lastInterjection.set(message.channelId, Date.now());
-    return true;
-}
 
 module.exports = {
   name: 'messageCreate',
@@ -95,10 +43,15 @@ module.exports = {
     }
 
     // Third trigger: unprompted interjection, if this message clears the
-    // owner-configured channel/keyword/chance/cooldown gauntlet.
+    // owner-configured channel/keyword/chance/cooldown gauntlet. The scout
+    // that clears the last gate also says what it found interesting, and that
+    // read travels into generation rather than being thrown away.
     let interjecting = false;
+    let scoutRead = null;
     if (!triggered) {
-      interjecting = await shouldInterject(message).catch(() => false);
+      const verdict = await shouldInterject(message).catch(() => ({ ok: false, scout: null }));
+      interjecting = verdict.ok;
+      scoutRead = verdict.scout;
       if (!interjecting) return;
     }
 
@@ -125,6 +78,9 @@ module.exports = {
       // (Discord slash commands have no native reply reference; mentions do).
       _sourceMessage: message,
       _interjection: interjecting,
+      // What the scout understood about the moment, when one ran. speak.js
+      // uses it in place of its own room read: same job, already paid for.
+      _interjectionScout: scoutRead,
       deferred: false,
       replied: false,
       _lastReply: null,
@@ -151,7 +107,11 @@ module.exports = {
 
       async deferReply() {
         this.deferred = true;
-        this._startTyping();
+        // An interjection does not announce itself. It thinks for longer than
+        // a reply does and may decide to say nothing at all, and a bot that
+        // types for half a minute in a channel nobody addressed it in, then
+        // goes quiet, is worse than one that simply appears or does not.
+        if (!interjecting) this._startTyping();
       },
       /**
        * Sends as a native Discord reply to the triggering message, so the

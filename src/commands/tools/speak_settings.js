@@ -39,8 +39,9 @@ const SNOWFLAKE_RE = /^\d{17,20}$/;
 
 const DEFAULT_INTERJECTIONS = Object.freeze({
     enabled: false, channels: [], keywords: [], chance: 15, cooldownMinutes: 10,
-    // Extra gate: asks the cheap model whether the moment is worth a remark.
-    // Off by default like every other addition; see utils/interjectionBouncer.js.
+    // The scout: reads the moment before the roll counts, and hands what it
+    // found forward to the writer. Off by default like every other addition;
+    // see utils/interjectionBouncer.js.
     bouncer: false,
 });
 
@@ -180,8 +181,9 @@ async function renderOverview(state) {
     return { embed, rows };
 }
 
-function renderInterjections(interjections) {
+function renderInterjections(interjections, pipeline) {
     const cfg = interjections;
+    const profile = pipeline.interjection;
     const channelsText = cfg.channels.length
         ? cfg.channels.map(id => `<#${id}>`).join(' ')
         : '⚠️ *none set; interjections cannot fire without at least one channel*';
@@ -195,18 +197,36 @@ function renderInterjections(interjections) {
         .setDescription(
             'Lets the bot butt into conversations nobody invited it to. A message must clear every '
             + 'gate below, in order: allowed channel → keyword (if any are set) → per-channel cooldown '
-            + '→ chance roll → bouncer (if on). Replies never ping anyone.'
+            + '→ chance roll → scout (if on) → the drafts, and the silence gate. It never pings anyone '
+            + 'and never shows a typing indicator: an unprompted remark either appears or it does not.\n\n'
+            + 'Nobody is waiting on an interjection, which is why it is allowed to think harder than a '
+            + 'reply and to decide against itself. A vetoed moment hands most of its cooldown back.'
         )
         .addFields(
             { name: 'Status', value: onOff(cfg.enabled), inline: true },
             { name: 'Chance', value: `${cfg.chance}% per eligible message`, inline: true },
             { name: 'Cooldown', value: `${cfg.cooldownMinutes} min per channel`, inline: true },
             {
-                name: 'Bouncer',
+                name: 'Scout',
                 value: `${onOff(cfg.bouncer)}\n-# ${cfg.bouncer
-                    ? 'a winning roll still has to be a moment worth reacting to'
+                    ? 'reads the moment before the roll counts, and tells the writer what it found'
                     : 'every winning roll interjects, however dull the moment'}`,
                 inline: false,
+            },
+            {
+                name: 'Extra brain',
+                value: `${onOff(profile.enabled)}\n-# ${profile.enabled
+                    ? `${profile.writers.length} drafts from ${new Set(profile.writers).size} models, judged, `
+                      + 'whatever the Brain toggles say; 40s ceiling instead of 20s'
+                    : 'interjections use the ordinary reply pipeline and its 20s ceiling'}`,
+                inline: true,
+            },
+            {
+                name: 'Silence gate',
+                value: `${onOff(profile.veto)}\n-# ${profile.veto
+                    ? 'the judge may reject every draft and say nothing at all'
+                    : 'the best draft always posts, however weak the field'}`,
+                inline: true,
             },
             { name: `Channels (${cfg.channels.length})`, value: truncate(channelsText, 1000), inline: false },
             { name: `Keywords (${cfg.keywords.length})`, value: truncate(keywordsText, 1000), inline: false },
@@ -224,13 +244,24 @@ function renderInterjections(interjections) {
             new ButtonBuilder().setCustomId('ss_ij_keywords').setLabel('Edit keywords').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId('ss_ij_bouncer')
-                .setLabel(cfg.bouncer ? 'Bouncer off' : 'Bouncer on')
+                .setLabel(cfg.bouncer ? 'Scout off' : 'Scout on')
                 .setStyle(cfg.bouncer ? ButtonStyle.Danger : ButtonStyle.Success),
             new ButtonBuilder()
                 .setCustomId('ss_ij_clear_channels')
                 .setLabel('Clear channels')
                 .setStyle(ButtonStyle.Danger)
                 .setDisabled(cfg.channels.length === 0)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('ss_ij_profile')
+                .setLabel(profile.enabled ? 'Extra brain off' : 'Extra brain on')
+                .setStyle(profile.enabled ? ButtonStyle.Danger : ButtonStyle.Success),
+            new ButtonBuilder()
+                .setCustomId('ss_ij_veto')
+                .setLabel(profile.veto ? 'Silence gate off' : 'Silence gate on')
+                .setStyle(profile.veto ? ButtonStyle.Danger : ButtonStyle.Success)
+                .setDisabled(!profile.enabled)
         ),
         new ActionRowBuilder().addComponents(
             new ChannelSelectMenuBuilder()
@@ -264,7 +295,9 @@ function renderBrain(pipeline) {
             + 'sentence instead of five canned personas, fed by the room read instead of a '
             + 'separate sentiment call.\n\n'
             + 'The pre-pass and judge skip themselves when a reply is running late; the hard '
-            + 'deadline stays 20s regardless of what is switched on.'
+            + 'deadline stays 20s regardless of what is switched on.\n\n'
+            + 'Interjections ignore these four switches and run their own richer profile, because '
+            + 'nobody is waiting on one. See the **Interjections** section.'
         )
         .addFields(
             { name: 'Room read', value: onOff(cfg.prepass), inline: true },
@@ -477,7 +510,7 @@ async function buildPanel(section) {
     switch (section) {
         case 'brain': built = renderBrain(state.pipeline); break;
         case 'telemetry': built = renderTelemetry(state); break;
-        case 'interject': built = renderInterjections(state.interjections); break;
+        case 'interject': built = renderInterjections(state.interjections, state.pipeline); break;
         case 'memory': built = renderMemory(state); break;
         case 'delivery': built = renderDelivery(state.delivery); break;
         case 'users': built = renderUsers(state.blacklist); break;
@@ -566,6 +599,18 @@ module.exports = {
                     const cfg = { ...DEFAULT_INTERJECTIONS, ...(await getSpeakConfigValue('interjections', DEFAULT_INTERJECTIONS) ?? {}) };
                     await setSpeakConfigValue('interjections', { ...cfg, bouncer: !cfg.bouncer });
                     logger.info('Interjection bouncer toggled', { enabled: !cfg.bouncer, by: i.user.id });
+                    return refresh(i);
+                }
+
+                if (id === 'ss_ij_profile' || id === 'ss_ij_veto') {
+                    // Lives on the pipeline config, not the interjection
+                    // gauntlet: it is the same machinery the Brain section
+                    // controls, pointed at the one path where latency is free.
+                    const key = id === 'ss_ij_profile' ? 'enabled' : 'veto';
+                    const cfg = normalisePipeline(await getSpeakConfigValue('pipeline', null));
+                    cfg.interjection[key] = !cfg.interjection[key];
+                    await setSpeakConfigValue('pipeline', cfg);
+                    logger.info('Interjection brain toggled', { key, enabled: cfg.interjection[key], by: i.user.id });
                     return refresh(i);
                 }
 

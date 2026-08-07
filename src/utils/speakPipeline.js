@@ -30,6 +30,34 @@ const logger = require('./logger');
 
 const FLASH = 'deepseek/deepseek-v4-flash-0731';
 const WILDCARD = 'moonshotai/kimi-k2.6';
+/**
+ * The fourth voice on the interjection panel. A different lineage from the
+ * other three on purpose: two DeepSeek drafts and a Moonshot draft already
+ * rhyme with each other, and the point of a wider panel is a wider spread to
+ * choose from. Priced against live OpenRouter rates in August 2026, at this
+ * bot's real shape of ~2000 tokens in and ~80 out, it adds $0.0009 a draft.
+ */
+const INTERJECTION_FOURTH = 'z-ai/glm-4.7';
+
+/**
+ * Interjections are the one path where latency is nearly free: nobody asked,
+ * so nobody is watching a typing indicator. They therefore get the full
+ * pipeline whatever the live-reply toggles say, a wider panel of drafts, and
+ * a judge that is allowed to answer "none of these" and post nothing at all.
+ *
+ * That veto is the point of the whole profile. An interjection is only a good
+ * surprise when it is genuinely relevant; the bouncer already judges whether
+ * the MOMENT deserves a remark, and this judges whether the REMARK does.
+ *
+ * Whole panel plus scout and judge: roughly $0.0028 a fired interjection,
+ * against a $0.005 ceiling, and the channel cooldown bounds how often that
+ * can happen at all.
+ */
+const DEFAULT_INTERJECTION_PROFILE = Object.freeze({
+    enabled: true,
+    veto: true,
+    writers: Object.freeze([FLASH, FLASH, WILDCARD, INTERJECTION_FOURTH]),
+});
 
 const DEFAULT_PIPELINE = Object.freeze({
     /** Read-the-room step: what is this moment, what deserves the reaction. */
@@ -44,29 +72,46 @@ const DEFAULT_PIPELINE = Object.freeze({
      *  personas, fed by the pre-pass instead of a per-message model cascade. */
     attitude: false,
     writers: Object.freeze([FLASH, FLASH, WILDCARD]),
-    /** Pre-pass and judge both run here: tiny outputs, price barely matters. */
+    /** Pre-pass, scout and judge all run here: tiny outputs, price barely matters. */
     utilityModel: FLASH,
+    interjection: DEFAULT_INTERJECTION_PROFILE,
 });
 
 /** Model ids look like "vendor/model-name"; good enough to reject garbage. */
 const MODEL_ID_RE = /^[\w.:-]+\/[\w.:-]+$/;
 
+/** Keeps a stored writer list from becoming garbage or a runaway bill. */
+function cleanWriters(raw, limit) {
+    if (!Array.isArray(raw)) return null;
+    const writers = raw
+        .map(w => String(w ?? '').trim())
+        .filter(w => MODEL_ID_RE.test(w))
+        .slice(0, limit);
+    return writers.length > 0 ? writers : null;
+}
+
 function normalisePipeline(raw) {
-    const cfg = { ...DEFAULT_PIPELINE, writers: [...DEFAULT_PIPELINE.writers] };
+    const cfg = {
+        ...DEFAULT_PIPELINE,
+        writers: [...DEFAULT_PIPELINE.writers],
+        interjection: { ...DEFAULT_INTERJECTION_PROFILE, writers: [...DEFAULT_INTERJECTION_PROFILE.writers] },
+    };
     if (!raw || typeof raw !== 'object') return cfg;
 
     for (const key of ['prepass', 'drafts', 'memory', 'attitude']) {
         if (typeof raw[key] === 'boolean') cfg[key] = raw[key];
     }
-    if (Array.isArray(raw.writers)) {
-        const writers = raw.writers
-            .map(w => String(w ?? '').trim())
-            .filter(w => MODEL_ID_RE.test(w))
-            .slice(0, 4);
-        if (writers.length > 0) cfg.writers = writers;
-    }
+    cfg.writers = cleanWriters(raw.writers, 4) ?? cfg.writers;
     if (typeof raw.utilityModel === 'string' && MODEL_ID_RE.test(raw.utilityModel.trim())) {
         cfg.utilityModel = raw.utilityModel.trim();
+    }
+
+    if (raw.interjection && typeof raw.interjection === 'object') {
+        for (const key of ['enabled', 'veto']) {
+            if (typeof raw.interjection[key] === 'boolean') cfg.interjection[key] = raw.interjection[key];
+        }
+        // One more slot than a live reply gets: latency is not the constraint here.
+        cfg.interjection.writers = cleanWriters(raw.interjection.writers, 5) ?? cfg.interjection.writers;
     }
     return cfg;
 }
@@ -165,18 +210,34 @@ function recentOwnReplies(conversationContext, count = 2) {
  * "commit to something" stop being pleas aimed at a sampler and become a bar
  * a reply has to clear: a draft that violates them loses to one that does not.
  *
- * Any failure returns the first draft, so the judge can only ever improve on
- * the pre-pipeline behaviour of shipping draft one unexamined.
+ * With `veto`, the judge may also answer 0, meaning none of these earns the
+ * interruption and the bot should say nothing. That option only exists on the
+ * interjection path: for a reply somebody actually asked for, silence is not
+ * an improvement over a mediocre answer, it is a bug.
+ *
+ * Failure handling flips with it. Normally any failure returns the first
+ * draft, so the judge can only ever improve on the old behaviour of shipping
+ * draft one unexamined. Under veto it fails closed instead: nobody asked, so
+ * an unjudged remark is worse than none.
+ *
+ * @returns {Promise<string|null>} the winning draft, or null when vetoed
  */
-async function pickBestDraft({ drafts, conversationContext, userPrompt, utilityModel, timeoutMs = 5000 }) {
+async function pickBestDraft({ drafts, conversationContext, userPrompt, utilityModel, timeoutMs = 5000, veto = false }) {
     if (!Array.isArray(drafts) || drafts.length === 0) return null;
-    if (drafts.length === 1) return drafts[0];
+    if (drafts.length === 1 && !veto) return drafts[0];
 
     const tail = String(conversationContext ?? '').split('\n').slice(-12).join('\n');
     const ownReplies = recentOwnReplies(conversationContext);
     const numbered = drafts.map((d, i) => `${i + 1}: ${String(d).replace(/\s+/g, ' ').trim()}`).join('\n');
 
-    const prompt = `A dry, lowercase Discord bot wrote ${drafts.length} candidate replies to the same moment. Pick the best one.
+    const vetoClause = veto
+        ? `\n\nNobody asked this bot anything: it is about to interrupt a conversation it was not part of. That is only welcome when the remark is genuinely worth reading. If none of the candidates clears every bar below, answer 0 and it will stay silent, which is always an acceptable outcome. Do not settle for the least bad one.`
+        : '';
+    const answerLine = veto
+        ? 'Answer with the winning number alone, or 0 for none of them.'
+        : 'Answer with the winning number alone.';
+
+    const prompt = `A dry, lowercase Discord bot wrote ${drafts.length} candidate replies to the same moment. Pick the best one.${vetoClause}
 
 THE MOMENT (tail of the chat):
 ${tail}
@@ -196,23 +257,30 @@ Judge in this order:
 3. Its shape differs from the recent replies above; if those were flat one-line sneers, another one loses.
 4. It reads like a person typing, not a bot performing.
 
-Answer with the winning number alone.`;
+${answerLine}`;
 
     try {
         const verdict = await callOpenRouterAPI(utilityModel, [
             { role: 'user', content: prompt },
-        ], { maxTokens: 6, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'judge', extra: { candidates: drafts.length } } });
+        ], { maxTokens: 6, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'judge', extra: { candidates: drafts.length, veto } } });
 
         const match = String(verdict ?? '').match(/\d+/);
-        const index = match ? Number(match[0]) - 1 : -1;
+        const picked = match ? Number(match[0]) : -1;
+        if (veto && picked === 0) {
+            logger.debug('[SPEAK] Judge vetoed every draft', { of: drafts.length });
+            return null;
+        }
+        const index = picked - 1;
         if (index >= 0 && index < drafts.length) {
-            logger.debug('[SPEAK] Judge picked draft', { index: index + 1, of: drafts.length });
+            logger.debug('[SPEAK] Judge picked draft', { index: picked, of: drafts.length });
             return drafts[index];
         }
-        return drafts[0];
+        // An unreadable verdict is not a veto; it is a judge that did not
+        // answer, which lands on the same fail rule as an exception.
+        return veto ? null : drafts[0];
     } catch (error) {
-        logger.warn('[SPEAK] Judge failed, shipping first draft', { error: error.message });
-        return drafts[0];
+        logger.warn('[SPEAK] Judge failed', { veto, error: error.message });
+        return veto ? null : drafts[0];
     }
 }
 
@@ -248,10 +316,12 @@ function attitudeSentence(userContext) {
 
 module.exports = {
     DEFAULT_PIPELINE,
+    DEFAULT_INTERJECTION_PROFILE,
     normalisePipeline,
     readRoom,
     readBlock,
     modeSentence,
+    extractJson,
     pickBestDraft,
     recentOwnReplies,
     attitudeSentence,

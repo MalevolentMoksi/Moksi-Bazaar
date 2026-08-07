@@ -20,6 +20,7 @@ const { maybeDistillProfile } = require('../../utils/speakProfile');
 const {
   normalisePipeline, readRoom, readBlock, pickBestDraft, attitudeSentence,
 } = require('../../utils/speakPipeline');
+const { creditVeto } = require('../../utils/interjections');
 const telemetry = require('../../utils/telemetry');
 
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
@@ -40,6 +41,14 @@ const logger = require('../../utils/logger');
 // the judge each run only when the clock allows, so the reply can degrade to
 // a single unjudged draft but can never stack timeouts past the deadline.
 const REPLY_DEADLINE_MS = 20_000;
+/**
+ * Interjections get a longer one. Nobody asked, so nobody is watching a
+ * typing indicator wondering whether the bot died; the only cost of taking
+ * longer is that the conversation may have moved, and the remark is posted as
+ * a Discord reply to the message that prompted it, which keeps it anchored.
+ * Still bounded, because an unbounded path is one that hangs.
+ */
+const INTERJECTION_DEADLINE_MS = 40_000;
 /** After this much has already been spent (a cold video, a slow fetch), the
  *  pre-pass is skipped rather than making a late reply later. */
 const PREPASS_LATEST_START_MS = 8_000;
@@ -544,6 +553,22 @@ module.exports = {
       ]);
       const pipeline = normalisePipeline(pipelineConfigRaw);
 
+      // The interjection profile. An unprompted remark is only a good surprise
+      // when it is genuinely relevant, and it is the one path where thinking
+      // longer is nearly free, so it gets the whole pipeline regardless of the
+      // live-reply toggles, a wider panel of drafts, and a judge that may
+      // decide none of them earn the interruption.
+      const isInterjection = Boolean(interaction._interjection);
+      const interjectProfile = pipeline.interjection;
+      const richInterjection = isInterjection && interjectProfile.enabled;
+      const wants = {
+        prepass: richInterjection || pipeline.prepass,
+        drafts: richInterjection || pipeline.drafts,
+        writers: richInterjection ? interjectProfile.writers : pipeline.writers,
+        veto: richInterjection && interjectProfile.veto,
+        deadlineMs: isInterjection ? INTERJECTION_DEADLINE_MS : REPLY_DEADLINE_MS,
+      };
+
       updateUserPreferences(userId, interaction).catch(e =>
         logger.error('Failed to update user preferences', { userId, error: e.message })
       );
@@ -595,12 +620,19 @@ module.exports = {
       //     a cold video may have eaten the budget, and a good read is not
       //     worth a late answer.
       let roomRead = null;
-      if (pipeline.prepass && Date.now() - startedAt < PREPASS_LATEST_START_MS) {
+      const scout = interaction._interjectionScout;
+      if (scout?.hook) {
+        // The scout already did this job, on the model's way to deciding the
+        // moment was worth interrupting. Paying a second model to re-read the
+        // same chat would buy nothing but a slower remark. Tone is absent on
+        // purpose: nobody addressed the bot, so nobody is treating it any way.
+        roomRead = { mode: scout.mode || 'banter', focus: scout.hook, tone: 0 };
+      } else if (wants.prepass && (isInterjection || Date.now() - startedAt < PREPASS_LATEST_START_MS)) {
         roomRead = await readRoom({
           conversationContext,
           askerName,
           userRequest,
-          isInterjection: Boolean(interaction._interjection),
+          isInterjection,
           utilityModel: pipeline.utilityModel,
         });
       }
@@ -765,9 +797,10 @@ ${memoryText}`;
       let rawContent;
       let sentimentAnalysis;
       let generation;
-      if (pipeline.drafts) {
+      let vetoed = false;
+      if (wants.drafts) {
         const [draftResults, sentimentResult] = await Promise.all([
-          Promise.all(pipeline.writers.map((model, index) =>
+          Promise.all(wants.writers.map((model, index) =>
             callOpenRouterAPI(model, writerMessages, {
               ...writerOptions,
               telemetry: { kind: 'draft', extra: { index: index + 1 } },
@@ -777,22 +810,34 @@ ${memoryText}`;
         sentimentAnalysis = sentimentResult;
 
         const drafts = draftResults.filter(Boolean);
-        const timeLeft = REPLY_DEADLINE_MS - (Date.now() - startedAt);
-        if (drafts.length > 1 && timeLeft > JUDGE_MIN_BUDGET_MS) {
+        const timeLeft = wants.deadlineMs - (Date.now() - startedAt);
+        // The veto has to survive a tight clock: skipping the judge to save a
+        // second would post exactly the unvetted remark it exists to stop.
+        const consultJudge = drafts.length > 0
+          && (wants.veto || drafts.length > 1)
+          && (wants.veto || timeLeft > JUDGE_MIN_BUDGET_MS);
+        if (consultJudge) {
           rawContent = await pickBestDraft({
             drafts,
             conversationContext,
             userPrompt: finalUserPrompt,
             utilityModel: pipeline.utilityModel,
-            timeoutMs: Math.min(5000, timeLeft - 2000),
+            timeoutMs: Math.max(3000, Math.min(5000, timeLeft - 2000)),
+            veto: wants.veto,
           });
-          generation = { mode: 'drafts', produced: drafts.length, judge: 'consulted' };
+          vetoed = wants.veto && rawContent === null;
+          generation = {
+            mode: 'drafts', produced: drafts.length,
+            judge: vetoed ? 'vetoed' : 'consulted',
+            panel: wants.writers.length,
+          };
         } else {
           rawContent = drafts[0] ?? null;
           generation = {
             mode: 'drafts',
             produced: drafts.length,
             judge: drafts.length > 1 ? 'deadline_skipped' : 'too_few_drafts',
+            panel: wants.writers.length,
           };
         }
       } else {
@@ -808,16 +853,28 @@ ${memoryText}`;
 
       const traceFlags = {
         pipeline: {
-          prepass: pipeline.prepass, drafts: pipeline.drafts,
+          prepass: wants.prepass, drafts: wants.drafts,
           memory: pipeline.memory, attitude: pipeline.attitude,
+          interjection: richInterjection ? { veto: wants.veto, panel: wants.writers.length } : false,
         },
         roomRead: roomRead
-          ? { mode: roomRead.mode, tone: roomRead.tone }
-          : (pipeline.prepass ? 'skipped_or_failed' : 'off'),
+          ? { mode: roomRead.mode, tone: roomRead.tone, from: scout?.hook ? 'scout' : 'prepass' }
+          : (wants.prepass ? 'skipped_or_failed' : 'off'),
         generation,
         adaptiveLength,
       };
 
+      // The silence gate fired: the drafts existed and none of them earned an
+      // uninvited interruption. Not a failure, so it is not reported as one,
+      // and most of the channel cooldown goes back so the next good moment is
+      // not made to queue behind this one.
+      if (vetoed) {
+        logger.info('[SPEAK] Interjection vetoed; staying quiet', { channelId, drafts: generation.produced });
+        telemetry.finishTrace({ outcome: 'vetoed', flags: traceFlags });
+        interaction._stopTyping?.();
+        creditVeto(channelId).catch(() => {});
+        return;
+      }
 
       if (!rawContent) {
         logger.error('OpenRouter returned null', { userId, hasRequest: !!userRequest });
