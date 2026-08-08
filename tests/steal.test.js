@@ -126,6 +126,89 @@ describe('what it finds on a message', () => {
     });
 });
 
+describe('what /steal grabs when given nothing', () => {
+    const { findRecentExpressions, LOOKBACK_MESSAGES } = steal;
+
+    /** Newest first, the order Discord returns and this code relies on. */
+    function channelWith(...messages) {
+        return {
+            channel: {
+                messages: {
+                    fetch: jest.fn(async () => new Map(messages.map((m, i) => [String(i), m]))),
+                },
+            },
+        };
+    }
+
+    test('a message holding only a sticker is found', async () => {
+        // The case that prompted this. A slash command cannot take a sticker
+        // as an option at all, so without the lookback /steal was structurally
+        // useless for the thing it was most wanted for.
+        const found = await findRecentExpressions(channelWith(
+            messageLike({ stickers: [{ id: '777777777777777777', name: 'sob', format: StickerFormatType.PNG }] }),
+        ));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ kind: 'sticker', id: '777777777777777777' });
+    });
+
+    test('newer messages carrying nothing are stepped over', async () => {
+        const found = await findRecentExpressions(channelWith(
+            messageLike({ content: 'just talking' }),
+            messageLike({ content: 'still talking 🙂' }),
+            messageLike({ content: '<:target:888888888888888888>' }),
+        ));
+
+        expect(found.map(e => e.id)).toEqual(['888888888888888888']);
+    });
+
+    test('the newest message with anything wins, and older ones are left alone', async () => {
+        // Gathering across messages would take things nobody pointed at.
+        const found = await findRecentExpressions(channelWith(
+            messageLike({ content: '<:newer:100000000000000001>' }),
+            messageLike({ content: '<:older:100000000000000002>' }),
+        ));
+
+        expect(found.map(e => e.id)).toEqual(['100000000000000001']);
+    });
+
+    test('everything on that one message comes along', async () => {
+        const found = await findRecentExpressions(channelWith(
+            messageLike({
+                content: '<:one:100000000000000001> <:two:100000000000000002>',
+                stickers: [{ id: '100000000000000003', name: 'three', format: StickerFormatType.PNG }],
+            }),
+        ));
+
+        expect(found).toHaveLength(3);
+    });
+
+    test('it reads the same window the media commands do', async () => {
+        const interaction = channelWith(messageLike({ content: '<:x:100000000000000001>' }));
+        await findRecentExpressions(interaction);
+
+        expect(interaction.channel.messages.fetch).toHaveBeenCalledWith({ limit: LOOKBACK_MESSAGES });
+    });
+
+    test('a channel it cannot read is empty, not a crash', async () => {
+        // A slash command that throws here shows the user "the application did
+        // not respond", which says nothing about what went wrong.
+        const refused = { channel: { messages: { fetch: async () => { throw new Error('Missing Access'); } } } };
+        await expect(findRecentExpressions(refused)).resolves.toEqual([]);
+
+        for (const interaction of [{}, { channel: null }, null]) {
+            await expect(findRecentExpressions(interaction)).resolves.toEqual([]);
+        }
+    });
+
+    test('nothing in the whole window is empty rather than an error', async () => {
+        const found = await findRecentExpressions(channelWith(
+            messageLike({ content: 'one' }), messageLike({ content: 'two' }),
+        ));
+        expect(found).toEqual([]);
+    });
+});
+
 describe('naming the copy', () => {
     test('ordinary names survive intact', () => {
         expect(sanitizeEmojiName('pepega')).toBe('pepega');

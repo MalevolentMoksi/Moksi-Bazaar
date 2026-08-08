@@ -51,6 +51,14 @@ const SIZE_LADDER = [null, 512, 256, 128, 64];
  */
 const MAX_PER_RUN = 10;
 
+/**
+ * How far back `/steal` looks when it is handed nothing.
+ *
+ * The same window the media commands scan, so "uses the recent one if omitted"
+ * means the same thing everywhere in this bot.
+ */
+const LOOKBACK_MESSAGES = 20;
+
 const FETCH_TIMEOUT_MS = 10_000;
 
 /** Custom emoji as they appear in raw message content. */
@@ -161,6 +169,41 @@ function collectExpressions(message) {
     }
 
     return [...found.values()];
+}
+
+/**
+ * The most recent thing in this channel worth stealing.
+ *
+ * This is not a convenience, it is the difference between the slash command
+ * working and not. Discord gives a slash command no way to accept a sticker as
+ * an option: there is no sticker option type, and a sticker cannot be typed
+ * into a text field the way `<:name:id>` can. So without a lookback, `/steal`
+ * is structurally incapable of the thing it is most often wanted for.
+ *
+ * The newest message carrying anything wins outright. Taking one emoji from
+ * here and another from three messages up would be a surprising liberty to
+ * take on somebody's behalf.
+ */
+async function findRecentExpressions(interaction) {
+    const channel = interaction?.channel;
+    if (!channel?.messages?.fetch) return [];
+
+    const messages = await channel.messages
+        .fetch({ limit: LOOKBACK_MESSAGES }).catch(() => null);
+    if (!messages) return [];
+
+    // Newest first, which is what Discord returns and what the media helpers
+    // already assume when they take the first match they find.
+    for (const message of messages.values()) {
+        const found = collectExpressions(message);
+        if (found.length) return found;
+    }
+    return [];
+}
+
+/** An error carrying text meant for the person who ran the command. */
+function userFacing(message) {
+    return Object.assign(new Error(message), { userFacing: true });
 }
 
 /** What `/steal emoji:` will accept: the emoji itself, or a link to one. */
@@ -301,8 +344,9 @@ function buildReport(results, skipped) {
 /**
  * @param {import('discord.js').Interaction} interaction
  * @param {() => Promise<Array>} collect deferred, so the ack goes out first
+ * @param {object} opts { whenEmpty } what to say when there was nothing to take
  */
-async function run(interaction, collect) {
+async function run(interaction, collect, { whenEmpty } = {}) {
     if (!interaction.inGuild()) {
         return interaction.reply({
             content: 'Emoji live in servers, so this only works inside one.',
@@ -319,10 +363,19 @@ async function run(interaction, collect) {
             'I need the **Manage Expressions** permission here before I can add anything.');
     }
 
-    const expressions = await collect();
+    let expressions;
+    try {
+        expressions = await collect();
+    } catch (error) {
+        // Anything deliberately raised for the user is their answer, not a
+        // crash. Everything else still is one.
+        if (!error?.userFacing) throw error;
+        return interaction.editReply(error.message);
+    }
+
     if (!expressions.length) {
-        return interaction.editReply(
-            'Nothing there I can take. Custom emoji and stickers work; the built-in unicode ones are already yours everywhere.');
+        return interaction.editReply(whenEmpty
+            ?? 'Nothing there I can take. Custom emoji and stickers work; the built-in unicode ones are already yours everywhere.');
     }
 
     const taking = expressions.slice(0, MAX_PER_RUN);
@@ -360,7 +413,7 @@ const slash = {
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuildExpressions)
         .addStringOption(opt => opt
             .setName('emoji')
-            .setDescription('Paste the emoji itself, or a link to one'))
+            .setDescription('Paste the emoji, or a link (leave empty to take the latest in chat)'))
         .addAttachmentOption(opt => opt
             .setName('image')
             .setDescription('Or upload an image to turn into an emoji'))
@@ -384,18 +437,26 @@ const slash = {
                 }];
             }
 
-            const parsed = parseEmojiInput(text);
-            if (!parsed) return [];
-            if (!parsed.name && !wanted) {
-                // A bare link has no name in it, and guessing one from the
-                // snowflake would be worse than asking.
-                throw Object.assign(new Error('needs a name'), { userFacing: true });
+            if (text) {
+                const parsed = parseEmojiInput(text);
+                if (!parsed) {
+                    // Silently falling back to the lookback here would steal
+                    // something they did not ask for and call it success.
+                    throw userFacing(
+                        'I could not read that. Paste the emoji itself, or a link to one, or leave it empty to take the latest in chat.');
+                }
+                if (!parsed.name && !wanted) {
+                    // A bare link carries no name, and deriving one from the
+                    // snowflake would be worse than asking.
+                    throw userFacing(
+                        'That link does not carry a name, so tell me what to call it with the `name` option.');
+                }
+                return [{ ...parsed, name: sanitizeEmojiName(wanted ?? parsed.name) }];
             }
-            return [{ ...parsed, name: sanitizeEmojiName(wanted ?? parsed.name) }];
-        }).catch(async error => {
-            if (!error?.userFacing) throw error;
-            return interaction.editReply(
-                'That link does not carry a name, so tell me what to call it with the `name` option.');
+
+            return findRecentExpressions(interaction);
+        }, {
+            whenEmpty: `I looked back through the last ${LOOKBACK_MESSAGES} messages and found no custom emoji or stickers. Paste one, or upload an image.`,
         });
     },
 };
@@ -419,6 +480,8 @@ const contextMenu = {
                     .fetch(interaction.targetId).catch(() => null);
             }
             return collectExpressions(target ?? interaction.targetMessage);
+        }, {
+            whenEmpty: 'Nothing on that message I can take. Custom emoji and stickers work; the built-in unicode ones are already yours everywhere.',
         });
     },
 };
@@ -426,6 +489,8 @@ const contextMenu = {
 module.exports = [slash, contextMenu];
 // Exported for the tests; the command loader ignores anything but data/execute.
 module.exports.collectExpressions = collectExpressions;
+module.exports.findRecentExpressions = findRecentExpressions;
+module.exports.LOOKBACK_MESSAGES = LOOKBACK_MESSAGES;
 module.exports.parseEmojiInput = parseEmojiInput;
 module.exports.sanitizeEmojiName = sanitizeEmojiName;
 module.exports.sanitizeStickerName = sanitizeStickerName;
