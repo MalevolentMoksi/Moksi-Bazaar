@@ -11,6 +11,10 @@ const {
 } = require('../../utils/media/magickUtils');
 
 const magick = {
+    // Withheld from registration, and from the bot's own sense of what it can
+    // do, on any host without ImageMagick. The guard inside execute() stays as
+    // the backstop for the case where the binary disappears after boot.
+    requires: ['imagemagick'],
     data: new SlashCommandBuilder()
         .setName('magick')
         .setDescription("Apply ImageMagick's content-aware (liquid) scale: the classic warped \"magik\" effect")
@@ -31,9 +35,13 @@ const magick = {
         // that would fail.
         await ackPublic(interaction);
         if (!(await magickAvailable())) {
+            // No claim about where it DOES work. The old text promised "it is
+            // enabled in the deployed bot", which the deployed bot itself
+            // started saying the day the builder stopped installing
+            // ImageMagick, telling people the thing they were using was not
+            // the thing they were using.
             return replyPublic(interaction,
-                '⚠️ The `magick` command requires ImageMagick, which is not available on this host. '
-                + '(It is enabled in the deployed bot.)');
+                '⚠️ `/magick` needs ImageMagick, which this host does not have.');
         }
         const strength = interaction.options.getInteger('strength') ?? 50;
         await handleMediaCommand(interaction, {

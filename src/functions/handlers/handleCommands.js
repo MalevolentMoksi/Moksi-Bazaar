@@ -3,6 +3,7 @@ const fs    = require('fs');
 const path  = require('path');
 const crypto = require('crypto');
 const { REST, Routes } = require('discord.js');
+const { probeCapabilities, unmetRequirements } = require('../../utils/media/capabilities');
 
 /**
  * Every boot used to PUT the full command list to every guild, whether or not
@@ -32,6 +33,8 @@ module.exports = (client) => {
     // was a slash command that spins forever, which names nothing.
     const commands = [];
     const failures = [];
+    /** name -> the command module, so requirements can be read after loading. */
+    const loaded = new Map();
     const commandsPath = path.join(__dirname, '..', '..', 'commands');
     for (const category of fs.readdirSync(commandsPath)) {
       const categoryPath = path.join(commandsPath, category);
@@ -45,6 +48,7 @@ module.exports = (client) => {
             if (cmd?.data && cmd?.execute) {
               client.commands.set(cmd.data.name, cmd);
               commands.push(cmd.data.toJSON());
+              loaded.set(cmd.data.name, cmd);
               usable++;
             }
           }
@@ -99,7 +103,44 @@ module.exports = (client) => {
       // "assume stale" so the worst case is a redundant registration.
       const { getSpeakConfigValue, setSpeakConfigValue } = require('../../utils/db');
 
-      const payloadHash = hashCommands(commands);
+      // Withhold commands this container cannot actually run.
+      //
+      // /magick needs ImageMagick and /videodl needs yt-dlp, and neither
+      // survived the builder change that stopped running the Dockerfile.
+      // Both already refused politely, but a command nobody can use should
+      // not be in the picker at all, and more importantly client.commands is
+      // what tells the bot's persona which commands it has. Left alone, it
+      // offers to download videos it cannot download.
+      //
+      // Dropped from client.commands too, not just from the registration, so
+      // the persona and Discord agree. Self-reversing: on any builder that
+      // installs the binaries again, the probe finds them and they come back
+      // without a code change, re-registering because the hash below moves.
+      let publishable = commands;
+      try {
+        const caps = await probeCapabilities();
+        const withheld = [];
+        for (const [name, cmd] of loaded) {
+          const unmet = unmetRequirements(cmd, caps);
+          if (unmet.length) {
+            withheld.push({ name, needs: unmet });
+            client.commands.delete(name);
+          }
+        }
+        if (withheld.length) {
+          publishable = commands.filter(c => !withheld.some(w => w.name === c.name));
+          client.commandArray = publishable;
+          console.warn(`[COMMANDS] Withholding ${withheld.length} command(s) this host cannot run: `
+            + withheld.map(w => `/${w.name} (needs ${w.needs.join(', ')})`).join(', '));
+        }
+      } catch (error) {
+        // Fail open, loudly. A probe that throws must never deregister a
+        // working command from every guild; the worst case stays what it was
+        // before this existed, which is a command that refuses politely.
+        console.error('[COMMANDS] Capability probe failed; publishing everything as loaded:', error.message);
+      }
+
+      const payloadHash = hashCommands(publishable);
       const force = process.env.FORCE_REGISTER === '1';
 
       // 1. Fetch and delete existing global commands
@@ -139,8 +180,8 @@ module.exports = (client) => {
         targets.map(guild =>
           rest.put(
             Routes.applicationGuildCommands(appId, guild.id),
-            { body: commands }
-          ).then(() => console.log(`Registered ${commands.length} commands in ${guild.name}`))
+            { body: publishable }
+          ).then(() => console.log(`Registered ${publishable.length} commands in ${guild.name}`))
         )
       );
 

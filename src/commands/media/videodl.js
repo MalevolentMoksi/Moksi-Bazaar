@@ -47,6 +47,10 @@ function looksLikeUrl(s) {
 }
 
 const videodl = {
+    // Same treatment as /magick, though this one is unlikely to come back:
+    // yt-dlp is blocked from datacenter IPs by the sites worth downloading
+    // from, so even a host that installs the binary cannot really serve this.
+    requires: ['yt-dlp'],
     data: new SlashCommandBuilder()
         .setName('videodl')
         .setDescription('Download a video (or its audio) from a URL: YouTube, Twitter, TikTok, etc.')
@@ -72,7 +76,7 @@ const videodl = {
         await interaction.deferReply();
 
         if (!(await ytdlpAvailable())) {
-            return interaction.editReply('⚠️ The `videodl` command requires yt-dlp, which is not available on this host. (It is enabled in the deployed bot.)');
+            return interaction.editReply('⚠️ `/videodl` needs yt-dlp, which this host does not have.');
         }
 
         let downloadedPath = null;

@@ -87,4 +87,24 @@ async function reportCapabilities() {
     }
 }
 
-module.exports = { probeCapabilities, reportCapabilities, COST_OF_ABSENCE };
+/**
+ * Which of a command's declared requirements this container cannot meet.
+ *
+ * A command opts in by exporting `requires: ['imagemagick']`. Anything that
+ * declares nothing is always publishable, so the default stays "ship it" and
+ * only the handful of commands leaning on an external binary can ever be
+ * withheld.
+ *
+ * @param {object} cmd a loaded command module
+ * @param {object} caps output of probeCapabilities()
+ * @returns {string[]} unmet requirement names, empty when the command can run
+ */
+function unmetRequirements(cmd, caps) {
+    const needs = Array.isArray(cmd?.requires) ? cmd.requires : [];
+    // An unknown requirement name is treated as unmet rather than ignored: a
+    // typo that silently publishes a broken command is the failure this whole
+    // mechanism exists to prevent.
+    return needs.filter(name => (caps?.[name] ?? 'missing') === 'missing');
+}
+
+module.exports = { probeCapabilities, reportCapabilities, unmetRequirements, COST_OF_ABSENCE };
