@@ -34,28 +34,40 @@ function vendored(pkg) {
     } catch { return null; }
 }
 
+/**
+ * What each binary resolved to: 'system', 'vendored', or 'missing'. Read by
+ * the boot capability report, so a container that quietly lost a binary says
+ * so in the deploy log rather than waiting for somebody to run a command.
+ */
+const resolution = { ffmpeg: 'unchecked', ffprobe: 'unchecked' };
+
+function resolveBinary(name, pkg, setPath, missingHint) {
+    if (systemHas(name)) return 'system';
+    const bin = vendored(pkg);
+    if (bin) {
+        setPath(bin);
+        logger.warn(`[MEDIA] No system ${name}; using the vendored binary`, { bin });
+        return 'vendored';
+    }
+    logger.error(`[MEDIA] No ${name} at all: ${missingHint}`);
+    return 'missing';
+}
+
 // Skipped under jest: nearly every suite loads db.js, which loads this file,
 // and two real subprocess spawns per suite turn a 4-second run into a
 // 20-second one. The resolution tests opt back in explicitly.
 if (!process.env.JEST_WORKER_ID || process.env.FFMPEG_RESOLVE_UNDER_TEST) {
-    if (!systemHas('ffmpeg')) {
-        const bin = vendored('ffmpeg-static');
-        if (bin) {
-            ffmpeg.setFfmpegPath(bin);
-            logger.warn('[MEDIA] No system ffmpeg; using the vendored binary', { bin });
-        } else {
-            logger.error('[MEDIA] No ffmpeg at all: system binary absent and the vendored one did not install (is ffmpeg-static in pnpm.onlyBuiltDependencies?)');
-        }
-    }
-    if (!systemHas('ffprobe')) {
-        const bin = vendored('ffprobe-static');
-        if (bin) {
-            ffmpeg.setFfprobePath(bin);
-            logger.warn('[MEDIA] No system ffprobe; using the vendored binary', { bin });
-        } else {
-            logger.error('[MEDIA] No ffprobe at all: probing and audio detection will fail');
-        }
-    }
+    resolution.ffmpeg = resolveBinary(
+        'ffmpeg', 'ffmpeg-static', p => ffmpeg.setFfmpegPath(p),
+        'the vendored one did not install either (is ffmpeg-static in pnpm.onlyBuiltDependencies?)');
+    resolution.ffprobe = resolveBinary(
+        'ffprobe', 'ffprobe-static', p => ffmpeg.setFfprobePath(p),
+        'probing and audio detection will fail');
+}
+
+/** @returns {{ffmpeg: string, ffprobe: string}} how each binary was found */
+function binaryResolution() {
+    return { ...resolution };
 }
 
 const DEFAULT_TARGET_BYTES = 18 * 1024 * 1024;
@@ -511,5 +523,6 @@ module.exports = {
     loopVideo,
     gifPaletteGen,
     gifPaletteUse,
+    binaryResolution,
     FFMPEG_NICENESS,
 };

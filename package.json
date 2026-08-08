@@ -1,6 +1,9 @@
 {
   "name": "moksis-bazaar",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=22"
+  },
   "description": "",
   "main": "src/bot.js",
   "scripts": {

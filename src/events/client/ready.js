@@ -9,6 +9,7 @@ const { initJoinGate } = require('../../utils/joinGate');
 const { startJanitor } = require('../../utils/janitor');
 const { startBackupScheduler } = require('../../utils/backup');
 const { startTweetMirror } = require('../../utils/tweetMirror');
+const { reportCapabilities } = require('../../utils/media/capabilities');
 const { loadModes } = require('../../utils/ui/mode');
 const { ui } = require('../../utils/ui/panel');
 const { EMBED_COLORS } = require('../../utils/constants');
@@ -101,6 +102,13 @@ module.exports = {
     // Costs money per request, so it stays inert until a channel is set and
     // goes quiet again the moment the monthly cap is reached.
     await runBootStep(results, 'Tweet mirror', () => startTweetMirror(client));
+
+    // Diagnostic rather than a subsystem: it starts nothing, and its failure
+    // costs nothing. It is here because the container's media tools are not
+    // ours to guarantee, and a builder took them away once without telling
+    // anybody. This is the line that makes the next time visible on the next
+    // deploy instead of days later, through a user hitting a broken command.
+    await reportCapabilities();
 
     const ok = results.filter(r => r.ok).length;
     console.log(`✅ Boot complete: ${ok}/${results.length} subsystems started`);

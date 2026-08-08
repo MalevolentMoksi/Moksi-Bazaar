@@ -6,8 +6,12 @@
 // strength is a percentage (1-99): smaller = stronger warp. Animated inputs are
 // exploded to frames, carved per-frame, and reassembled (animatedmultiplexer).
 //
-// This bot has no ImageMagick by default; the Dockerfile installs it (with the
-// liblqr delegate) for production. magickAvailable() guards local dev gracefully.
+// ImageMagick is NOT present in production as of 2026-08-08. The Dockerfile
+// installs it (with the liblqr delegate), but Railway's Express builder skips
+// the Dockerfile, and neither ImageMagick nor liblqr can be vendored from npm
+// the way ffmpeg was. So /magick is knowingly dead while that builder is in
+// use, and magickAvailable() is what keeps it an honest refusal rather than a
+// stack trace. It comes back by itself on any builder that runs the image.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
