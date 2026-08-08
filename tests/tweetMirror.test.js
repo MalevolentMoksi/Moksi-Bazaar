@@ -30,7 +30,7 @@ const mirror = require('../src/utils/tweetMirror');
 const {
     buildQuery, normalizeTweet, renderEmbed, runOnce, readSpend, recordSpend, monthKey,
     CHANNEL_KEY, ENABLED_KEY, ACCOUNTS_KEY, SINCE_KEY, SPEND_KEY, BUDGET_KEY, STYLE_KEY,
-    MAX_POSTS_PER_TICK, MAX_LOOKBACK_MS, COST_PER_UNIT_USD,
+    MAX_POSTS_PER_TICK, MAX_LOOKBACK_MS, COST_PER_UNIT_USD, SEARCH_PAGE_SIZE,
 } = mirror;
 
 let sent;
@@ -287,6 +287,73 @@ describe('what reaches the channel', () => {
         expect(sent[0].content).toContain('t5');
         expect(sent[sent.length - 1].content).toContain('t14');
         expect(require('../src/utils/logger').warn).toHaveBeenCalled();
+    });
+});
+
+// ── Telling "nothing was missed" from "something was" ───────────────────────
+//
+// This vendor sets has_next_page on nearly every response, including ones
+// carrying a single tweet. Believing it produced a warning on the first real
+// leak the mirror ever mirrored: "More posts than one poll delivers; older
+// ones skipped", with dropped: 0 in the very same line. A warning that fires
+// when nothing is wrong is worse than no warning, because it trains you to
+// scroll past the one that matters.
+
+describe('the pagination warning', () => {
+    const warn = () => require('../src/utils/logger').warn.mock.calls
+        .filter(c => /will not be delivered/.test(c[0]));
+
+    test('stays quiet when a short page claims there is more', async () => {
+        // Exactly the production case: one tweet, has_next_page true.
+        respond({ tweets: [apiTweet('only')], hasNext: true });
+
+        const result = await runOnce(client);
+
+        expect(result.posted).toBe(1);
+        expect(warn()).toHaveLength(0);
+    });
+
+    test('stays quiet on a comfortable page that claims there is more', async () => {
+        const some = Array.from({ length: 7 }, (_, i) => apiTweet(`t${i}`));
+        respond({ tweets: some, hasNext: true });
+
+        await runOnce(client);
+
+        expect(warn()).toHaveLength(0);
+    });
+
+    test('speaks up when a FULL page claims there is more', async () => {
+        // A full page really can have older posts behind it, and the cursor
+        // is about to move past them.
+        const full = Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) =>
+            apiTweet(`t${i}`, { at: new Date(Date.UTC(2026, 7, 7, 10, i)).toISOString() }));
+        respond({ tweets: full, hasNext: true });
+
+        await runOnce(client);
+
+        expect(warn()).toHaveLength(1);
+        expect(warn()[0][1]).toMatchObject({ morePages: true, returned: SEARCH_PAGE_SIZE });
+    });
+
+    test('speaks up when posts were dropped, page size regardless', async () => {
+        const many = Array.from({ length: 12 }, (_, i) =>
+            apiTweet(`t${i}`, { at: new Date(Date.UTC(2026, 7, 7, 10, i)).toISOString() }));
+        respond({ tweets: many, hasNext: false });
+
+        await runOnce(client);
+
+        expect(warn()).toHaveLength(1);
+        expect(warn()[0][1]).toMatchObject({ dropped: 2, morePages: false });
+    });
+
+    test('the test panel stops putting a "+" on every check it runs', async () => {
+        // The same lie in the place the owner actually reads: "found 7+" when
+        // seven was the whole truth.
+        respond({ tweets: Array.from({ length: 7 }, (_, i) => apiTweet(`t${i}`)), hasNext: true });
+        expect((await mirror.testFetch()).more).toBe(false);
+
+        respond({ tweets: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) => apiTweet(`f${i}`)), hasNext: true });
+        expect((await mirror.testFetch()).more).toBe(true);
     });
 });
 

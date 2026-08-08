@@ -63,6 +63,22 @@ const FIRST_RUN_LOOKBACK_MS = 15 * 60 * 1000;
 /** Ceiling on messages per poll, so a burst cannot turn into a wall of posts. */
 const MAX_POSTS_PER_TICK = 10;
 
+/**
+ * How many results Advanced Search puts on one page.
+ *
+ * Used only to decide whether `has_next_page` is worth believing. That flag
+ * comes back true on almost every response this vendor sends, including ones
+ * carrying a single tweet, so on its own it means nothing. It is only
+ * meaningful when the page came back FULL: results arrive newest first, so a
+ * genuine second page holds tweets older than everything on the first, and
+ * the cursor is about to move past them. A page that came back short
+ * exhausted the window and has nothing behind it.
+ *
+ * Nothing functional hangs on this number. It decides what gets logged, and
+ * posts are delivered or dropped identically either way.
+ */
+const SEARCH_PAGE_SIZE = 20;
+
 const CHANNEL_KEY = 'tweet_mirror_channel_id';
 const ENABLED_KEY = 'tweet_mirror_enabled';
 const ACCOUNTS_KEY = 'tweet_mirror_accounts';
@@ -481,9 +497,17 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
     // channel reads in the order things happened.
     const selected = found.slice(-MAX_POSTS_PER_TICK);
     const dropped = found.length - selected.length;
-    if (dropped > 0 || result.hasNextPage) {
-        logger.warn('[TWEETS] More posts than one poll delivers; older ones skipped', {
-            found: found.length, posting: selected.length, dropped, morePages: result.hasNextPage,
+
+    // Believed only on a full page: see SEARCH_PAGE_SIZE. Taking the flag at
+    // face value made this warn on every poll that found a single post, and
+    // it announced "older ones skipped" while reporting that it had skipped
+    // none, which is the sort of line that teaches you to stop reading logs.
+    const trulyMorePages = result.hasNextPage && result.tweets.length >= SEARCH_PAGE_SIZE;
+
+    if (dropped > 0 || trulyMorePages) {
+        logger.warn('[TWEETS] Some posts in this window will not be delivered', {
+            found: found.length, posting: selected.length, dropped,
+            returned: result.tweets.length, morePages: trulyMorePages,
         });
     }
 
@@ -639,9 +663,12 @@ async function testFetch({ hoursBack = 6 } = {}) {
         silent: accounts
             .map(a => String(a).trim().replace(/^@/, ''))
             .filter(a => a && !answered.has(a.toLowerCase())),
-        // Advanced Search pages at 20. Saying "found 20" without saying there
-        // were more turns a truncated sample into a wrong answer.
-        more: Boolean(result.hasNextPage),
+        // Saying "found 20" without saying there were more turns a truncated
+        // sample into a wrong answer. Saying "found 7+" when seven is the
+        // whole truth is the same disease pointing the other way, which is
+        // what a bare has_next_page produced: the panel put a "+" on every
+        // check it ever ran. Only a full page can have more behind it.
+        more: Boolean(result.hasNextPage) && result.tweets.length >= SEARCH_PAGE_SIZE,
         newest: found[0] ?? null,
         // What THIS request cost, kept separate from the running total. The
         // two are trivially confusable and one of them is the number that
@@ -733,6 +760,7 @@ module.exports = {
     DEFAULT_BUDGET_USD,
     POLL_INTERVAL_MS,
     MAX_POSTS_PER_TICK,
+    SEARCH_PAGE_SIZE,
     MAX_LOOKBACK_MS,
     COST_PER_UNIT_USD,
 };
