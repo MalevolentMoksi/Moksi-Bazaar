@@ -85,16 +85,44 @@ describe('the incident', () => {
     });
 
     test('the echo never testifies alone: an innocuous message reports nothing', () => {
-        // The panel this pins away: a watch-tier joiner posts a picture of a
-        // cat, and the mod channel gets "Behaviour flag: score 13" whose only
-        // line is the profile echo, under a footer swearing it was triggered
-        // by what they posted. Every point in it was how the profile looks.
+        // The panel this pins away: a watch-tier joiner posts something
+        // ordinary, and the mod channel gets "Behaviour flag: score 13" whose
+        // only line is the profile echo, under a footer swearing it was
+        // triggered by what they posted. Every point was how the profile looks.
         watch.setJoinScore(GUILD, USER, 51, 'watch');
         const result = inspect(message('nice cat', 'chan-a'));
 
         expect(result.signals).toEqual([]);
         expect(result.score).toBe(0);
         expect(result.report).toBe(false);
+    });
+
+    test('a join notification is not the member speaking', () => {
+        // The production case behind the score-13 panel: thevortex2229 NEVER
+        // spoke. Their entire message history was Discord's own "just landed.
+        // Wave to say hi!" announcement, which arrives authored as the member,
+        // with system=true and no content, the instant they join. The watch
+        // treated it as their first message, stored "(no text)" as evidence,
+        // and reported them for it.
+        watch.setJoinScore(GUILD, USER, 51, 'watch');
+        const joinNotice = { ...message('', 'chan-general'), system: true };
+        const result = inspect(joinNotice);
+
+        expect(result).toEqual({ score: 0, signals: [], report: false, fresh: [] });
+        // Nothing recorded either: the day a real report fires, its evidence
+        // must not open with a message the member never typed.
+        expect(watch.evidenceFor(GUILD, USER)).toEqual([]);
+    });
+
+    test('a system message never becomes evidence even mid-spree', () => {
+        // Order matters: a boost announcement landing between two real spam
+        // messages must not appear in the quoted evidence.
+        inspect(message(ADVERT, 'chan-a'));
+        inspect({ ...message('', 'chan-a'), system: true });
+
+        const evidence = watch.evidenceFor(GUILD, USER);
+        expect(evidence).toHaveLength(1);
+        expect(evidence[0].content).toContain('discord.gg');
     });
 
     test('the echo joins the first real signal, at full strength', () => {

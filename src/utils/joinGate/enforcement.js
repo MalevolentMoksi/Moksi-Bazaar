@@ -687,7 +687,10 @@ async function handleMemberJoin(member) {
  */
 async function handleWatchedMessage(message) {
     try {
-        if (!message?.guild || message.author?.bot) return;
+        // `system` filters Discord's own announcements, which are authored AS
+        // the member: the join notification is literally a message "from" the
+        // person being watched, sent the moment they join, saying nothing.
+        if (!message?.guild || message.author?.bot || message.system) return;
 
         // Cheapest possible gate: an in-memory lookup, no config read.
         if (watch.watchedCount(message.guild.id) === 0) return;

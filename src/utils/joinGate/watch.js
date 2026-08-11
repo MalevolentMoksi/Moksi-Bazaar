@@ -239,6 +239,14 @@ function combosFor(seen) {
  */
 function inspectMessage(guildId, message, { windowMs, threshold = Infinity, now = Date.now() } = {}) {
     const empty = { score: 0, signals: [], report: false, fresh: [] };
+    // A system message is authored BY the member without the member saying
+    // anything: the join notification ("X just landed. Wave to say hi!") is
+    // the one every watched member produces, at the exact moment they join.
+    // Inspecting it counted Discord's own announcement as the member's first
+    // message, stored it as evidence reading "(no text)", and, before the
+    // arrival echo grew its guard, panelled every watch-tier joiner on
+    // arrival for a message they never typed.
+    if (message.system) return empty;
     const entry = watched.get(guildId)?.get(message.author.id);
     if (!entry) return empty;
     if (now - entry.joinedAt > windowMs) {
