@@ -73,7 +73,7 @@ const ESCALATION_DELTA = 25;
 /** Never track more than this many watched members per guild. */
 const MAX_WATCHED = 500;
 
-const INVITE_RE = /(?:discord\.(?:gg|com\/invite)|discordapp\.com\/invite)\/[A-Za-z0-9-]+/i;
+const INVITE_RE = /(?:discord\.(?:gg|com\/invite)|discordapp\.com\/invite)\/([A-Za-z0-9-]+)/ig;
 
 /**
  * guildId -> Map<userId, entry>, where entry is
@@ -237,7 +237,9 @@ function combosFor(seen) {
  *   scores anything, when it newly crosses the action threshold, or when it has
  *   got materially worse since the last report.
  */
-function inspectMessage(guildId, message, { windowMs, threshold = Infinity, now = Date.now() } = {}) {
+function inspectMessage(guildId, message, {
+    windowMs, threshold = Infinity, now = Date.now(), ownInviteCodes = null,
+} = {}) {
     const empty = { score: 0, signals: [], report: false, fresh: [] };
     // A system message is authored BY the member without the member saying
     // anything: the join notification ("X just landed. Wave to say hi!") is
@@ -280,8 +282,16 @@ function inspectMessage(guildId, message, { windowMs, threshold = Infinity, now 
             `${urls.length} link(s) within the watch window`);
     }
 
-    // 2. Advertising another server straight after arriving.
-    if (INVITE_RE.test(content)) {
+    // 2. Advertising ANOTHER server straight after arriving.
+    //
+    // This server's own invite is not advertising, and people paste it all the
+    // time ("join us at discord.gg/..."). Scored as an invite it came to 42
+    // with the link weight, which is a mod report for helping. Only codes that
+    // are not ours count, and if we could not find out which are ours, the old
+    // behaviour stands rather than a silent hole.
+    const codes = [...content.matchAll(INVITE_RE)].map(m => m[1].toLowerCase());
+    const foreign = ownInviteCodes ? codes.filter(code => !ownInviteCodes.has(code)) : codes;
+    if (foreign.length) {
         add('invite_link', 'Server invite', BEHAVIOUR_WEIGHTS.invite_link, 'posted an invite to another server');
     }
 

@@ -210,6 +210,34 @@ describe('ordinary newcomers stay quiet', () => {
         expect(result.score).toBeLessThan(100);
     });
 
+    // "join us at discord.gg/ours" is help, not advertising, and people paste
+    // it constantly. Scored as an invite it came to 42: a mod report, in the
+    // same words as a real advert, for doing the server a favour.
+    test('this server\'s own invite is not an invite to another server', () => {
+        const ours = new Set(['festivalhub']);
+        const result = watch.inspectMessage(GUILD, message('the invite is https://discord.gg/festivalhub', 'chan-a'), {
+            windowMs: WINDOW_MS, threshold: 100, ownInviteCodes: ours,
+        });
+        expect(result.signals.map(s => s.id)).not.toContain('invite_link');
+        expect(result.score).toBe(12); // still a link, and that is all it is
+    });
+
+    test('ours alongside someone else\'s is still advertising', () => {
+        const ours = new Set(['festivalhub']);
+        const result = watch.inspectMessage(GUILD, message(
+            'we are at discord.gg/festivalhub and also discord.gg/otherplace', 'chan-a',
+        ), { windowMs: WINDOW_MS, threshold: 100, ownInviteCodes: ours });
+        expect(result.signals.map(s => s.id)).toContain('invite_link');
+    });
+
+    test('codes that could not be looked up leave the old behaviour alone', () => {
+        // A failed fetch must not quietly stop counting invites.
+        const result = watch.inspectMessage(GUILD, message('join https://discord.gg/festivalhub', 'chan-a'), {
+            windowMs: WINDOW_MS, threshold: 100, ownInviteCodes: null,
+        });
+        expect(result.signals.map(s => s.id)).toContain('invite_link');
+    });
+
     test('a member who was never watched scores nothing at all', () => {
         watch.forget(GUILD, USER);
         expect(inspect(message(ADVERT, 'chan-a')).score).toBe(0);

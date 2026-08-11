@@ -723,12 +723,26 @@ async function handleWatchedMessage(message) {
 
         const threshold = Number(settings.watch_action_at);
         const { score, signals, report } = watch.inspectMessage(message.guild.id, message, {
-            windowMs, threshold,
+            windowMs,
+            threshold,
+            // Only resolved when there is an invite to judge, and cached for an
+            // hour after that, so the common message costs nothing.
+            ownInviteCodes: OWN_INVITE_RE.test(message.content ?? '')
+                ? await ownInviteCodes(message.guild)
+                : null,
         });
         // `report` is false for a member already reported at the same level:
         // the score keeps accumulating quietly and only speaks up again when it
         // crosses the action bar or gets materially worse.
         if (score <= 0 || !report) return;
+
+        // And a floor, because reporting anything above zero meant a mod panel
+        // for a newcomer's first YouTube link (12 points), announced in the
+        // same words and colour as a score of 99. A report that fires on
+        // nothing teaches staff that reports are nothing. Below the floor the
+        // score is still kept: it accumulates silently and speaks the moment
+        // it becomes worth speaking about.
+        if (score < reportFloor(settings) && score < threshold) return;
 
         const member = message.member ?? await message.guild.members.fetch(message.author.id).catch(() => null);
         if (!member) return;
@@ -739,6 +753,70 @@ async function handleWatchedMessage(message) {
     } catch (error) {
         logger.error('[JOIN-GATE] handleWatchedMessage crashed', { error: error.message, stack: error.stack });
     }
+}
+
+/** Cheap pre-check: only a message that looks like an invite pays for a lookup. */
+const OWN_INVITE_RE = /discord(?:app)?\.(?:gg|com\/invite)/i;
+
+/** guildId -> {codes: Set<string>, atMs}. An hour is plenty; invites are not volatile. */
+const ownInviteCache = new Map();
+const OWN_INVITE_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * Every invite code that leads back to this server.
+ *
+ * Without it, a newcomer pasting the server's own invite ("join us at
+ * discord.gg/...") scored the same 30 points as advertising somebody else's,
+ * which with the link weight is 42 and a mod report for being helpful. The
+ * vanity code is free; the rest needs one fetch an hour at most, and only ever
+ * on a message that already looks like an invite.
+ *
+ * A failed fetch returns null, and a null means the old behaviour: better to
+ * flag our own invite occasionally than to stop counting invites at all.
+ */
+async function ownInviteCodes(guild) {
+    const cached = ownInviteCache.get(guild.id);
+    if (cached && Date.now() - cached.atMs < OWN_INVITE_TTL_MS) return cached.codes;
+
+    const codes = new Set();
+    if (guild.vanityURLCode) codes.add(String(guild.vanityURLCode).toLowerCase());
+    const fetched = await guild.invites?.fetch?.().catch(() => null);
+    if (fetched) {
+        for (const invite of fetched.values()) {
+            if (invite?.code) codes.add(String(invite.code).toLowerCase());
+        }
+    } else if (!codes.size) {
+        return null;
+    }
+
+    ownInviteCache.set(guild.id, { codes, atMs: Date.now() });
+    return codes;
+}
+
+/**
+ * The score below which a behaviour report is not worth anybody's attention.
+ *
+ * Borrowed from the profile scorer's own watch threshold, because it already
+ * means exactly this: the number at which something becomes worth a look.
+ */
+function reportFloor(settings) {
+    const watchAt = Number(settings.suspicion_watch_at);
+    return Number.isFinite(watchAt) && watchAt > 0 ? watchAt : 40;
+}
+
+/**
+ * How loud the report should be, which is a different question from whether to
+ * act. Everything under the action bar used to be 'watch', so a 42 and a 99
+ * arrived in the same colour, under the same icon, wearing the same words.
+ * The bands are the guild's own configured ones, so the panel agrees with the
+ * thresholds page.
+ */
+function behaviourTier(score, settings) {
+    const suspect = Number(settings.suspicion_suspect_at) || 70;
+    const malicious = Number(settings.suspicion_malicious_at) || 100;
+    if (score >= malicious) return 'malicious';
+    if (score >= suspect) return 'suspect';
+    return 'watch';
 }
 
 /**
@@ -755,7 +833,9 @@ async function enforceBehaviour(guild, member, settings, { score, signals, chann
 
     const result = {
         score,
-        tier: score >= threshold ? 'malicious' : 'watch',
+        // Severity for the reader; the action above is decided separately and
+        // only by watch_action_at.
+        tier: behaviourTier(score, settings),
         signals,
         source: 'behaviour',
     };
@@ -918,6 +998,9 @@ async function handleAutoModAction(execution) {
         }, { windowMs, threshold });
 
         if (score <= 0 || !report) return;
+        // The same floor as the message path. Both call enforceBehaviour, and
+        // two reporting rules is how the two paths drift apart.
+        if (score < reportFloor(settings) && score < threshold) return;
 
         const member = await guild.members.fetch(userId).catch(() => null);
         if (!member) return;
@@ -1114,4 +1197,9 @@ module.exports = {
     clearAttempts,
     displayTag,
     queueDepth: () => queue.length,
+    // The two rules that decide whether a behaviour score is worth saying out
+    // loud, and how loudly. Pure, and pinned as such.
+    reportFloor,
+    behaviourTier,
+    ownInviteCodes,
 };
