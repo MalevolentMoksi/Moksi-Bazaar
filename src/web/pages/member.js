@@ -12,7 +12,10 @@ const { collectProtectedNames } = require('../../utils/joinGate/enforcement');
 const watch = require('../../utils/joinGate/watch');
 const activity = require('../../utils/joinGate/activity');
 const { memberActivityOne, gateAttempts, recentWarns, recentModActions } = require('../queries');
-const { html, card, pill, table, fmtNumber, fmtAgo, fmtDateTime, avatarUrl } = require('../html');
+const {
+    html, card, pill, table, fmtNumber, fmtAgo, fmtDateTime, avatarUrl,
+    discordUserUrl, discordMessageUrl,
+} = require('../html');
 
 const TIER_STATE = { clear: 'on', watch: 'warn', suspect: 'warn', malicious: 'danger' };
 const ACTION_STATE = { ban: 'danger', kick: 'warn', timeout: 'warn', unban: 'on', timeout_cleared: 'on' };
@@ -88,7 +91,13 @@ async function data(client, guildId, userId) {
         actions,
         attempts,
         watched: watch.isWatched(guildId, userId, windowMs),
-        evidence: watch.evidenceFor(guildId, userId),
+        // The channel id is not information; the name is. The gateway has it
+        // for nothing, so a row says where this was said rather than making
+        // the reader go and find out.
+        evidence: watch.evidenceFor(guildId, userId).map(item => ({
+            ...item,
+            channelName: guild?.channels?.cache?.get(item.channelId)?.name ?? null,
+        })),
         now: Date.now(),
     };
 }
@@ -117,7 +126,9 @@ function render(model) {
                     ${model.watched ? pill('warn', 'in watch window') : ''}
                 </div>
                 <div class="hint">@${u.username}${m?.nickname ? html` · goes by "${m.nickname}"` : ''}</div>
-                <div class="sub mono">${u.id}</div>
+                <div class="sub mono">${u.id}
+                    <a class="out" href="${discordUserUrl(u.id)}" target="_blank" rel="noopener">open in Discord</a>
+                </div>
             </div>
         </div>
         <dl class="kv kv-below">
@@ -158,8 +169,25 @@ function render(model) {
         body: table({
             columns: [
                 { key: 'content', label: 'Message', render: r => r.content },
-                { key: 'channelId', label: 'Channel', render: r => html`<span class="mono">${r.channelId}</span>` },
-                { key: 'at', label: 'When', numeric: true, render: r => fmtAgo(r.at, model.now) },
+                {
+                    key: 'channelId', label: 'Channel',
+                    render: r => (r.channelName
+                        ? html`#${r.channelName}`
+                        : html`<span class="mono">${r.channelId}</span>`),
+                },
+                {
+                    key: 'at', label: 'When', numeric: true,
+                    // The excerpt is what was said; the link is everything
+                    // around it. A message the bot has since deleted 404s to
+                    // the reader, which is itself the answer to "is it gone".
+                    render: (r) => {
+                        const url = discordMessageUrl(model.guildId, r.channelId, r.messageId);
+                        const when = fmtAgo(r.at, model.now);
+                        return url
+                            ? html`<a href="${url}" target="_blank" rel="noopener">${when}</a>`
+                            : when;
+                    },
+                },
             ],
             rows: model.evidence,
         }),

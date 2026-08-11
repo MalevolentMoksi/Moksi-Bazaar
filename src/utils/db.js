@@ -1556,8 +1556,14 @@ async function getSuspicionAccuracy(guildId, { limit = 8 } = {}) {
             [guildId]
         ),
         pool.query(
+            // jsonb_array_elements raises on anything that is not an array, and
+            // a dashboard page that 500s over one malformed row is a bad trade
+            // for a count.
             `SELECT signal->>'label' AS label, COUNT(*)::int AS wrong
-               FROM suspicion_reports, jsonb_array_elements(signals) AS signal
+               FROM suspicion_reports,
+                    jsonb_array_elements(
+                        CASE WHEN jsonb_typeof(signals) = 'array' THEN signals ELSE '[]'::jsonb END
+                    ) AS signal
               WHERE guild_id = $1 AND false_positive
               GROUP BY 1 ORDER BY wrong DESC LIMIT $2`,
             [guildId, limit]

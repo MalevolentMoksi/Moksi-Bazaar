@@ -88,6 +88,24 @@ function avatarUrl(userId, avatarHash, size = 64) {
     return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
 }
 
+/**
+ * Links back into Discord.
+ *
+ * The dashboard is where you look before you act, and acting happens in
+ * Discord, so every id on these pages was a dead end you had to copy and paste
+ * into a search box. These are the way out. The client follows both from the
+ * browser, which is the whole point: read here, act there.
+ */
+function discordUserUrl(userId) {
+    return `https://discord.com/users/${encodeURIComponent(String(userId ?? ''))}`;
+}
+
+function discordMessageUrl(guildId, channelId, messageId) {
+    if (!guildId || !channelId || !messageId) return null;
+    return `https://discord.com/channels/${encodeURIComponent(guildId)}`
+        + `/${encodeURIComponent(channelId)}/${encodeURIComponent(messageId)}`;
+}
+
 // ── Atoms ───────────────────────────────────────────────────────────────────
 
 /** on/off/warn/danger state, readable at a glance without reading the word. */
@@ -216,6 +234,7 @@ function doorPage({ title, body }) {
 module.exports = {
     esc, raw, html,
     fmtNumber, fmtAgo, fmtDateTime, avatarUrl,
+    discordUserUrl, discordMessageUrl,
     pill, card, statTile, table,
     layout, doorPage,
     NAV,

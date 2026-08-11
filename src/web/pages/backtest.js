@@ -19,6 +19,7 @@
 const { getSettings } = require('../../utils/joinGate/config');
 const { backtestGuild } = require('../../utils/joinGate/enforcement');
 const { describeShape } = require('../../utils/joinGate/cohorts');
+const { getSuspicionAccuracy } = require('../../utils/db');
 const { html, raw, card, pill, table, fmtNumber, fmtAgo, fmtDateTime } = require('../html');
 
 const TIER_STATE = { clear: 'on', watch: 'warn', suspect: 'warn', malicious: 'danger' };
@@ -40,12 +41,67 @@ async function data(client, guildId, query = {}) {
     const limit = Math.min(MAX_LIMIT, Math.max(5, Number(query.n) || 50));
     const applyTenure = query.tenure === '1';
 
-    if (!run) return { ran: false, limit, applyTenure };
+    // Two indexed counts, so the record is on the page whether or not anybody
+    // pays for a run.
+    const accuracy = await getSuspicionAccuracy(guildId).catch(() => null);
+
+    if (!run) return { ran: false, limit, applyTenure, accuracy, now: Date.now() };
 
     const guild = client.guilds.cache.get(guildId);
     const settings = await getSettings(guildId);
     const report = await backtestGuild(guild, settings, { limit, applyTenure });
-    return { ran: true, limit, applyTenure, report, now: Date.now() };
+    return { ran: true, limit, applyTenure, accuracy, report, now: Date.now() };
+}
+
+/**
+ * What the scoring has actually done, as opposed to what it would do.
+ *
+ * The backtest has always been a simulation arguing with itself: it scores
+ * today's roster with today's weights and nobody ever says whether the calls it
+ * made last week were right. This is the other half, and it only exists
+ * because a moderator can now press a button on a report and say it was wrong.
+ */
+function renderAccuracy(model) {
+    const a = model.accuracy;
+    if (!a || !a.filed) {
+        return card({
+            title: 'How the scoring has actually done',
+            body: html`<p class="empty">No reports on file yet. Every suspicion report the gate
+                posts is recorded from now on, and the <strong>Not a spammer</strong> button on the
+                panel is how one gets marked wrong. Two or three marks are enough to see which
+                signal is doing the damage.</p>`,
+        });
+    }
+
+    const wrong = Number(a.wrong) || 0;
+    const filed = Number(a.filed) || 0;
+    const rate = filed ? Math.round(((filed - wrong) / filed) * 100) : 100;
+
+    return card({
+        title: 'How the scoring has actually done',
+        hint: `since ${fmtAgo(a.oldest_ms, model.now)}`,
+        body: html`
+            <div class="stats">
+                ${raw(statHtml('Reports filed', filed, ''))}
+                ${raw(statHtml('Called wrong', wrong, wrong ? 'danger' : ''))}
+                ${raw(statHtml('Stood up', filed - wrong, 'ok'))}
+            </div>
+            <p class="hint">${rate}% of what the gate reported was left standing by whoever read it.
+            A mark is a note about the score, not an undo: the timeouts and bans behind these are
+            still in place.</p>
+            ${a.signals?.length ? html`<p>Signals present in the reports that were called wrong:</p>
+            ${table({
+        columns: [
+            { key: 'label', label: 'Signal' },
+            { key: 'wrong', label: 'In wrong reports', numeric: true, render: r => fmtNumber(r.wrong) },
+        ],
+        rows: a.signals,
+    })}
+            <p class="hint">A signal at the top of this list is either weighted too heavily or
+            fires on something ordinary. Tune it under
+            <a href="/gate?s=suspicion">suspicion weights</a>, then run the backtest to see what
+            the change would do to the roster.</p>` : ''}`,
+    });
 }
 
 function renderLanding(model) {
@@ -154,7 +210,11 @@ function statHtml(label, value, tone) {
 }
 
 function render(model) {
-    return model.ran ? renderReport(model) : renderLanding(model);
+    // The record sits under the simulation either way: a prediction is worth
+    // more next to its own scorecard.
+    return html`${model.ran ? renderReport(model) : renderLanding(model)}
+        <div class="spacer"></div>
+        ${renderAccuracy(model)}`;
 }
 
 module.exports = { data, render, fmtSpan, MAX_LIMIT };

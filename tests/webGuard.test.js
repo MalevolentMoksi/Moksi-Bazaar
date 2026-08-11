@@ -197,6 +197,45 @@ describe('the backtest page', () => {
         expect(out).not.toMatch(/data-action="[^"]*ban/);
     });
 
+    // The backtest was a simulation arguing with itself: it scores today's
+    // roster with today's weights and never says whether last week's calls
+    // were right. The record is the other half, and it only exists because a
+    // moderator can now mark a report wrong from the panel.
+    describe('the record beside the simulation', () => {
+        const accuracy = {
+            filed: 27, wrong: 4, oldest_ms: Date.now() - 9 * 86_400_000,
+            signals: [{ label: 'Name looks generated', wrong: 3 }, { label: 'Default avatar', wrong: 2 }],
+        };
+
+        test('it is on the page whether or not a run was paid for', () => {
+            const landing = backtestPage.render({ ran: false, limit: 50, applyTenure: false, accuracy, now: Date.now() }).__raw;
+            const ran = backtestPage.render({ ...report, accuracy }).__raw;
+            for (const out of [landing, ran]) {
+                expect(out).toContain('How the scoring has actually done');
+                expect(out).toContain('Name looks generated');
+            }
+        });
+
+        test('it counts what stood up, not only what was filed', () => {
+            const out = backtestPage.render({ ran: false, limit: 50, applyTenure: false, accuracy, now: Date.now() }).__raw;
+            expect(out).toContain('>23<'); // 27 filed, 4 called wrong
+            expect(out).toContain('85% of what the gate reported');
+        });
+
+        test('with nothing on file it says where the data comes from', () => {
+            const out = backtestPage.render({ ran: false, limit: 50, applyTenure: false, accuracy: null }).__raw;
+            expect(out).toContain('No reports on file yet');
+            expect(out).toContain('Not a spammer');
+        });
+
+        // A mark is a note about a score. Reading it as an undo would have
+        // somebody assume a timeout had been lifted when it had not.
+        test('it says plainly that a mark undoes nothing', () => {
+            const out = backtestPage.render({ ran: false, limit: 50, applyTenure: false, accuracy, now: Date.now() }).__raw;
+            expect(out).toMatch(/still in place/);
+        });
+    });
+
     test('a failed member fetch reports itself instead of an empty report', () => {
         const out = backtestPage.render({
             ran: true, limit: 50, applyTenure: false, now: Date.now(),

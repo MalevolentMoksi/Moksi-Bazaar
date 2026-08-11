@@ -142,6 +142,48 @@ describe('member dossier', () => {
         expect(out).toContain('333333333333333333');
     });
 
+    // The dashboard is where you look before you act, and acting happens in
+    // Discord. Every id on these pages used to be a dead end that had to be
+    // copied into a search box.
+    describe('the way out, into Discord', () => {
+        test('the profile links to the account itself', () => {
+            const out = member.render(full).__raw;
+            expect(out).toContain('https://discord.com/users/333333333333333333');
+            expect(out).toContain('open in Discord');
+        });
+
+        test('watch evidence links to the message, not just its excerpt', () => {
+            const out = member.render(full).__raw;
+            expect(out).toContain('https://discord.com/channels/g1/99/1');
+        });
+
+        test('a channel is named where the gateway knows the name', () => {
+            const named = member.render({
+                ...full,
+                evidence: [{ ...full.evidence[0], channelName: 'general' }],
+            }).__raw;
+            expect(named).toContain('#general');
+            // And falls back to the id rather than to nothing.
+            expect(member.render(full).__raw).toContain('99');
+        });
+
+        test('evidence recorded without a message id is left as plain text', () => {
+            const out = member.render({
+                ...full,
+                evidence: [{ content: 'no id here', channelId: '99', at: now - 30_000 }],
+            }).__raw;
+            expect(out).not.toContain('discord.com/channels');
+        });
+
+        test('links out open in a new tab and cannot reach back through it', () => {
+            const out = member.render(full).__raw;
+            for (const anchor of out.match(/<a [^>]*discord\.com[^>]*>/g) ?? []) {
+                expect(anchor).toContain('target="_blank"');
+                expect(anchor).toContain('rel="noopener"');
+            }
+        });
+    });
+
     test('no inline style attributes anywhere: the CSP blocks them', () => {
         for (const page of [modlog.render({ q: null, action: null, page: 1, warnPage: 1, now: Date.now(), actions: { total: 0, rows: [] }, breakdown: [], warns: { total: 0, rows: [] } }),
             member.render(full)]) {

@@ -120,6 +120,8 @@ function render(model) {
             ${statTile({ label: 'Flagged', value: s.total_flagged })}
             ${statTile({ label: 'DM failures', value: s.total_failures })}
         </div>
+        <p class="hint">Every counter but Members is cumulative since the last reset, not a
+        reading of today. What happened recently is the table below.</p>
         <div class="row-cards">
             ${armed}
             ${unbanRows}
