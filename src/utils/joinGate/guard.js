@@ -215,6 +215,58 @@ function record(guildId, entry, settings, now = Date.now()) {
     };
 }
 
+/**
+ * Refills the counters from the audit log after a restart.
+ *
+ * The counters are what turn four separate deletions into one alert, and they
+ * live only in this process. A deploy landing mid-window resets them, so an
+ * actor who has already deleted three channels against a limit of four starts
+ * again from zero and can delete three more without tripping anything. The
+ * window is short, but a nuke is precisely the event you cannot afford to
+ * threshold-evade by accident.
+ *
+ * Deliberately silent: it fills counters and returns a count, never an alert.
+ * Replaying the log through record() would re-announce whatever was already
+ * announced before the restart, and an alarm that cries wolf on every deploy
+ * is worse than the gap it was meant to close. The next real action is what
+ * fires, now with the history in front of it.
+ *
+ * Only bucketed actions are seeded. Identity changes and bot additions are
+ * reported on sight with no threshold, so they have no counter to restore, and
+ * seeding them could only produce a duplicate report of an old event.
+ *
+ * @param {Array} entries  Audit log entries, any order.
+ * @returns {number} how many were inside the window and counted
+ */
+function seed(guildId, entries, settings, now = Date.now()) {
+    const windowMs = Math.max(5, Number(settings?.guard_window_seconds) || 60) * 1000;
+    const cutoff = now - windowMs;
+    let seeded = 0;
+
+    for (const entry of entries ?? []) {
+        const watched = WATCHED[entry?.action];
+        if (!watched) continue;
+        if (watched.bucket === IDENTITY || watched.bucket === BOT) continue;
+
+        const at = Number(entry.createdTimestamp);
+        if (!Number.isFinite(at) || at < cutoff || at > now) continue;
+
+        const actorId = entry.executorId ?? entry.executor?.id;
+        if (!actorId) continue;
+        if (settings?.guard_exempt_user_ids?.includes(actorId)) continue;
+        if (watched.bucket === PERMISSION && !isDangerousPermissionChange(entry.changes)) continue;
+
+        const state = actorBucket(guildId, actorId);
+        const times = state.buckets.get(watched.bucket) ?? [];
+        times.push(at);
+        times.sort((a, b) => a - b);
+        state.buckets.set(watched.bucket, times);
+        seeded += 1;
+    }
+
+    return seeded;
+}
+
 /** Forgets an actor's counters, e.g. after the owner has dealt with them. */
 function clear(guildId, actorId) {
     if (!guildId) { activity.clear(); return; }
@@ -243,6 +295,7 @@ function prune(maxAgeMs = 10 * 60_000, now = Date.now()) {
 
 module.exports = {
     record,
+    seed,
     clear,
     prune,
     isDangerousPermissionChange,

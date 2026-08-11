@@ -369,6 +369,40 @@ function resetCorrelation(guildId) {
     else recentJoins.clear();
 }
 
+/**
+ * Rebuilds the recent-join list after a restart.
+ *
+ * This window lives only in the process, and the process is replaced on every
+ * deploy. Everything it holds is on the member object, though, so it is the one
+ * of the three moderation memories that comes back whole: a raid that began
+ * before a push is still one raid afterwards, instead of a set of unrelated
+ * arrivals nobody correlates.
+ *
+ * Seeds only. Nothing here scores, reports or acts.
+ *
+ * @param {Array<{id, username, avatar, createdTimestamp, at}>} entries
+ * @returns {number} how many were inside the window and kept
+ */
+function seedJoins(guildId, entries, now = Date.now()) {
+    const list = pruneJoins(
+        (entries ?? [])
+            .map(e => ({
+                id: String(e.id),
+                username: String(e.username ?? ''),
+                avatar: e.avatar ?? null,
+                createdTimestamp: Number(e.createdTimestamp),
+                at: Number(e.at),
+            }))
+            .filter(e => Number.isFinite(e.at) && Number.isFinite(e.createdTimestamp))
+            .sort((a, b) => a.at - b.at),
+        now,
+    );
+
+    if (list.length) recentJoins.set(guildId, list);
+    else recentJoins.delete(guildId);
+    return list.length;
+}
+
 // ── Scoring ─────────────────────────────────────────────────────────────────
 
 function weightOf(weights, id) {
@@ -713,6 +747,8 @@ module.exports = {
     recordJoin,
     correlateJoin,
     resetCorrelation,
+    seedJoins,
+    JOIN_WINDOW_MS,
     // exported for tests
     hasInvisibleChars,
     hasMixedScriptToken,

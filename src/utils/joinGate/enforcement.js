@@ -551,17 +551,28 @@ function collectProtectedNames(guild) {
  * for their account age must not also be judged here: that would double-punish
  * and make the logs contradict each other.
  */
-async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
-    const guild = member.guild;
-
-    const correlation = suspicion.correlateJoin(guild.id, member.user);
-    const result = suspicion.scoreAccount(member.user, {
+/**
+ * The profile score for one member, with this guild's configuration.
+ *
+ * Pulled out of runSuspicion so the restore path can rebuild a carry-over
+ * after a deploy using exactly the scoring the join path used, rather than a
+ * second copy of the option assembly that could drift away from it.
+ */
+function scoreProfile(member, settings, {
+    correlation = null, inBurst = false, inviteFlood = false, now = undefined,
+} = {}) {
+    return suspicion.scoreAccount(member.user, {
+        // Threaded through so a caller working from a fixed clock (the restore,
+        // the backtest) scores account age against the same instant it selected
+        // the member with. Left undefined on the live path, where scoreAccount's
+        // own Date.now() is the right answer.
+        now,
         weights: settings.suspicion_weights,
         keywords: settings.suspicion_keywords ?? suspicion.DEFAULT_SCAM_KEYWORDS,
-        protectedNames: collectProtectedNames(guild),
+        protectedNames: collectProtectedNames(member.guild),
         correlation,
         inBurst,
-        inviteFlood: Boolean(inviteInfo?.flooding),
+        inviteFlood,
         member,
         tenureGraceDays: Number(settings.suspicion_tenure_grace_days),
         thresholds: {
@@ -569,6 +580,17 @@ async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
             suspect: Number(settings.suspicion_suspect_at),
             malicious: Number(settings.suspicion_malicious_at),
         },
+    });
+}
+
+async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
+    const guild = member.guild;
+
+    const correlation = suspicion.correlateJoin(guild.id, member.user);
+    const result = scoreProfile(member, settings, {
+        correlation,
+        inBurst,
+        inviteFlood: Boolean(inviteInfo?.flooding),
     });
 
     if (inviteInfo?.known) result.inviteInfo = inviteInfo;
@@ -1218,6 +1240,8 @@ module.exports = {
     reportFloor,
     behaviourTier,
     ownInviteCodes,
+    // The join path's scoring, reused by the restore so the two cannot drift.
+    scoreProfile,
     // Exported so the health signal it raises can be pinned: a gate that has
     // lost the permission to act is the failure that looks like calm.
     removeMember,

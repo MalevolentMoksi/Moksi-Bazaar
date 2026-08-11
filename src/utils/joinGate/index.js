@@ -27,6 +27,7 @@ const suspicion = require('./suspicion');
 const phishing = require('./phishing');
 const watchWindow = require('./watch');
 const invites = require('./invites');
+const restore = require('./restore');
 
 /**
  * Boots the pieces that need to run independently of any single join:
@@ -66,6 +67,11 @@ async function initJoinGate(client) {
             return;
         }
 
+        // Before the sweep, because the sweep can remove people and there is no
+        // sense rebuilding a window around someone who is about to be kicked.
+        await restore.restoreAll(client, guildIds.map((id, i) => [id, settingsPerGuild[i]]))
+            .catch(e => logger.warn('[JOIN-GATE] Memory restore failed', { error: e.message }));
+
         for (const guildId of guildIds) {
             const settings = await config.getSettings(guildId);
             if (!settings.sweep_enabled) continue;
@@ -90,4 +96,5 @@ module.exports = {
     phishing,
     watchWindow,
     invites,
+    restore,
 };
