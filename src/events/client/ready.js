@@ -2,7 +2,7 @@
 
 const { EmbedBuilder } = require('discord.js');
 const { init } = require('../../utils/db');
-const { initUptimePresence } = require('../../utils/presence');
+const { initPresence } = require('../../utils/presence');
 const { startReminderScheduler } = require('../../commands/tools/remind.js');
 const { initWarnReminderScheduler } = require('../../utils/warnReminderScheduler');
 const { initJoinGate } = require('../../utils/joinGate');
@@ -91,7 +91,7 @@ module.exports = {
     // Before anything can render a panel, so the very first message of the
     // session already agrees with the toggle.
     await runBootStep(results, 'Embed mode', () => loadModes());
-    await runBootStep(results, 'Presence', () => initUptimePresence(client));
+    await runBootStep(results, 'Presence', () => initPresence(client));
     await runBootStep(results, 'Reminder scheduler', () => startReminderScheduler(client));
     await runBootStep(results, 'Warn reminder scheduler', () => initWarnReminderScheduler(client));
     // initJoinGate swallows its own errors: a broken gate must not take the

@@ -21,6 +21,7 @@
 const { PermissionFlagsBits, SnowflakeUtil } = require('discord.js');
 const { pool } = require('../db');
 const logger = require('../logger');
+const health = require('../health');
 const {
     DAY_MS, MINUTE_MS, getSettings, thresholdMs, formatDays, incrementStat,
 } = require('./config');
@@ -268,10 +269,25 @@ function classifyRemovalError(error) {
 }
 
 /**
- * Performs the actual removal. Assumes the DM has already been attempted.
+ * Removes a member, and tells the health registry whether the gate can still
+ * do its job.
  * @returns {Promise<{ok: boolean, action: 'kick'|'ban', error?: string, hint?: string, unbanAt?: number, benign?: boolean}>}
  */
 async function removeMember(member, settings, decision, action) {
+    const result = await attemptRemoval(member, settings, decision, action);
+
+    // A gate that cannot act is the failure nobody notices: it keeps scoring,
+    // keeps filing reports, and every removal 403s. The panel says so, but
+    // only to whoever thinks to open it. `benign` covers the member having
+    // already left, which is not a fault in anything.
+    if (result.ok) health.report('joinGate', 'ok');
+    else if (!result.benign) health.report('joinGate', 'degraded', `cannot ${result.action}: ${result.error}`);
+
+    return result;
+}
+
+/** The removal itself. Assumes the DM has already been attempted. */
+async function attemptRemoval(member, settings, decision, action) {
     const reason = `Join gate: ${decision.reason}`;
 
     if (action === 'ban') {
@@ -1202,4 +1218,7 @@ module.exports = {
     reportFloor,
     behaviourTier,
     ownInviteCodes,
+    // Exported so the health signal it raises can be pinned: a gate that has
+    // lost the permission to act is the failure that looks like calm.
+    removeMember,
 };

@@ -103,3 +103,69 @@ describe('the request shape', () => {
         expect(body.provider).toEqual({ sort: 'price' });
     });
 });
+
+// A dead model looks exactly like a quiet afternoon: no error reaches anyone,
+// replies simply stop being right. This funnel is the only place that sees
+// every model call, so it is where the bot notices.
+describe('the AI reports its own health', () => {
+    const health = require('../src/utils/health');
+    const failingFetch = () => jest.fn(async () => ({
+        ok: false, status: 502, headers: { get: () => null }, text: async () => 'bad gateway',
+    }));
+    const call = () => callOpenRouterAPI('vendor/model', [{ role: 'user', content: 'hi' }]);
+
+    beforeEach(async () => {
+        // Zero the streak left by whatever ran before, then clear the registry.
+        global.fetch = respondingFetch('x');
+        await call();
+        health.reset();
+    });
+
+    test('one failure is a hiccup and says nothing', async () => {
+        global.fetch = failingFetch();
+        await call();
+        await call();
+        expect(health.snapshot().state).toBe('ok');
+    });
+
+    test('three in a row is the model being down', async () => {
+        global.fetch = failingFetch();
+        await call();
+        await call();
+        await call();
+        const snap = health.snapshot();
+        expect(snap.state).toBe('degraded');
+        expect(snap.worst.label).toBe('AI');
+        expect(snap.worst.detail).toContain('3 calls failed');
+    });
+
+    test('one working call is enough to take it back', async () => {
+        global.fetch = failingFetch();
+        await call(); await call(); await call();
+        global.fetch = respondingFetch('back');
+        await call();
+        expect(health.snapshot().state).toBe('ok');
+    });
+
+    // The fallback path recurses into the same function, so a rescued call
+    // records a failure and then a success. It must net out healthy, or every
+    // fallback in the pipeline would read as an outage.
+    test('a call rescued by its fallback is not an outage', async () => {
+        let attempt = 0;
+        global.fetch = jest.fn(async () => {
+            attempt += 1;
+            return attempt === 1
+                ? { ok: false, status: 502, headers: { get: () => null }, text: async () => 'bad gateway' }
+                : {
+                    ok: true, status: 200, headers: { get: () => null },
+                    json: async () => ({ choices: [{ message: { content: 'rescued' } }], usage: {} }),
+                };
+        });
+
+        const result = await callOpenRouterAPI('vendor/model', [{ role: 'user', content: 'hi' }], {
+            fallbackModel: 'vendor/spare',
+        });
+        expect(result).toBe('rescued');
+        expect(health.snapshot().state).toBe('ok');
+    });
+});

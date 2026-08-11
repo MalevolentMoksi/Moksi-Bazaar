@@ -35,6 +35,7 @@ const {
     pruneMirroredTweets,
 } = require('./db');
 const logger = require('./logger');
+const health = require('./health');
 
 const API_URL = 'https://api.twitterapi.io/twitter/tweet/advanced_search';
 const API_TIMEOUT_MS = 20_000;
@@ -510,6 +511,16 @@ async function searchTweets({ apiKey, query }) {
 
 /** One line per distinct problem, rather than one per poll. */
 function complainOnce(key, level, message, meta) {
+    // The same two calls are the mirror's health signal, because they already
+    // are its record of what is wrong. Reported on every poll rather than only
+    // on the first, so the "since" clock keeps running: a key rejected forty
+    // minutes ago should say so, not read as if it just happened.
+    //
+    // Never 'down', however bad it is. A mirror that has stopped is a feature
+    // the server is missing, not a bot that cannot work, and if everything can
+    // turn the dot red then red stops meaning anything.
+    health.report('tweets', 'degraded', message.replace(/^\[TWEETS\]\s*/, ''));
+
     if (complained.has(key)) return;
     complained.add(key);
     logger[level](message, meta);
@@ -524,6 +535,9 @@ function resolved(prefix) {
     for (const key of complained) {
         if (key.startsWith(prefix)) complained.delete(key);
     }
+    // Only when the last complaint is gone: one fixed problem out of two is
+    // not a working mirror.
+    if (complained.size === 0) health.report('tweets', 'ok');
 }
 
 // ── The tick ────────────────────────────────────────────────────────────────

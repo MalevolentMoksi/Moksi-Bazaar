@@ -1,7 +1,36 @@
 // src/utils/apiHelpers.js - Shared API Call Utilities
 const logger = require('./logger');
 const telemetry = require('./telemetry');
+const health = require('./health');
 const { TIMEOUTS } = require('./constants');
+
+/**
+ * How many calls in a row have to fail before the bot admits it out loud.
+ *
+ * One failure is a provider hiccup and the pipeline already falls back around
+ * it. Three in a row means every reply in the server is coming out wrong, and
+ * nothing else says so: a dead model looks exactly like a quiet afternoon.
+ */
+const AI_FAIL_STREAK = 3;
+let aiFailures = 0;
+
+/**
+ * Every exit from callOpenRouterAPI passes through here, success or not, so
+ * this is the whole of the AI's health signal. The fallback path recurses into
+ * the same function, which is why a primary failure rescued by a fallback nets
+ * out to healthy rather than counting against the streak.
+ */
+function noteApiOutcome(outcome) {
+    if (outcome === 'ok') {
+        if (aiFailures >= AI_FAIL_STREAK) health.report('ai', 'ok');
+        aiFailures = 0;
+        return;
+    }
+    aiFailures += 1;
+    if (aiFailures >= AI_FAIL_STREAK) {
+        health.report('ai', 'degraded', `${aiFailures} calls failed in a row`);
+    }
+}
 
 // DEPRECATED (April 2026): Groq API removed. All models migrated to OpenRouter.
 // - Sentiment: MiMo-V2-Flash (primary) + Groq Llama 8B (fallback) + DeepSeek V3 (safety)
@@ -44,14 +73,17 @@ async function callOpenRouterAPI(model, messages, options = {}) {
     }
 
     const startedAt = Date.now();
-    const record = (fields) => telemetry.logCall({
-        kind: telemetryMeta?.kind ?? 'model_call',
-        model,
-        input: messages,
-        latencyMs: Date.now() - startedAt,
-        extra: telemetryMeta?.extra ?? null,
-        ...fields,
-    });
+    const record = (fields) => {
+        noteApiOutcome(fields?.outcome);
+        return telemetry.logCall({
+            kind: telemetryMeta?.kind ?? 'model_call',
+            model,
+            input: messages,
+            latencyMs: Date.now() - startedAt,
+            extra: telemetryMeta?.extra ?? null,
+            ...fields,
+        });
+    };
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
