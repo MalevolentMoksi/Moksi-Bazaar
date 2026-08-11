@@ -243,7 +243,9 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         ? result.signals
             .slice()
             .sort((a, b) => b.points - a.points)
-            .map(s => `\`${s.points > 0 ? '+' : ''}${String(s.points).padStart(3)}\` **${s.label}**: ${s.detail}`)
+            // Padded inside the code span, not outside it: "+ 35" was the sign
+            // and the number separated by the padding meant to align them.
+            .map(s => `\`${`${s.points > 0 ? '+' : ''}${s.points}`.padStart(4)}\` **${s.label}**: ${s.detail}`)
         : ['_no signals fired_'];
 
     // What the bot did about it, promoted: it is the first thing a moderator

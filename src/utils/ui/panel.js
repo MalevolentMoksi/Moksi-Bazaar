@@ -336,7 +336,12 @@ function toContainer(embed, rows = [], opts = {}) {
 
     const heading = titleLine(data);
     const body = data.description ? String(data.description).trim() : null;
-    const authorLine = data.author?.name ? `-# ${String(data.author.name).trim()}` : null;
+    // An embed author can carry a link, and the tweet card is one: without it
+    // the handle stops being a way through to the profile.
+    const authorName = data.author?.name ? String(data.author.name).trim() : null;
+    const authorLine = authorName
+        ? `-# ${data.author.url ? `[${authorName}](${data.author.url})` : authorName}`
+        : null;
     const hasImage = Boolean(data.image?.url);
     const footer = footerLine(data);
 

@@ -406,6 +406,15 @@ describe('the container itself', () => {
         expect(texts(container)[0]).toBe('-# a');
     });
 
+    // The tweet card's author name is the way through to the profile, and the
+    // link was being dropped along with the icon.
+    test('a linked author name keeps its link', () => {
+        const container = toContainer(new EmbedBuilder()
+            .setAuthor({ name: 'Moksi (@moksi)', url: 'https://example.invalid/moksi' })
+            .setTitle('t'));
+        expect(texts(container)[0]).toBe('-# [Moksi (@moksi)](https://example.invalid/moksi)');
+    });
+
     // Bold was the only thing telling one group from the next, which is what
     // made an incident report read as a wall. A rule marks the structural
     // breaks; air separates groups; a column of one-line readings gets neither,
