@@ -241,8 +241,15 @@ function recentOwnReplies(conversationContext, count = 2) {
     return String(conversationContext ?? '')
         .split('\n')
         .filter(l => l.startsWith(label))
-        .slice(-count)
-        .map(l => l.slice(label.length).trim());
+        .map(l => l.slice(label.length).trim())
+        // A mod panel or file reply renders as "[no text] [panel: ...]".
+        // Those are not something the bot SAID, and on the night of the
+        // spam incident the judge was literally comparing candidate prose
+        // against a moderation report for shape variety. Only typed lines
+        // count; the filter runs before the slice so a panel does not
+        // shoulder a real reply out of the window.
+        .filter(text => text && !text.startsWith('[no text]'))
+        .slice(-count);
 }
 
 /**

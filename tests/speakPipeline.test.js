@@ -139,6 +139,22 @@ describe('judging drafts', () => {
         expect(recentOwnReplies(log)).toEqual(['what.', 'still here.']);
     });
 
+    test('a mod panel is not a reply the judge should compare shapes against', () => {
+        // From the spam-incident traces: the bot's last "reply" was the
+        // behaviour-flag panel, so the judge's shape-variety criterion was
+        // measuring candidate prose against a moderation report. Panels are
+        // filtered before the slice, so they also cannot crowd a real typed
+        // reply out of the comparison window.
+        const log = [
+            'You (Cooler Moksi): what.',
+            'You (Cooler Moksi): [no text] [panel: humphrey00614 | 🚨 Behaviour flag: score 102]',
+            'zoeyy: it doesnt say who',
+            'You (Cooler Moksi): still here.',
+        ].join('\n');
+
+        expect(recentOwnReplies(log)).toEqual(['what.', 'still here.']);
+    });
+
     test('the rubric kills descriptions of media that nothing describes', async () => {
         // Both live judge misses shared one signature: no candidate had ground
         // truth, and the most confidently specific fabrication won. The knife
