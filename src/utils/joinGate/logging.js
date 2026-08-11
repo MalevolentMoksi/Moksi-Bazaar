@@ -94,11 +94,22 @@ async function describeRouting(guild, settings) {
     return out;
 }
 
+/**
+ * A log notifies nobody, ever. Panels quote what offenders posted verbatim,
+ * and on a Components V2 surface that quote is real message content: one
+ * quoted "@everyone" pinged the whole server from its own incident report.
+ * Mentions still RENDER as clickable chips with parsing off, which is exactly
+ * the combination a log wants: click through to the profile, wake no one.
+ */
+function silenced(payload) {
+    return { ...payload, allowedMentions: { parse: [] } };
+}
+
 async function send(guild, settings, category, payload) {
     try {
         const channel = await resolveChannel(guild, settings, category);
         if (!channel) return false;
-        await channel.send(payload);
+        await channel.send(silenced(payload));
         return true;
     } catch (error) {
         logger.warn('[JOIN-GATE] Log send failed', {
@@ -148,7 +159,9 @@ async function logOutcome(guild, settings, entry) {
             name: `${user.tag ?? user.username} (${user.id})`,
             iconURL: user.displayAvatarURL?.() ?? undefined,
         })
-        .setDescription(status)
+        // The header is plain text; this is the line you can actually click.
+        // Send-side mention parsing is off, so it wakes nobody.
+        .setDescription(`<@${user.id}>\n${status}`)
         .addFields(
             { name: 'Account created', value: `<t:${toUnix(user.createdTimestamp)}:F>`, inline: false },
             { name: 'Age at join', value: `${(decision.ageMs / DAY_MS).toFixed(2)} days`, inline: true },
@@ -226,7 +239,9 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
             iconURL: user.displayAvatarURL?.() ?? undefined,
         })
         .setTitle(`${style.icon} ${isBehaviour ? 'Behaviour flag' : style.word}: score ${result.score}`)
-        .setDescription(breakdown.slice(0, 4000))
+        // The clickable line. Staff were looking the offender up by hand
+        // because the author header is plain text ("it doesnt say who").
+        .setDescription(`<@${user.id}>\n${breakdown.slice(0, 4000)}`)
         .addFields(
             { name: 'Account created', value: `<t:${toUnix(user.createdTimestamp)}:R>`, inline: true },
             { name: isBehaviour ? 'Source' : 'Tier', value: isBehaviour ? 'first messages after joining' : result.tier, inline: true },
@@ -328,7 +343,7 @@ async function logTest(guild, settings, category, actor) {
         const channel = guild.channels.cache.get(channelId)
             ?? await guild.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased() || channel.guild?.id !== guild.id) return false;
-        return channel.send(ui(embed, [], { scope: 'mod' })).then(() => true).catch(() => false);
+        return channel.send(silenced(ui(embed, [], { scope: 'mod' }))).then(() => true).catch(() => false);
     }
 
     return send(guild, settings, category, ui(embed, [], { scope: 'mod' }));

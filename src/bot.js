@@ -82,6 +82,16 @@ function initializeBot() {
       // buys the ability to notice a nuke, never to intercept one.
       GatewayIntentBits.GuildModeration,
     ],
+    // The floor for every send this client ever makes: @everyone, @here and
+    // role pings are stripped no matter what the content says. This is not
+    // hypothetical: a mod panel quoted a spammer's "@everyone ..." verbatim,
+    // and with the mod surface on Components V2 that quote was real message
+    // content, so the bot pinged the entire server while reporting the ping
+    // attempt it had just punished. User pings and the reply ping survive,
+    // since speak and the reminders depend on them. A send that genuinely
+    // needs more must say so in its own payload, which is what "never unless
+    // explicitly coded to" means.
+    allowedMentions: { parse: ['users'], repliedUser: true },
   });
 
   client.commands = new Collection();
