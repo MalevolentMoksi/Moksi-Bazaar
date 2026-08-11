@@ -6,7 +6,7 @@
 // Flip a surface only once you have seen it.
 
 const {
-    SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
+    SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
     ButtonStyle, MessageFlags,
 } = require('discord.js');
 const { isOwner, OWNER_REJECTION_JOKES } = require('../../utils/constants');
@@ -125,7 +125,8 @@ function statusText(modes) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('embedtest')
-        .setDescription('secret')
+        .setDescription('Compare and switch the Components V2 rendering, per surface')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addSubcommand(sub => sub
             .setName('preview')
             .setDescription('post a surface both ways, changing nothing')

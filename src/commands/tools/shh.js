@@ -3,7 +3,7 @@
 // as if the organic interjection gauntlet in messageCreate.js had rolled in
 // its favor. No allowlist, cooldown, or chance check: the owner is forcing it.
 
-const { SlashCommandBuilder, MessageFlags, ChannelType } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags, ChannelType } = require('discord.js');
 const { isOwner, OWNER_REJECTION_JOKES } = require('../../utils/constants');
 const logger = require('../../utils/logger');
 
@@ -76,7 +76,8 @@ function buildInterjectionInteraction(interaction, targetChannel, angle) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('shh')
-        .setDescription('secret')
+        .setDescription('Make the bot interject here, unprompted')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addStringOption(opt =>
             opt.setName('angle')
                 .setDescription('a nudge about what to react to')

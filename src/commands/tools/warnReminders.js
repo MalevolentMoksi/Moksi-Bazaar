@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const {
     getAllWarnReminders,
     deleteWarnReminder,
@@ -72,6 +72,7 @@ module.exports = {
     data: new SlashCommandBuilder()
         .setName('warnreminders')
         .setDescription('View and cancel pending warn reminders')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addSubcommand(sub =>
             sub.setName('list').setDescription('Show all pending warn reminders')
         ),

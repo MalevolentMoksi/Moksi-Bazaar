@@ -14,7 +14,7 @@
  */
 
 const {
-    SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+    SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
     StringSelectMenuBuilder, ChannelSelectMenuBuilder, ModalBuilder, TextInputBuilder,
     TextInputStyle, ChannelType, MessageFlags,
 } = require('discord.js');
@@ -571,7 +571,8 @@ async function buildPanel(section) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('speak_settings')
-        .setDescription('Admin controls for Cooler Moksi'),
+        .setDescription('Admin controls for Cooler Moksi')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
     async execute(interaction) {
         if (!isOwner(interaction.user.id)) {

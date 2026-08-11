@@ -12,7 +12,7 @@
  */
 
 const {
-    SlashCommandBuilder, ContextMenuCommandBuilder, ApplicationCommandType,
+    SlashCommandBuilder, PermissionFlagsBits, ContextMenuCommandBuilder, ApplicationCommandType,
     EmbedBuilder, MessageFlags,
 } = require('discord.js');
 const {
@@ -263,7 +263,8 @@ module.exports = [
     {
         data: new SlashCommandBuilder()
             .setName('lookup')
-            .setDescription('secret')
+            .setDescription('Everything the bot knows about one person, on one page')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
             .addUserOption(opt => opt
                 .setName('user').setDescription('who').setRequired(true)),
         async execute(interaction) {

@@ -319,9 +319,13 @@ module.exports = {
                     { name: 'furthest ahead', value: 'up' },
                     { name: 'deepest in the hole', value: 'down' },
                 )))
+        // The one owner-only corner of a public command. A subcommand cannot
+        // carry its own permission flag, so this cannot be hidden the way the
+        // owner-only commands are; saying what it is beats "secret", which in
+        // a searchable list of 42 entries reads as an invitation.
         .addSubcommand(sub => sub
             .setName('config')
-            .setDescription('secret')),
+            .setDescription('Owner only: house limits and payouts')),
 
     async execute(interaction) {
         const sub = interaction.options.getSubcommand();

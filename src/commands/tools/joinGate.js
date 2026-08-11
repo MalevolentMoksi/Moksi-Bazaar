@@ -913,11 +913,17 @@ async function buildPanel(guild, state) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('joingate')
-        .setDescription('Configure the account-age auto-kicker for this server'),
-    // Access control is the isOwner() check below, not a Discord permission
-    // flag. setDefaultMemberPermissions(Administrator) was tempting, but it
-    // would hide the panel from the owner in any server where they are not an
-    // admin, locking the one person who is allowed to use it out of it.
+        .setDescription('Configure the account-age auto-kicker for this server')
+        // A DISPLAY rule, not the access control: it keeps the panel out of
+        // 1,600 people's command picker, and isOwner() below is still the only
+        // thing that decides who may run it. A guild admin who re-grants this
+        // under Integrations gets the rejection like anybody else.
+        //
+        // Manage Server rather than Administrator, which was the original
+        // objection to doing this at all: Administrator would hide the panel
+        // from the owner in any server where they are not an admin, locking
+        // the one person allowed to use it out of it.
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
     async execute(interaction) {
         if (!isOwner(interaction.user.id)) {

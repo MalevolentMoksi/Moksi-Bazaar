@@ -12,7 +12,7 @@
  */
 
 const {
-    SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+    SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
     ChannelSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
     ChannelType, MessageFlags, PermissionsBitField,
 } = require('discord.js');
@@ -398,7 +398,8 @@ async function buildPanel(guild = null, { refreshBalance = false } = {}) {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('tweets_settings')
-        .setDescription('Admin controls for the X mirror'),
+        .setDescription('Admin controls for the X mirror')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
     async execute(interaction) {
         if (!isOwner(interaction.user.id)) {

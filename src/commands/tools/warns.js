@@ -7,7 +7,7 @@
  * warned" had no answer anywhere.
  */
 
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, MessageFlags } = require('discord.js');
 const { getWarns } = require('../../utils/db');
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
@@ -18,7 +18,8 @@ const RECENT_WINDOW_MS = 90 * 86_400_000;
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('warns')
-        .setDescription('secret')
+        .setDescription('Read back what a member has been warned for, and when')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addUserOption(opt => opt
             .setName('user').setDescription('whose warns').setRequired(false))
         .addStringOption(opt => opt

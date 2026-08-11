@@ -1,7 +1,7 @@
 // src/commands/tools/backup.js
 // Owner-only control over database dumps. See utils/backup.js for the format.
 
-const { SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } = require('discord.js');
 const { isOwner, OWNER_REJECTION_JOKES } = require('../../utils/constants');
 const { getSpeakConfigValue, setSpeakConfigValue } = require('../../utils/db');
 const {
@@ -14,7 +14,8 @@ const {
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('backup')
-        .setDescription('secret')
+        .setDescription('Database dumps: post one now, or set where the weekly one goes')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
         .addSubcommand(sub =>
             sub.setName('now').setDescription('post a database dump in this channel right now'))
         .addSubcommand(sub =>
