@@ -24,6 +24,17 @@ jest.mock('../src/utils/db', () => ({
     getSpeakConfigValue: jest.fn(async () => null),
     setSpeakConfigValue: jest.fn(async () => {}),
 }));
+// Only the database read is faked; formatDays and the rest stay real, because
+// the panels under test are built out of them.
+jest.mock('../src/utils/joinGate/config', () => ({
+    ...jest.requireActual('../src/utils/joinGate/config'),
+    getSettings: jest.fn(),
+}));
+jest.mock('../src/utils/joinGate/modlog', () => ({ record: jest.fn(async () => null) }));
+jest.mock('../src/utils/joinGate/guard', () => ({
+    ...jest.requireActual('../src/utils/joinGate/guard'),
+    record: jest.fn(),
+}));
 
 const fs = require('fs');
 const path = require('path');
@@ -123,6 +134,41 @@ describe('what the incident panel sends now', () => {
 
         const embed = channel.send.mock.calls[0][0].embeds[0];
         expect(embed.data.description).toContain(`<@${spammer.id}>`);
+    });
+
+    // The guard alert names the account that just deleted twelve channels. It
+    // was the one report in the bot that still parsed mentions, so it pinged
+    // that account: the fastest possible way to tell an attacker they were
+    // seen, sent by the alarm itself.
+    test('the raid alert does not tap the raider on the shoulder', async () => {
+        const { guild, channel } = fakeGuild();
+        guild.name = 'Festival Hub';
+        guild.channels.cache.set('guard-chan', channel);
+
+        require('../src/utils/joinGate/config').getSettings.mockResolvedValue({
+            enabled: true, guard_enabled: true, guard_channel_id: 'guard-chan', guard_dm_owner: false,
+        });
+        require('../src/utils/joinGate/guard').record.mockReturnValue({
+            label: 'Mass channel deletion', actorId: 'raider-1', bucket: 'destructive',
+            count: 12, windowSeconds: 30, limit: 5, actions: ['channelDelete'],
+        });
+
+        const handler = require('../src/events/client/guildAuditLogEntryCreate');
+        await handler.execute(
+            { id: 'audit-1', executorId: 'raider-1' },
+            guild,
+            { user: { id: 'bot' }, users: { fetch: jest.fn(async () => ({ username: 'raider' })) } },
+        );
+
+        const payload = channel.send.mock.calls[0][0];
+        expect(payload.allowedMentions).toEqual({ parse: [] });
+
+        const embed = payload.embeds[0].data;
+        expect(embed.description).toContain('<@raider-1>');
+        // "Who" repeated the first line and "Server" named the channel it was
+        // posted in; the standing advice is the only thing left worth a label.
+        expect(embed.fields.map(f => f.name)).toEqual(['This is a report, not an action']);
+        expect(embed.description).toContain('-# raider · `raider-1`');
     });
 
     test('kick and ban outcomes carry the same clickable mention, silenced the same way', async () => {

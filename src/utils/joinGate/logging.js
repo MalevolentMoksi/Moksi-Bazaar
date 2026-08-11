@@ -12,8 +12,10 @@
  * the gate from doing its job.
  */
 
-const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { ui } = require('../ui/panel');
+const {
+    EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+} = require('discord.js');
+const { ui, quiet } = require('../ui/panel');
 const logger = require('../logger');
 const { formatDays, DAY_MS } = require('./config');
 
@@ -94,22 +96,12 @@ async function describeRouting(guild, settings) {
     return out;
 }
 
-/**
- * A log notifies nobody, ever. Panels quote what offenders posted verbatim,
- * and on a Components V2 surface that quote is real message content: one
- * quoted "@everyone" pinged the whole server from its own incident report.
- * Mentions still RENDER as clickable chips with parsing off, which is exactly
- * the combination a log wants: click through to the profile, wake no one.
- */
-function silenced(payload) {
-    return { ...payload, allowedMentions: { parse: [] } };
-}
-
+/** A log notifies nobody, ever. See `quiet` in ui/panel for the incident. */
 async function send(guild, settings, category, payload) {
     try {
         const channel = await resolveChannel(guild, settings, category);
         if (!channel) return false;
-        await channel.send(silenced(payload));
+        await channel.send(quiet(payload));
         return true;
     } catch (error) {
         logger.warn('[JOIN-GATE] Log send failed', {
@@ -123,6 +115,12 @@ async function send(guild, settings, category, payload) {
  * Reports the outcome of a single evaluated member.
  * Dry-run outcomes go to the preview category; everything else splits between
  * kick and failure so the two can live in different channels.
+ *
+ * Read top to bottom it answers, in order: what happened, to whom, on what
+ * grounds, and only then the paperwork. It used to open with a bare mention
+ * and lay seven equally weighted fields under it, so the two numbers the
+ * decision actually turned on (the age, the threshold) sat in the same
+ * typeface as the DM receipt.
  */
 async function logOutcome(guild, settings, entry) {
     const {
@@ -135,23 +133,34 @@ async function logOutcome(guild, settings, entry) {
     const benign = !result.ok && result.benign;
     const category = dryRun ? 'preview' : (result.ok || benign ? 'kick' : 'failure');
 
-    let status;
+    let headline;
     let color;
+    let lede = null;
     if (dryRun) {
-        status = result.action === 'ban'
-            ? '🧪 **Dry run**: would temp-ban'
-            : '🧪 **Dry run**: would kick';
+        headline = result.action === 'ban' ? '🧪 Dry run: would temp-ban' : '🧪 Dry run: would kick';
         color = COLORS.preview;
     } else if (result.ok) {
-        status = result.action === 'ban' ? '🔨 **Temporarily banned**' : '👢 **Kicked**';
+        headline = result.action === 'ban' ? '🔨 Temporarily banned' : '👢 Kicked';
         color = result.action === 'ban' ? COLORS.ban : COLORS.kick;
     } else if (benign) {
-        status = `➖ **No action taken**: ${result.error}`;
+        headline = '➖ No action taken';
+        lede = result.error;
         color = COLORS.preview;
     } else {
-        status = `⚠️ **Failed**: ${result.error ?? 'unknown error'}`;
+        headline = `⚠️ Could not ${result.action ?? 'act'}`;
+        lede = result.error ?? 'unknown error';
         color = COLORS.failure;
     }
+
+    // The paperwork, in one subtext line. Every item is worth keeping and not
+    // one of them is worth a heading.
+    const paperwork = [
+        `account made <t:${toUnix(user.createdTimestamp)}:D>`,
+        `eligible <t:${toUnix(decision.eligibleAt)}:R>`,
+        `join attempt #${attempt}`,
+        `DM ${result.dm ?? 'n/a'}`,
+        origin === 'sweep' ? 'caught by the catch-up sweep' : 'caught on join',
+    ].join(' · ');
 
     const embed = new EmbedBuilder()
         .setColor(color)
@@ -159,17 +168,15 @@ async function logOutcome(guild, settings, entry) {
             name: `${user.tag ?? user.username} (${user.id})`,
             iconURL: user.displayAvatarURL?.() ?? undefined,
         })
+        .setTitle(headline)
         // The header is plain text; this is the line you can actually click.
         // Send-side mention parsing is off, so it wakes nobody.
-        .setDescription(`<@${user.id}>\n${status}`)
-        .addFields(
-            { name: 'Account created', value: `<t:${toUnix(user.createdTimestamp)}:F>`, inline: false },
-            { name: 'Age at join', value: `${(decision.ageMs / DAY_MS).toFixed(2)} days`, inline: true },
-            { name: 'Threshold', value: `${formatDays(settings.min_account_age_minutes)} days`, inline: true },
-            { name: 'Eligible', value: `<t:${toUnix(decision.eligibleAt)}:R>`, inline: true },
-            { name: 'Join attempt', value: `#${attempt}`, inline: true },
-            { name: 'DM', value: result.dm ?? 'n/a', inline: true },
-            { name: 'Trigger', value: origin === 'sweep' ? 'catch-up sweep' : 'on join', inline: true },
+        .setDescription(
+            `<@${user.id}>\n`
+            + (lede ? `${lede}\n` : '')
+            + `**${(decision.ageMs / DAY_MS).toFixed(2)} days old** at join, `
+            + `threshold is ${formatDays(settings.min_account_age_minutes)} days\n`
+            + `-# ${paperwork}`
         )
         .setTimestamp();
 
@@ -195,42 +202,87 @@ const TIER_STYLE = {
 };
 
 /**
+ * An embed field value stops at 1024 characters. The arithmetic is the entire
+ * point of the report, so a long breakdown continues into an unlabelled second
+ * field rather than being cut off mid-signal.
+ */
+function chunkLines(lines, limit = 1000, maxChunks = 3) {
+    const chunks = [];
+    let current = '';
+    for (const line of lines) {
+        const next = current ? `${current}\n${line}` : line;
+        if (next.length > limit && current) {
+            chunks.push(current);
+            if (chunks.length >= maxChunks) return chunks;
+            current = line.slice(0, limit);
+        } else {
+            current = next.slice(0, limit);
+        }
+    }
+    if (current) chunks.push(current);
+    return chunks;
+}
+
+/**
  * Reports a scored joiner. The whole point is that the arithmetic is visible,
  * so staff can judge the call rather than trusting a verdict.
+ *
+ * Laid out as a card and not a form. The header block answers who and what
+ * happened to them; everything a moderator would have to read anyway is a
+ * labelled group under it, and everything they would only read once is
+ * subtext. The version this replaced ended in four fields of identical weight
+ * ("Account created", "Source", "Outcome", "Where"), where "Outcome" was the
+ * only one anybody needed at a glance, "Source" repeated the footer and "Tier"
+ * repeated the title.
  */
 async function logSuspicion(guild, settings, { user, result, action, actionOutcome, dryRun, channelId, evidence }) {
     const style = TIER_STYLE[result.tier] ?? TIER_STYLE.watch;
     const isBehaviour = result.source === 'behaviour';
 
-    const breakdown = result.signals.length
+    const signalLines = result.signals.length
         ? result.signals
             .slice()
             .sort((a, b) => b.points - a.points)
             .map(s => `\`${s.points > 0 ? '+' : ''}${String(s.points).padStart(3)}\` **${s.label}**: ${s.detail}`)
-            .join('\n')
-        : '_no signals fired_';
+        : ['_no signals fired_'];
 
-    let outcome;
-    if (dryRun) outcome = '🧪 dry run, no action';
-    else if (action === 'log' || action === 'none') outcome = 'logged only, no action taken';
-    else if (actionOutcome?.ok && action === 'ban') {
-        outcome = actionOutcome.unbanAt
-            ? `temporarily banned, lifts <t:${toUnix(actionOutcome.unbanAt)}:R>`
-            : 'temporarily banned';
+    // What the bot did about it, promoted: it is the first thing a moderator
+    // reading this at midnight needs, and it decides whether they have to do
+    // anything themselves.
+    let did;
+    let qualifier = null;
+    if (dryRun) {
+        did = '🧪 Dry run';
+        qualifier = 'no action taken';
+    } else if (action === 'log' || action === 'none') {
+        did = 'Logged only';
+        qualifier = 'no action taken';
+    } else if (actionOutcome?.ok && action === 'ban') {
+        did = 'Temporarily banned';
+        if (actionOutcome.unbanAt) qualifier = `lifts <t:${toUnix(actionOutcome.unbanAt)}:R>`;
     }
     // Every non-ban success used to render as "kicked", so a timeout was
     // reported in the audit log as a removal that never happened.
     else if (actionOutcome?.ok && action === 'timeout') {
-        outcome = actionOutcome.minutes
-            ? `timed out for ${actionOutcome.minutes} min`
-            : 'timed out';
+        did = actionOutcome.minutes ? `Timed out for ${actionOutcome.minutes} min` : 'Timed out';
     }
-    else if (actionOutcome?.ok) outcome = 'kicked';
-    else outcome = `⚠️ ${action} failed: ${actionOutcome?.error ?? 'unknown error'}`;
+    else if (actionOutcome?.ok) did = 'Kicked';
+    else {
+        did = `⚠️ ${action} failed`;
+        qualifier = actionOutcome?.error ?? 'unknown error';
+    }
 
     if (actionOutcome?.deleted > 0) {
-        outcome += `, ${actionOutcome.deleted} message${actionOutcome.deleted === 1 ? '' : 's'} removed`;
+        const removed = `${actionOutcome.deleted} message${actionOutcome.deleted === 1 ? '' : 's'} removed`;
+        qualifier = qualifier ? `${qualifier} · ${removed}` : removed;
     }
+
+    // Where and how new the account is: worth keeping, never worth a heading.
+    const context = [
+        channelId ? `in <#${channelId}>` : null,
+        `account made <t:${toUnix(user.createdTimestamp)}:R>`,
+        isBehaviour ? 'first messages after joining' : `${result.tier} tier`,
+    ].filter(Boolean).join(' · ');
 
     const embed = new EmbedBuilder()
         .setColor(style.color)
@@ -238,14 +290,13 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
             name: `${user.tag ?? user.username} (${user.id})`,
             iconURL: user.displayAvatarURL?.() ?? undefined,
         })
-        .setTitle(`${style.icon} ${isBehaviour ? 'Behaviour flag' : style.word}: score ${result.score}`)
+        .setTitle(`${style.icon} ${isBehaviour ? 'Behaviour flag' : style.word} · score ${result.score}`)
         // The clickable line. Staff were looking the offender up by hand
         // because the author header is plain text ("it doesnt say who").
-        .setDescription(`<@${user.id}>\n${breakdown.slice(0, 4000)}`)
-        .addFields(
-            { name: 'Account created', value: `<t:${toUnix(user.createdTimestamp)}:R>`, inline: true },
-            { name: isBehaviour ? 'Source' : 'Tier', value: isBehaviour ? 'first messages after joining' : result.tier, inline: true },
-            { name: 'Outcome', value: outcome, inline: true },
+        .setDescription(
+            `<@${user.id}>\n`
+            + `**${did}**${qualifier ? ` · ${qualifier}` : ''}\n`
+            + `-# ${context}`
         )
         .setFooter({
             text: isBehaviour
@@ -254,9 +305,9 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         })
         .setTimestamp();
 
-    if (channelId) {
-        embed.addFields({ name: 'Where', value: `<#${channelId}>`, inline: true });
-    }
+    chunkLines(signalLines).forEach((text, index) => {
+        embed.addFields({ name: index === 0 ? 'Why it fired' : '​', value: text, inline: false });
+    });
 
     // What they actually posted. A report that says "score 117, invite link"
     // still leaves you opening three channels to find out what happened, and
@@ -287,7 +338,28 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         });
     }
 
-    return send(guild, settings, 'suspicion', ui(embed, [], { scope: 'mod' }));
+    return send(guild, settings, 'suspicion', ui(embed, jumpRow(guild, evidence, actionOutcome), { scope: 'mod' }));
+}
+
+/**
+ * A link straight to the message that caused this, which is the one thing a
+ * quoted excerpt cannot give you: context, replies, and whoever else was in
+ * the channel at the time.
+ *
+ * Offered only while the message is still there. The gate deletes what it
+ * quotes when it acts, and a jump button onto a deleted message is worse than
+ * no button: it reads as a report pointing at something staff cannot see.
+ */
+function jumpRow(guild, evidence, actionOutcome) {
+    if (Number(actionOutcome?.deleted) > 0) return [];
+    const last = evidence?.length ? evidence[evidence.length - 1] : null;
+    if (!guild?.id || !last?.channelId || !last?.messageId) return [];
+    return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setStyle(ButtonStyle.Link)
+            .setLabel('Jump to message')
+            .setURL(`https://discord.com/channels/${guild.id}/${last.channelId}/${last.messageId}`),
+    )];
 }
 
 /** Raid alert. Routed to the failure channel; it is a "look at me" event. */
@@ -343,7 +415,7 @@ async function logTest(guild, settings, category, actor) {
         const channel = guild.channels.cache.get(channelId)
             ?? await guild.channels.fetch(channelId).catch(() => null);
         if (!channel?.isTextBased() || channel.guild?.id !== guild.id) return false;
-        return channel.send(silenced(ui(embed, [], { scope: 'mod' }))).then(() => true).catch(() => false);
+        return channel.send(quiet(ui(embed, [], { scope: 'mod' }))).then(() => true).catch(() => false);
     }
 
     return send(guild, settings, category, ui(embed, [], { scope: 'mod' }));

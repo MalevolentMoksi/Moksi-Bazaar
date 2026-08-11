@@ -14,13 +14,12 @@ const logger = require('../../utils/logger');
 const guard = require('../../utils/joinGate/guard');
 const modlog = require('../../utils/joinGate/modlog');
 const { getSettings } = require('../../utils/joinGate/config');
-const { ui } = require('../../utils/ui/panel');
+const { ui, quiet } = require('../../utils/ui/panel');
 
 const ALERT_COLOR = 0xd64545;
 
 async function alert(guild, settings, verdict, client) {
     const actor = await client.users.fetch(verdict.actorId).catch(() => null);
-    const who = actor ? `${actor.username} (<@${verdict.actorId}>)` : `<@${verdict.actorId}>`;
 
     let detail;
     if (verdict.bucket === guard.BUCKETS.BOT) {
@@ -34,21 +33,30 @@ async function alert(guild, settings, verdict, client) {
             + `(limit is ${verdict.limit}).`;
     }
 
+    // Who and what up top, the paperwork in subtext, and the standing advice as
+    // its own block rather than a third paragraph nobody reaches. "Who" and
+    // "Server" used to be fields repeating the first line and the channel the
+    // alert was posted in.
     const embed = new EmbedBuilder()
         .setTitle(`🚨 ${verdict.label}`)
         .setColor(ALERT_COLOR)
         .setDescription(
-            `${who} tripped the audit-log guard.\n\n${detail}\n\n`
-            + 'This is a **report, not an action**: nothing has been undone and nobody has been '
-            + 'touched. If this is an attack, the fastest response is `?lockdown` and removing '
-            + 'their roles.'
+            `<@${verdict.actorId}> tripped the audit-log guard.\n`
+            + `${detail}\n`
+            + `-# ${actor ? `${actor.username} · ` : ''}\`${verdict.actorId}\``
+            + ` · ${verdict.actions.join(', ')} · in ${guild.name}`
         )
-        .addFields(
-            { name: 'Who', value: `<@${verdict.actorId}>\n\`${verdict.actorId}\``, inline: true },
-            { name: 'What', value: verdict.actions.join('\n'), inline: true },
-            { name: 'Server', value: guild.name, inline: true },
-        )
+        .addFields({
+            name: 'This is a report, not an action',
+            value: 'Nothing has been undone and nobody has been touched. If this is an attack, '
+                + 'the fastest response is `?lockdown` and removing their roles.',
+            inline: false,
+        })
         .setTimestamp();
+
+    // Silenced like every other report: the one person who must not be told
+    // the guard just fired is the account that tripped it.
+    const payload = quiet(ui(embed, [], { scope: 'mod' }));
 
     // The log channel, if one is set.
     const channelId = settings.guard_channel_id || settings.log_channel_id;
@@ -56,7 +64,7 @@ async function alert(guild, settings, verdict, client) {
         const channel = guild.channels.cache.get(channelId)
             ?? await guild.channels.fetch(channelId).catch(() => null);
         if (channel?.isTextBased()) {
-            await channel.send(ui(embed, [], { scope: 'mod' })).catch(error =>
+            await channel.send(payload).catch(error =>
                 logger.warn('[GUARD] Could not post alert', { error: error.message }));
         }
     }
@@ -65,7 +73,7 @@ async function alert(guild, settings, verdict, client) {
     // unreadable, so the DM is the copy that actually arrives.
     if (settings.guard_dm_owner && process.env.OWNER_ID) {
         const owner = await client.users.fetch(process.env.OWNER_ID).catch(() => null);
-        await owner?.send(ui(embed, [], { scope: 'mod' })).catch(() => { /* DMs closed */ });
+        await owner?.send(payload).catch(() => { /* DMs closed */ });
     }
 }
 

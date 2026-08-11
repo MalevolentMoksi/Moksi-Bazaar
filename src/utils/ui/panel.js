@@ -21,6 +21,17 @@
  *
  * Every run collapses into a single text display, which also keeps the
  * 40-component and 4000-character ceilings out of reach.
+ *
+ * The second thing V2 has and an embed does not is vertical structure, and not
+ * using it is what made an incident report read as one undifferentiated wall
+ * with bold as its only signal. Two devices, used sparingly enough that they
+ * still mean something:
+ *
+ *   a rule   at the structural breaks - where the header ends and the panel's
+ *            contents begin, and where the contents end and the controls begin.
+ *   air      between content groups, when at least one of them is a block
+ *            rather than a one-line reading. A column of short readings is
+ *            easier to scan without rules drawn through it.
  */
 
 const {
@@ -326,74 +337,101 @@ function toContainer(embed, rows = [], opts = {}) {
     const heading = titleLine(data);
     const body = data.description ? String(data.description).trim() : null;
     const authorLine = data.author?.name ? `-# ${String(data.author.name).trim()}` : null;
-    const useSection = Boolean(data.thumbnail?.url && (heading || body));
     const hasImage = Boolean(data.image?.url);
     const footer = footerLine(data);
 
+    /**
+     * An embed draws the author's avatar next to their name. V2 has no author
+     * slot, so that icon used to be dropped on the floor, and a moderation
+     * report about an account showed nothing of the account. A section
+     * accessory is the closest equivalent, and it is free whenever no explicit
+     * thumbnail already wants it.
+     */
+    const accessory = data.thumbnail?.url || data.author?.icon_url || data.author?.iconURL || null;
+    // Discord allows a section one to three text displays; the header is never
+    // more than three, so nothing has to be left outside it.
+    const header = [authorLine, heading, body].filter(Boolean);
+    const useSection = Boolean(accessory && header.length);
+
     // A section costs itself, its lines and its accessory.
-    const sectionCost = useSection ? 1 + [heading, body].filter(Boolean).length + 1 : 0;
+    const sectionCost = useSection ? 1 + header.length + 1 : 0;
     const fixedCost = 1 + rowCost + sectionCost + (hasImage ? 1 : 0);
 
     const blocks = planFields(data.fields, opts);
-    const wantSeparators = (blocks.length ? 1 : 0) + (usableRows.length ? 1 : 0);
+    /** A block that runs over one line is a group; a one-liner is a reading. */
+    const isGroup = text => String(text).includes('\n');
 
     /**
-     * Every text display that is not part of the section, in order. Merging
-     * two of these costs nothing visually, so overflow is folded into the last
-     * one rather than dropped: a panel that will not send is worse than a
-     * panel with one paragraph break fewer.
+     * Every text display that is not part of the section, in order, each
+     * carrying the break that introduces it. Merging two of these costs
+     * nothing visually, so overflow is folded into the last one rather than
+     * dropped: a panel that will not send is worse than a panel with one
+     * paragraph break fewer.
      */
     const pieces = [
-        ...(authorLine ? [authorLine] : []),
-        ...(useSection ? [] : [heading, body].filter(Boolean)),
-        ...blocks.map(block => block.text),
-        ...(footer ? [footer] : []),
+        ...(useSection ? [] : header.map(text => ({ text, breakBefore: null }))),
+        ...blocks.map((block, index) => ({
+            text: block.text,
+            breakBefore: index === 0
+                ? 'rule' // the header ends here, whatever follows
+                : (isGroup(block.text) || isGroup(blocks[index - 1].text) ? 'air' : null),
+        })),
+        ...(footer ? [{ text: footer, breakBefore: null }] : []),
     ];
 
-    let separators = wantSeparators;
+    let separators = pieces.filter(p => p.breakBefore).length + (usableRows.length ? 1 : 0);
     let allowance = MAX_COMPONENTS - fixedCost - separators;
     if (allowance < 1) {
-        // Drop the decoration before the content.
-        separators = 0;
-        allowance = Math.max(1, MAX_COMPONENTS - fixedCost);
+        // Drop the decoration before the content, keeping whatever still fits.
+        separators = Math.max(0, MAX_COMPONENTS - fixedCost - 1);
+        allowance = Math.max(1, MAX_COMPONENTS - fixedCost - separators);
     }
 
     const merged = pieces.slice(0, Math.max(0, allowance - 1));
     const overflow = pieces.slice(Math.max(0, allowance - 1));
-    if (overflow.length) merged.push(overflow.join('\n'));
+    // A folded run keeps the break that introduced the first of them.
+    if (overflow.length) {
+        merged.push({
+            text: overflow.map(p => p.text).join('\n'),
+            breakBefore: overflow[0].breakBefore,
+        });
+    }
 
     let budget = MAX_TEXT_CHARS;
     let wrote = false;
-    let queue = merged.filter(Boolean);
+    let queue = merged.filter(p => p?.text);
+
+    const separator = (kind = 'rule') => {
+        if (separators <= 0 || !wrote) return;
+        container.addSeparatorComponents(
+            new SeparatorBuilder()
+                .setDivider(kind === 'rule')
+                // A rule draws its own attention; air has to be wide enough to
+                // register as a break at all.
+                .setSpacing(kind === 'rule' ? SeparatorSpacingSize.Small : SeparatorSpacingSize.Large),
+        );
+        separators -= 1;
+    };
 
     /** Adds the next queued text display, clipped to the character budget. */
     const flushText = (count) => {
         for (let i = 0; i < count && queue.length; i += 1) {
-            const content = queue.shift();
-            const trimmed = content.length > budget
-                ? `${content.slice(0, Math.max(0, budget - 1))}…`
-                : content;
+            const piece = queue.shift();
+            const trimmed = piece.text.length > budget
+                ? `${piece.text.slice(0, Math.max(0, budget - 1))}…`
+                : piece.text;
             if (!trimmed.trim()) continue;
+            if (piece.breakBefore) separator(piece.breakBefore);
             container.addTextDisplayComponents(new TextDisplayBuilder().setContent(trimmed));
             budget -= trimmed.length;
             wrote = true;
         }
     };
 
-    const separator = () => {
-        if (separators <= 0) return;
-        container.addSeparatorComponents(
-            new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small),
-        );
-        separators -= 1;
-    };
-
-    if (authorLine) flushText(1);
-
     if (useSection) {
         const section = new SectionBuilder()
-            .setThumbnailAccessory(new ThumbnailBuilder().setURL(data.thumbnail.url));
-        for (const line of [heading, body].filter(Boolean)) {
+            .setThumbnailAccessory(new ThumbnailBuilder().setURL(accessory));
+        for (const line of header) {
             const trimmed = line.length > budget ? `${line.slice(0, Math.max(0, budget - 1))}…` : line;
             section.addTextDisplayComponents(new TextDisplayBuilder().setContent(trimmed));
             budget -= trimmed.length;
@@ -401,10 +439,9 @@ function toContainer(embed, rows = [], opts = {}) {
         container.addSectionComponents(section);
         wrote = true;
     } else {
-        flushText([heading, body].filter(Boolean).length);
+        flushText(header.length);
     }
 
-    if (blocks.length && wrote) separator();
     // Everything except the footer, which is held back until after the rows.
     flushText(Math.max(0, queue.length - (footer ? 1 : 0)));
 
@@ -417,7 +454,7 @@ function toContainer(embed, rows = [], opts = {}) {
 
     // Controls belong to the panel they drive, so they go inside the box.
     if (usableRows.length) {
-        if (wrote) separator();
+        separator('rule');
         container.addActionRowComponents(...usableRows);
         wrote = true;
     }
@@ -488,6 +525,26 @@ function ui(embed, components = [], opts = {}) {
 }
 
 /**
+ * Marks a payload as one that notifies nobody.
+ *
+ * A report quotes what someone else wrote, and on a Components V2 surface that
+ * quote is real message content rather than embed text: one quoted "@everyone"
+ * pinged the whole server from inside its own incident report. The client-wide
+ * default already refuses everyone, here and roles; this goes further and
+ * parses nothing at all, which is what anything written to be read later
+ * wants. Mentions still RENDER as clickable chips with parsing off, so the
+ * offender stays one click from their profile and nobody is woken.
+ *
+ * Also right for an alert about somebody: pinging the account that tripped a
+ * raid guard tells them they were noticed.
+ *
+ * @param {object} payload anything with a send/reply shape
+ */
+function quiet(payload) {
+    return { ...payload, allowedMentions: { parse: [] } };
+}
+
+/**
  * Swaps the controls on a message that is already posted, without touching
  * anything else on it.
  *
@@ -547,6 +604,7 @@ function retireControls(message, rows = []) {
 
 module.exports = {
     ui,
+    quiet,
     toContainer,
     retireControls,
     isV2Message,

@@ -49,6 +49,14 @@ const texts = container => container.toJSON().components
     .filter(c => c.type === ComponentType.TextDisplay)
     .map(c => c.content);
 
+/** The container's children as a readable sequence of kinds. */
+const shape = container => container.toJSON().components.map(c => (
+    c.type === ComponentType.Separator ? (c.divider ? 'rule' : 'air') : c.type
+));
+
+const sectionOf = container => container.toJSON().components
+    .find(c => c.type === ComponentType.Section);
+
 beforeEach(() => {
     mockStore.clear();
     mode._setCacheForTests({});
@@ -365,6 +373,81 @@ describe('the container itself', () => {
             .toBe('### Blackjack');
         expect(texts(toContainer(new EmbedBuilder().setTitle('Docs').setURL('https://example.invalid')))[0])
             .toBe('### [Docs](https://example.invalid)');
+    });
+
+    // An embed draws the author's avatar next to their name. V2 has no author
+    // slot, so a moderation report about an account was showing nothing of the
+    // account: the icon was read off the embed and then thrown away.
+    test('the author avatar survives as the section accessory', () => {
+        const container = toContainer(new EmbedBuilder()
+            .setAuthor({ name: 'humphrey00614 (152595)', iconURL: 'https://example.invalid/av.png' })
+            .setTitle('🚨 Behaviour flag · score 102')
+            .setDescription('<@152595>'));
+
+        const section = sectionOf(container);
+        expect(section.accessory.media.url).toBe('https://example.invalid/av.png');
+        // Name, heading and body sit beside the avatar, in the embed's order.
+        expect(section.components.map(c => c.content)).toEqual([
+            '-# humphrey00614 (152595)', '### 🚨 Behaviour flag · score 102', '<@152595>',
+        ]);
+    });
+
+    test('an explicit thumbnail still outranks the author icon', () => {
+        const container = toContainer(new EmbedBuilder()
+            .setAuthor({ name: 'a', iconURL: 'https://example.invalid/av.png' })
+            .setTitle('t')
+            .setThumbnail('https://example.invalid/thumb.png'));
+        expect(sectionOf(container).accessory.media.url).toBe('https://example.invalid/thumb.png');
+    });
+
+    test('an author with no icon is still just a subtext line', () => {
+        const container = toContainer(new EmbedBuilder().setAuthor({ name: 'a' }).setTitle('t'));
+        expect(sectionOf(container)).toBeUndefined();
+        expect(texts(container)[0]).toBe('-# a');
+    });
+
+    // Bold was the only thing telling one group from the next, which is what
+    // made an incident report read as a wall. A rule marks the structural
+    // breaks; air separates groups; a column of one-line readings gets neither,
+    // because rules drawn through a list make it harder to scan, not easier.
+    describe('vertical structure', () => {
+        const built = fields => toContainer(new EmbedBuilder()
+            .setTitle('🚨 Behaviour flag').setDescription('<@1>').addFields(fields));
+
+        test('a rule closes the header and air separates the groups under it', () => {
+            const container = built([
+                { name: 'Why it fired', value: '`+35` **Advert**: an invite\n`+25` **Ping**: everyone' },
+                { name: 'What they posted', value: '> <#2> `hi`\n> <#2> `buy this`' },
+            ]);
+            expect(shape(container)).toEqual([
+                ComponentType.TextDisplay, // heading
+                ComponentType.TextDisplay, // body
+                'rule',
+                ComponentType.TextDisplay, // why it fired
+                'air',
+                ComponentType.TextDisplay, // what they posted
+            ]);
+        });
+
+        test('a column of one-line readings keeps its single rule and no more', () => {
+            const container = built([
+                { name: 'a', value: '1' }, { name: 'b', value: '2' }, { name: 'c', value: '3' },
+            ]);
+            expect(shape(container).filter(k => k === 'rule' || k === 'air')).toEqual(['rule']);
+        });
+
+        test('controls are still introduced by a rule of their own', () => {
+            const container = built([{ name: 'a', value: '1' }]);
+            const withRow = toContainer(new EmbedBuilder().setTitle('t').addFields({ name: 'a', value: '1' }), [row('Go')]);
+            expect(shape(container).filter(k => k === 'rule')).toHaveLength(1);
+            expect(shape(withRow).filter(k => k === 'rule')).toHaveLength(2);
+        });
+
+        test('a panel with nothing above them opens on its content, not on a rule', () => {
+            const container = toContainer(new EmbedBuilder()
+                .addFields({ name: 'Why it fired', value: 'a\nb' }));
+            expect(shape(container)[0]).not.toBe('rule');
+        });
     });
 
     test('a lone row builder is accepted rather than silently dropped', () => {
