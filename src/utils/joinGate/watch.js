@@ -325,8 +325,14 @@ function fold(entry, signals, { guildId, userId, threshold = Infinity }) {
         if (!prior || signal.points > prior.points) entry.seen.set(signal.id, signal);
     }
 
-    // A profile that already looked wrong on arrival lowers the bar here.
-    if (entry.joinTier && entry.joinTier !== 'clear' && entry.joinScore > 0 && !entry.seen.has('prior_suspicion')) {
+    // A profile that already looked wrong on arrival lowers the bar here, but
+    // only once there is behaviour to lower it FOR. Unguarded, this fired on a
+    // watch-tier joiner's first innocuous message and produced a "Behaviour
+    // flag" panel whose every point came from the profile, under a footer
+    // swearing it was triggered by what they posted. A mod report that
+    // contradicts itself teaches staff to stop reading mod reports.
+    const hasBehaviour = [...entry.seen.keys()].some(id => id !== 'prior_suspicion');
+    if (hasBehaviour && entry.joinTier && entry.joinTier !== 'clear' && entry.joinScore > 0 && !entry.seen.has('prior_suspicion')) {
         const carried = Math.min(PRIOR_SUSPICION_CAP, Math.round(entry.joinScore * PRIOR_SUSPICION_FRACTION));
         if (carried > 0) {
             entry.seen.set('prior_suspicion', {

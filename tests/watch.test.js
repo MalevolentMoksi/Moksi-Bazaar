@@ -83,6 +83,32 @@ describe('the incident', () => {
         expect(result.signals.some(s => s.id === 'prior_suspicion')).toBe(false);
         expect(result.score).toBe(102);
     });
+
+    test('the echo never testifies alone: an innocuous message reports nothing', () => {
+        // The panel this pins away: a watch-tier joiner posts a picture of a
+        // cat, and the mod channel gets "Behaviour flag: score 13" whose only
+        // line is the profile echo, under a footer swearing it was triggered
+        // by what they posted. Every point in it was how the profile looks.
+        watch.setJoinScore(GUILD, USER, 51, 'watch');
+        const result = inspect(message('nice cat', 'chan-a'));
+
+        expect(result.signals).toEqual([]);
+        expect(result.score).toBe(0);
+        expect(result.report).toBe(false);
+    });
+
+    test('the echo joins the first real signal, at full strength', () => {
+        // Staying quiet on innocuous messages must not cost the carry-over
+        // when behaviour does appear: same points as if it had been there all
+        // along.
+        watch.setJoinScore(GUILD, USER, 44, 'watch');
+        inspect(message('hello', 'chan-a'));
+        const result = inspect(message(ADVERT, 'chan-a'));
+
+        expect(result.signals.find(s => s.id === 'prior_suspicion')?.points).toBe(11);
+        expect(result.score).toBe(113);
+        expect(result.report).toBe(true);
+    });
 });
 
 describe('cumulative scoring is a union, not a sum', () => {
