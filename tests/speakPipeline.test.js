@@ -138,6 +138,24 @@ describe('judging drafts', () => {
         const log = 'Moksi: hi\nYou (Cooler Moksi): what.\nDyno: [automod]\nYou (Cooler Moksi): still here.';
         expect(recentOwnReplies(log)).toEqual(['what.', 'still here.']);
     });
+
+    test('the rubric kills descriptions of media that nothing describes', async () => {
+        // Both live judge misses shared one signature: no candidate had ground
+        // truth, and the most confidently specific fabrication won. The knife
+        // GIF pick even violated the rubric's own first criterion, because
+        // "invents nothing not in the log" reads as being about events, not
+        // about whether a bare URL counts as having watched a GIF.
+        callOpenRouterAPI.mockResolvedValue('1');
+        await pickBestDraft({ drafts, ...base });
+
+        const prompt = callOpenRouterAPI.mock.calls[0][1][0].content;
+        expect(prompt).toContain('no tag describes its contents');
+        // Deliberately anchored to shared MEDIA and nothing wider. A broader
+        // "claims not in the log lose" would also condemn a correct answer to
+        // "why did discord do X" drawn from genuine knowledge, and teach the
+        // judge to prefer sheepishness over knowing things.
+        expect(prompt).toMatch(/If media was shared and no tag describes its contents/);
+    });
 });
 
 describe('the attitude sentence stops contradicting itself', () => {

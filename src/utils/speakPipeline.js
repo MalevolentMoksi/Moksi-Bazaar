@@ -292,7 +292,7 @@ CANDIDATES:
 ${numbered}
 
 Judge in this order:
-1. It reacts to the actual content of the moment, not a format or category, and invents nothing that is not in the log.
+1. It reacts to the actual content of the moment, not a format or category, and invents nothing that is not in the log. If media was shared and no tag describes its contents, any reply describing those contents is invention and loses.
 2. It commits to something: an opinion, an answer, a specific jab. Contentless dismissal loses.
 3. Its shape differs from the recent replies above; if those were flat one-line sneers, another one loses.
 4. It reads like a person typing, not a bot performing.
