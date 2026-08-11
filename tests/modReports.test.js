@@ -18,9 +18,18 @@ jest.mock('../src/utils/db', () => ({
     pool: { query: jest.fn(async () => ({ rows: [] })) },
     getSpeakConfigValue: jest.fn(async () => null),
     setSpeakConfigValue: jest.fn(async () => {}),
+    recordSuspicionReport: jest.fn(async () => 77),
+    markSuspicionReport: jest.fn(async () => ({ id: 77, userId: 'u', falsePositive: true })),
+    getSuspicionReport: jest.fn(async () => ({ id: 77, user_id: 'u', score: 102, false_positive: false })),
 }));
 
+const db = require('../src/utils/db');
 const { logSuspicion, logOutcome } = require('../src/utils/joinGate/logging');
+
+beforeEach(() => {
+    db.recordSuspicionReport.mockClear();
+    db.recordSuspicionReport.mockResolvedValue(77);
+});
 
 function fakeGuild() {
     const channel = {
@@ -135,24 +144,27 @@ describe('the behaviour flag reads as a card, not a form', () => {
     });
 });
 
-describe('reaching the message the report is about', () => {
-    const urlOf = payload => payload.components?.[0]?.toJSON().components[0].url;
+describe('what the report lets you do from where you read it', () => {
+    const buttons = payload => (payload.components ?? []).flatMap(r => r.toJSON().components);
+    const jumpOf = payload => buttons(payload).find(b => b.url)?.url;
+    const idsOf = payload => buttons(payload).map(b => b.custom_id ?? 'link');
 
     test('a surviving message gets a jump button', async () => {
         const { payload } = await report({ actionOutcome: { ok: true, minutes: 60 } });
-        expect(urlOf(payload)).toBe('https://discord.com/channels/g1/chan-x/m-77');
+        expect(jumpOf(payload)).toBe('https://discord.com/channels/g1/chan-x/m-77');
     });
 
     test('a dry run, which deletes nothing, gets one too', async () => {
         const { payload } = await report({ dryRun: true, action: 'none', actionOutcome: null });
-        expect(urlOf(payload)).toBe('https://discord.com/channels/g1/chan-x/m-77');
+        expect(jumpOf(payload)).toBe('https://discord.com/channels/g1/chan-x/m-77');
     });
 
     // A dead jump button is worse than none: it reads as a report pointing at
     // something staff cannot see, when in fact the bot removed it on purpose.
-    test('purged evidence gets no button, because the link would be dead', async () => {
+    test('purged evidence loses the jump, and only the jump', async () => {
         const { payload } = await report();
-        expect(payload.components ?? []).toHaveLength(0);
+        expect(jumpOf(payload)).toBeUndefined();
+        expect(idsOf(payload)).toEqual([`jg_uid:${spammer.id}`, 'jg_fp:77']);
     });
 
     test('evidence recorded without a message id is simply not linked', async () => {
@@ -160,7 +172,28 @@ describe('reaching the message the report is about', () => {
             actionOutcome: { ok: true, minutes: 60 },
             evidence: [{ channelId: 'chan-x', content: 'no id on this one' }],
         });
-        expect(payload.components ?? []).toHaveLength(0);
+        expect(jumpOf(payload)).toBeUndefined();
+    });
+
+    // The mark button is the only one that needs the report to exist on file,
+    // because the row id is what a click three deploys later resolves against.
+    test('the report is filed with its signals before the panel goes out', async () => {
+        await report();
+        const filed = db.recordSuspicionReport.mock.calls[0][0];
+        expect(filed).toMatchObject({ guildId: 'g1', userId: spammer.id, score: 102, tier: 'malicious', source: 'behaviour', action: 'timeout' });
+        expect(filed.signals.map(s => s.label)).toContain('Tried @everyone');
+    });
+
+    test('a dry run is filed as one, not as the action it would have taken', async () => {
+        await report({ dryRun: true });
+        expect(db.recordSuspicionReport.mock.calls[0][0].action).toBe('dry-run');
+    });
+
+    test('a failed write costs the mark button and nothing else', async () => {
+        db.recordSuspicionReport.mockRejectedValueOnce(new Error('no database'));
+        const { payload, embed } = await report({ actionOutcome: { ok: true, minutes: 60 } });
+        expect(idsOf(payload)).toEqual(['link', `jg_uid:${spammer.id}`]);
+        expect(embed.title).toContain('Behaviour flag');
     });
 });
 

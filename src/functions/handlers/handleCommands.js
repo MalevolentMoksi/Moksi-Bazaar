@@ -33,6 +33,8 @@ module.exports = (client) => {
     // was a slash command that spins forever, which names nothing.
     const commands = [];
     const failures = [];
+    /** Deliberately withheld: still on disk, no longer offered. */
+    const retired = [];
     /** name -> the command module, so requirements can be read after loading. */
     const loaded = new Map();
     const commandsPath = path.join(__dirname, '..', '..', 'commands');
@@ -46,6 +48,16 @@ module.exports = (client) => {
           let usable = 0;
           for (const cmd of cmdList) {
             if (cmd?.data && cmd?.execute) {
+              // A command whose moment has passed. Kept on disk on purpose, so
+              // the file still has to load cleanly and still counts as usable;
+              // it is simply not offered, here or to the persona, until the
+              // flag comes off. Deregistration follows, because registration
+              // mirrors what loaded.
+              if (cmd.retired) {
+                retired.push(cmd.data.name);
+                usable++;
+                continue;
+              }
               client.commands.set(cmd.data.name, cmd);
               commands.push(cmd.data.toJSON());
               loaded.set(cmd.data.name, cmd);
@@ -67,6 +79,9 @@ module.exports = (client) => {
     client.commandLoadFailures = failures;
     if (failures.length) {
       console.error(`[COMMANDS] ${failures.length} file(s) failed to load; those commands will not answer.`);
+    }
+    if (retired.length) {
+      console.log(`[COMMANDS] Withheld ${retired.length} retired: ${retired.join(', ')}`);
     }
     console.log(`[COMMANDS] Loaded ${commands.length} commands from disk`);
 

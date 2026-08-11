@@ -5,6 +5,7 @@
 
 const { MessageFlags, InteractionType } = require('discord.js');
 const logger = require('../../utils/logger');
+const reportActions = require('../../utils/joinGate/reportActions');
 
 /** Enums arrive as numbers; a log line saying "2" helps nobody. */
 const TYPE_NAME = Object.fromEntries(
@@ -93,6 +94,17 @@ module.exports = {
             // collector expired but the message is still up), answer it ourselves
             // instead of letting Discord show its raw 'This interaction failed'.
             logger.debug('Component interaction received', { customId: interaction.customId, userId: interaction.user.id });
+
+            // Except for panels that are meant to outlive their collector. A
+            // report in a log channel is read days later, after any number of
+            // deploys, and its buttons still have to work, so they are routed
+            // by custom id from here and answered from the database.
+            try {
+                if (await reportActions.handle(interaction)) return;
+            } catch (error) {
+                logger.error('Report button failed', { customId: interaction.customId, error: error.message });
+                return;
+            }
 
             // 2.5s, not 3s: Discord invalidates the token three seconds after
             // the interaction was created, and some of that is already spent on

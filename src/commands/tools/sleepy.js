@@ -1,4 +1,10 @@
 // src/commands/tools/sleepy.js
+//
+// RETIRED. The sleepytime leaderboard was an in-joke in a server that is no
+// longer alive, so the command and its three subcommands are withheld from
+// registration and from client.commands, which is also what tells the persona
+// which commands it has. The code and the tallies are kept: this is a
+// one-word change to bring back, not a rewrite.
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db.js');
@@ -6,6 +12,7 @@ const { SLEEPY_GUILDS } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
 
 module.exports = {
+  retired: true,
   data: new SlashCommandBuilder()
     .setName('sleepy')
     .setDescription('Manage the sleepytime leaderboard')

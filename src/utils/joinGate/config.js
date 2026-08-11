@@ -97,6 +97,14 @@ const DEFAULTS = Object.freeze({
     suspicion_malicious_action: 'log',
     suspicion_log_channel_id: null,
     suspicion_log_enabled: true,
+    /**
+     * Roles allowed to mark a report as a mistake from the panel itself.
+     *
+     * Empty means "anyone who can time members out", which is the same set of
+     * people who are reading the log channel in the first place. Naming roles
+     * narrows it; it never widens it, and the owner can always press.
+     */
+    false_positive_role_ids: [],
     suspicion_weights: {},
     suspicion_keywords: null,
     suspicion_tenure_grace_days: 30,
@@ -177,6 +185,7 @@ const WRITABLE_COLUMNS = new Set([
     'suspicion_watch_action', 'suspicion_suspect_action', 'suspicion_malicious_action',
     'suspicion_log_channel_id', 'suspicion_log_enabled', 'suspicion_weights', 'suspicion_keywords',
     'suspicion_tenure_grace_days', 'suspicion_ban_hours', 'dm_suspicion_message',
+    'false_positive_role_ids',
     'watch_enabled', 'watch_window_minutes', 'watch_action_at', 'watch_action',
     'watch_ban_hours', 'watch_timeout_minutes', 'watch_exempt_channel_ids', 'dm_watch_message',
     'watch_automod_enabled',
@@ -223,7 +232,8 @@ function ensureColumns() {
             ADD COLUMN IF NOT EXISTS snapshot_enabled      BOOLEAN NOT NULL DEFAULT false,
             ADD COLUMN IF NOT EXISTS snapshot_dm_owner     BOOLEAN NOT NULL DEFAULT true,
             ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
-            ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT`
+            ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT,
+            ADD COLUMN IF NOT EXISTS false_positive_role_ids TEXT[]`
     ).catch(error => {
         columnsEnsured = null;
         throw error;
@@ -258,6 +268,8 @@ function normalise(row) {
             ? row.watch_exempt_channel_ids : [],
         guard_exempt_user_ids: Array.isArray(row.guard_exempt_user_ids)
             ? row.guard_exempt_user_ids : [],
+        false_positive_role_ids: Array.isArray(row.false_positive_role_ids)
+            ? row.false_positive_role_ids : [],
         dm_message: row.dm_message ?? DEFAULT_DM_MESSAGE,
         dm_ban_message: row.dm_ban_message ?? DEFAULT_DM_BAN_MESSAGE,
         dm_suspicion_message: row.dm_suspicion_message ?? DEFAULT_DM_SUSPICION_MESSAGE,

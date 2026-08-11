@@ -23,6 +23,9 @@ jest.mock('../src/utils/db', () => ({
     pool: { query: jest.fn(async () => ({ rows: [] })) },
     getSpeakConfigValue: jest.fn(async () => null),
     setSpeakConfigValue: jest.fn(async () => {}),
+    recordSuspicionReport: jest.fn(async () => 1),
+    markSuspicionReport: jest.fn(async () => null),
+    getSuspicionReport: jest.fn(async () => null),
 }));
 // Only the database read is faked; formatDays and the rest stay real, because
 // the panels under test are built out of them.

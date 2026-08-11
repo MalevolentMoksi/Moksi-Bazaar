@@ -12,10 +12,10 @@
  * the gate from doing its job.
  */
 
-const {
-    EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-} = require('discord.js');
+const { EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const { ui, quiet } = require('../ui/panel');
+const { recordSuspicionReport } = require('../db');
+const { reportRows } = require('./reportActions');
 const logger = require('../logger');
 const { formatDays, DAY_MS } = require('./config');
 
@@ -340,7 +340,30 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         });
     }
 
-    return send(guild, settings, 'suspicion', ui(embed, jumpRow(guild, evidence, actionOutcome), { scope: 'mod' }));
+    // Filed before it is posted, because the buttons need the row id and the
+    // signals only exist here. A failed write costs the panel its mark button
+    // and nothing else; the report still goes out.
+    const reportId = await recordSuspicionReport({
+        guildId: guild.id,
+        userId: user.id,
+        score: result.score,
+        tier: result.tier,
+        source: result.source ?? 'profile',
+        action: dryRun ? 'dry-run' : action,
+        signals: result.signals,
+        channelId,
+    }).catch((error) => {
+        logger.warn('[JOIN-GATE] Could not file report', { error: error.message });
+        return null;
+    });
+
+    const rows = reportRows({
+        reportId,
+        userId: user.id,
+        jumpUrl: jumpUrl(guild, evidence, actionOutcome),
+    });
+
+    return send(guild, settings, 'suspicion', ui(embed, rows, { scope: 'mod' }));
 }
 
 /**
@@ -352,16 +375,11 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
  * quotes when it acts, and a jump button onto a deleted message is worse than
  * no button: it reads as a report pointing at something staff cannot see.
  */
-function jumpRow(guild, evidence, actionOutcome) {
-    if (Number(actionOutcome?.deleted) > 0) return [];
+function jumpUrl(guild, evidence, actionOutcome) {
+    if (Number(actionOutcome?.deleted) > 0) return null;
     const last = evidence?.length ? evidence[evidence.length - 1] : null;
-    if (!guild?.id || !last?.channelId || !last?.messageId) return [];
-    return [new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setStyle(ButtonStyle.Link)
-            .setLabel('Jump to message')
-            .setURL(`https://discord.com/channels/${guild.id}/${last.channelId}/${last.messageId}`),
-    )];
+    if (!guild?.id || !last?.channelId || !last?.messageId) return null;
+    return `https://discord.com/channels/${guild.id}/${last.channelId}/${last.messageId}`;
 }
 
 /** Raid alert. Routed to the failure channel; it is a "look at me" event. */

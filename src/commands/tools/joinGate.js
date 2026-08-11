@@ -9,7 +9,7 @@
 
 const {
     SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-    StringSelectMenuBuilder, ChannelSelectMenuBuilder,
+    StringSelectMenuBuilder, ChannelSelectMenuBuilder, RoleSelectMenuBuilder,
     ChannelType, MessageFlags, PermissionFlagsBits,
 } = require('discord.js');
 
@@ -679,9 +679,13 @@ function renderGuard(settings) {
     return { embed, rows };
 }
 
-function renderLogging(settings, routing, activeCategory) {
+function renderLogging(settings, routing, activeCategory, guild) {
     const meta = logCategoryMeta(activeCategory);
     const rows = [];
+    const markRoles = settings.false_positive_role_ids ?? [];
+    // Pre-selecting a role Discord cannot resolve is rejected for the whole
+    // message, which would take the page down over a role someone deleted.
+    const markRolesLive = markRoles.filter(id => guild?.roles?.cache?.has(id));
 
     const lines = Object.values(routing).map((info) => {
         const target = info.overrideId
@@ -709,6 +713,16 @@ function renderLogging(settings, routing, activeCategory) {
                     ? `Fallback for every category without its own channel → ${channelRef(settings.log_channel_id)}`
                     : `${settings[meta.toggleKey] ? '🟢 logged' : '⚪ not logged'} → `
                       + `${settings[meta.channelKey] ? channelRef(settings[meta.channelKey]) : '*default channel*'}`,
+                inline: false,
+            },
+            {
+                name: 'Can mark a report wrong',
+                value: (markRoles.length
+                    ? markRoles.map(id => `<@&${id}>`).join(' ')
+                    : '*anyone who can time members out*')
+                    + '\n-# The button on a suspicion report records that the score was a mistake, '
+                    + 'so the weights have something to be tuned against. It is reversible, and it '
+                    + 'never undoes a timeout or a ban.',
                 inline: false,
             },
         );
@@ -746,6 +760,16 @@ function renderLogging(settings, routing, activeCategory) {
             .setDisabled(meta.isDefault),
         new ButtonBuilder().setCustomId('jg_log_test').setLabel('Send test entry').setStyle(ButtonStyle.Success)
     ));
+
+    const markPicker = new RoleSelectMenuBuilder()
+        .setCustomId('jg_log_fp_roles')
+        .setPlaceholder('Roles that can mark a report wrong (none = anyone who can time out)')
+        // Zero is allowed on purpose: deselecting everything is how you go
+        // back to the default, without spending a button on a Clear.
+        .setMinValues(0)
+        .setMaxValues(4);
+    if (markRolesLive.length) markPicker.setDefaultRoles(...markRolesLive);
+    rows.push(new ActionRowBuilder().addComponents(markPicker));
 
     return { embed, rows };
 }
@@ -862,7 +886,7 @@ async function buildPanel(guild, state) {
             built = renderGuard(settings);
             break;
         case 'logging':
-            built = renderLogging(settings, await describeRouting(guild, settings), state.logCategory);
+            built = renderLogging(settings, await describeRouting(guild, settings), state.logCategory, guild);
             break;
         case 'advanced':
             built = renderAdvanced(settings);
@@ -1900,6 +1924,14 @@ module.exports = {
 
                     return applyChange(i, { [key]: channelId },
                         channelId ? `${label} → <#${channelId}>` : `${label} cleared`);
+                }
+
+                if (id === 'jg_log_fp_roles') {
+                    const roleIds = (i.values ?? []).slice(0, 4);
+                    return applyChange(i, { false_positive_role_ids: roleIds },
+                        roleIds.length
+                            ? `Reports can be marked wrong by ${roleIds.map(r => `<@&${r}>`).join(', ')}`
+                            : 'Reports can be marked wrong by anyone who can time members out');
                 }
 
                 if (id === 'jg_log_toggle' && state.logCategory !== 'default') {

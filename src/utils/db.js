@@ -259,6 +259,33 @@ const init = async () => {
         -- thing that makes a replay idempotent.
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mod_actions_audit
             ON mod_actions(guild_id, audit_id) WHERE audit_id IS NOT NULL;
+        -- Every suspicion report the gate has filed, and whether it was wrong.
+        --
+        -- The scoring engine has hand-tuned weights and thresholds and, until
+        -- now, no ground truth at all: reports were read and nothing was ever
+        -- written back, so "which signal misfires" had no answer beyond
+        -- memory. The row is written when the report is posted, which is the
+        -- only moment the signals still exist; the verdict is set later, by a
+        -- human pressing the button on the panel, and is reversible.
+        CREATE TABLE IF NOT EXISTS suspicion_reports (
+            id             BIGSERIAL PRIMARY KEY,
+            guild_id       TEXT NOT NULL,
+            user_id        TEXT NOT NULL,
+            score          INTEGER NOT NULL,
+            tier           TEXT NOT NULL,
+            source         TEXT NOT NULL,
+            action         TEXT,
+            signals        JSONB NOT NULL DEFAULT '[]'::jsonb,
+            channel_id     TEXT,
+            at_ms          BIGINT NOT NULL,
+            false_positive BOOLEAN NOT NULL DEFAULT false,
+            marked_by      TEXT,
+            marked_at_ms   BIGINT
+        );
+        CREATE INDEX IF NOT EXISTS idx_suspicion_reports_guild
+            ON suspicion_reports(guild_id, at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_suspicion_reports_wrong
+            ON suspicion_reports(guild_id, false_positive) WHERE false_positive;
         -- Why an attitude moved, not just that it did. Capped per user by
         -- recordAttitudeChange; see the note there.
         CREATE TABLE IF NOT EXISTS attitude_ledger (
@@ -1458,6 +1485,87 @@ async function getModActions(guildId, targetId, limit = 15) {
     return rows;
 }
 
+/**
+ * Files a suspicion report, at the moment it is posted.
+ *
+ * Returns the row id, which the panel's buttons carry: a report from last
+ * Tuesday still has to answer a click after three deploys, so the id is the
+ * only thing tying a button to what it is about.
+ *
+ * @returns {Promise<number|null>} null when the write failed, which only
+ *   costs the report its buttons.
+ */
+async function recordSuspicionReport({ guildId, userId, score, tier, source, action, signals, channelId }) {
+    const { rows } = await pool.query(
+        `INSERT INTO suspicion_reports
+            (guild_id, user_id, score, tier, source, action, signals, channel_id, at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+         RETURNING id`,
+        [
+            guildId, userId, Math.round(Number(score) || 0), tier ?? 'watch', source ?? 'profile',
+            action ?? null, JSON.stringify(signals ?? []), channelId ?? null, String(Date.now()),
+        ]
+    );
+    return rows[0]?.id ?? null;
+}
+
+/**
+ * Marks a filed report as a mistake, or takes the mark back.
+ *
+ * Deliberately reversible and idempotent: a moderator who mis-clicks, or who
+ * learns an hour later that the account really was a spammer, must be able to
+ * put it back exactly as it was.
+ *
+ * @returns {Promise<{id: number, userId: string, falsePositive: boolean}|null>}
+ */
+async function markSuspicionReport(id, { falsePositive, byId }) {
+    const { rows } = await pool.query(
+        `UPDATE suspicion_reports
+            SET false_positive = $2,
+                marked_by      = CASE WHEN $2 THEN $3 ELSE NULL END,
+                marked_at_ms   = CASE WHEN $2 THEN $4 ELSE NULL END
+          WHERE id = $1
+      RETURNING id, user_id, false_positive`,
+        [id, Boolean(falsePositive), byId ?? null, String(Date.now())]
+    );
+    if (!rows[0]) return null;
+    return { id: rows[0].id, userId: rows[0].user_id, falsePositive: rows[0].false_positive };
+}
+
+/** One filed report, for a button that needs to know what it is toggling. */
+async function getSuspicionReport(id) {
+    const { rows } = await pool.query(
+        `SELECT id, guild_id, user_id, score, tier, source, false_positive, marked_by
+           FROM suspicion_reports WHERE id = $1`,
+        [id]
+    );
+    return rows[0] ?? null;
+}
+
+/**
+ * What the reports have amounted to: how many were filed, how many were
+ * called wrong, and which signals show up most often in the wrong ones.
+ */
+async function getSuspicionAccuracy(guildId, { limit = 8 } = {}) {
+    const [totals, worst] = await Promise.all([
+        pool.query(
+            `SELECT COUNT(*)::int AS filed,
+                    COUNT(*) FILTER (WHERE false_positive)::int AS wrong,
+                    MIN(at_ms) AS oldest_ms
+               FROM suspicion_reports WHERE guild_id = $1`,
+            [guildId]
+        ),
+        pool.query(
+            `SELECT signal->>'label' AS label, COUNT(*)::int AS wrong
+               FROM suspicion_reports, jsonb_array_elements(signals) AS signal
+              WHERE guild_id = $1 AND false_positive
+              GROUP BY 1 ORDER BY wrong DESC LIMIT $2`,
+            [guildId, limit]
+        ),
+    ]);
+    return { ...totals.rows[0], signals: worst.rows };
+}
+
 /** How far back the record goes, and how much of it there is. */
 async function getModActionSummary(guildId) {
     const { rows } = await pool.query(
@@ -2303,6 +2411,10 @@ module.exports = {
     recordModAction,
     getModActions,
     getModActionSummary,
+    recordSuspicionReport,
+    markSuspicionReport,
+    getSuspicionReport,
+    getSuspicionAccuracy,
     getWarns,
     linkWarnsToUser,
 };
