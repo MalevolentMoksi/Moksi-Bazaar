@@ -272,6 +272,74 @@ function buildReplyMarker(msg, messagesMap, botId) {
  *
  * @returns {Promise<{text: string, participants: Map<string, string>, oldestTimestamp: number}>}
  */
+/** Anything the media pipeline could describe: embeds, attachments, stickers. */
+function hasVisibleMedia(msg) {
+  return (msg?.embeds?.length ?? 0) > 0
+    || (msg?.attachments?.size ?? 0) > 0
+    || (msg?.stickers?.size ?? 0) > 0;
+}
+
+/**
+ * How long to wait for Discord to unfurl a link on the triggering message.
+ *
+ * Posting a tenor link and mentioning the bot in the same breath is a race
+ * this code used to lose: Discord attaches the embed asynchronously via a
+ * later messageUpdate, so a message read within a second or two carries the
+ * bare URL and nothing else. The GIF is then invisible to the media pipeline,
+ * and the writer is left staring at a slug like "shinada-yakuza-5-knife-gif",
+ * which reads enough like a description that it confidently invented a scene
+ * from it. One trace later the embed existed and vision described the real
+ * thing, which is how the same GIF got both a hallucination and a correct
+ * answer minutes apart.
+ */
+const UNFURL_WAIT_MS = 2_000;
+/** Older than this and the embed is not coming; do not spend the wait. */
+const UNFURL_MAX_AGE_MS = 15_000;
+
+/**
+ * Waits for the unfurl instead of sleeping through it: resolves the moment
+ * Discord patches the message with its embed, or gives the original back at
+ * the cap. Skips the wait entirely when there is nothing to wait for.
+ */
+function waitForUnfurl(message, { capMs = UNFURL_WAIT_MS, now = Date.now() } = {}) {
+  if (!message?.client?.on) return Promise.resolve(message);
+  if (hasVisibleMedia(message)) return Promise.resolve(message);
+  if (!/https?:\/\//i.test(message.content ?? '')) return Promise.resolve(message);
+  if (now - (message.createdTimestamp ?? 0) > UNFURL_MAX_AGE_MS) return Promise.resolve(message);
+
+  return new Promise(resolve => {
+    const client = message.client;
+    const done = result => {
+      clearTimeout(timer);
+      client.removeListener('messageUpdate', onUpdate);
+      resolve(result);
+    };
+    const onUpdate = (_old, fresh) => {
+      if (fresh?.id === message.id && hasVisibleMedia(fresh)) done(fresh);
+    };
+    const timer = setTimeout(() => done(message), capMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    client.on('messageUpdate', onUpdate);
+  });
+}
+
+/**
+ * The honest tag for a GIF link whose embed never arrived.
+ *
+ * Without this the line reaching the writer is a bare URL, and a URL is the
+ * one media form whose FILENAME describes its contents, so the "never invent
+ * what you did not see" rule has nothing to hook onto: the model does not
+ * think it is inventing. Saying "contents not seen" in so many words engages
+ * the exact instruction the persona already carries for that phrase.
+ */
+const GIF_HOST_LINK = /https?:\/\/(?:www\.)?(?:media\.)?(?:tenor\.com|giphy\.com|klipy\.com)\/\S*gif\S*/i;
+
+function unresolvedGifTag(msg) {
+  if (hasVisibleMedia(msg)) return '';
+  if (!GIF_HOST_LINK.test(msg?.content ?? '')) return '';
+  return ' [GIF link shared, contents not seen]';
+}
+
 async function buildConversationContext(messages, botId, pinnedIds = new Set(), { mediaDeadlineAt = 0 } = {}) {
   const sorted = Array.from(messages.values())
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
@@ -329,6 +397,12 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set(), 
     // Embeds, forwards and non-image attachments apply to the bot's own
     // messages too: most of its rich output carries no plain content at all.
     const payload = describeNonTextPayload(msg, MEMORY_LIMITS.MESSAGE_CHAR_LIMIT);
+
+    // A GIF link that never unfurled is tagged unseen rather than left bare,
+    // so the writer cannot mistake the URL slug for having watched it.
+    if (!isSelf && !mediaContent && !payload) {
+      mediaContent = unresolvedGifTag(msg);
+    }
 
     const replyMarker = buildReplyMarker(msg, messages, botId);
 
@@ -605,6 +679,17 @@ module.exports = {
           } catch (e) {
             logger.debug('Could not fetch replied-to message', { error: e.message });
           }
+        }
+      }
+
+      // 2c. If the trigger is a fresh link with no embed yet, Discord has not
+      //     unfurled it: wait briefly for the messageUpdate that attaches the
+      //     embed, so the media pipeline sees the GIF being replied to rather
+      //     than a bare URL. Costs nothing on any other kind of message.
+      if (sourceMessage) {
+        const unfurled = await waitForUnfurl(sourceMessage);
+        if (unfurled !== sourceMessage || hasVisibleMedia(unfurled)) {
+          messages.set(unfurled.id, unfurled);
         }
       }
 
@@ -1010,3 +1095,6 @@ module.exports.extractEmojiKey = extractEmojiKey;
 module.exports.buildReplyMarker = buildReplyMarker;
 module.exports.formatMemories = formatMemories;
 module.exports.describeNonTextPayload = describeNonTextPayload;
+module.exports.waitForUnfurl = waitForUnfurl;
+module.exports.unresolvedGifTag = unresolvedGifTag;
+module.exports.hasVisibleMedia = hasVisibleMedia;
