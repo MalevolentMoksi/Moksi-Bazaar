@@ -41,6 +41,24 @@ const API_TIMEOUT_MS = 20_000;
 
 /** What twitterapi.io charges per billing unit: one request, or one tweet. */
 const COST_PER_UNIT_USD = 0.00015;
+/** Their own unit. A dollar is 100,000 of them, so a unit is 15. */
+const CREDITS_PER_USD = 100_000;
+const CREDITS_PER_UNIT = Math.round(COST_PER_UNIT_USD * CREDITS_PER_USD);
+
+/**
+ * The vendor's own balance, which is the only exact number in this system.
+ *
+ * Their usage page says so itself: "Usage shown here is sampled and can
+ * significantly undercount actual consumption." It showed 13 calls against the
+ * 570 this bot had actually made. The credit balance is the ledger, and this
+ * endpoint is how to read it.
+ *
+ * Whether the call itself costs anything is undocumented. It is only made when
+ * the panel is opened, and the reconciliation below would show it as drift if
+ * it did, which is a cheaper way to find out than asking.
+ */
+const ACCOUNT_URL = 'https://api.twitterapi.io/oapi/my/info';
+const BALANCE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Ten minutes. The cost is almost entirely per-request, so the interval is the
@@ -84,6 +102,7 @@ const ENABLED_KEY = 'tweet_mirror_enabled';
 const ACCOUNTS_KEY = 'tweet_mirror_accounts';
 const SINCE_KEY = 'tweet_mirror_since_ms';
 const SPEND_KEY = 'tweet_mirror_spend';
+const BALANCE_KEY = 'tweet_mirror_balance';
 const BUDGET_KEY = 'tweet_mirror_budget_usd';
 const STYLE_KEY = 'tweet_mirror_style';
 
@@ -313,20 +332,32 @@ function monthKey(at = new Date()) {
  * Two containers overlapping during a deploy can each read-modify-write this
  * and lose a fraction of a cent of accounting. That is tolerable: this is a
  * brake, not a ledger, and the real invoice lives at twitterapi.io.
+ *
+ * `lifetime` is the exception and does NOT reset with the month. It is the
+ * only thing the vendor's balance can be reconciled against, and a counter
+ * that restarts every month can only be compared for four weeks at a time.
  */
 async function readSpend() {
     const stored = await getSpeakConfigValue(SPEND_KEY, null);
     const month = monthKey();
-    if (!stored || stored.month !== month) return { month, usd: 0, calls: 0, tweets: 0 };
+    const lifetime = {
+        credits: Number(stored?.lifetime?.credits) || 0,
+        sinceMs: Number(stored?.lifetime?.sinceMs) || 0,
+    };
+    if (!stored || stored.month !== month) {
+        return { month, usd: 0, calls: 0, tweets: 0, posted: 0, lifetime };
+    }
     return {
         month,
         usd: Number(stored.usd) || 0,
         calls: Number(stored.calls) || 0,
         tweets: Number(stored.tweets) || 0,
+        posted: Number(stored.posted) || 0,
+        lifetime,
     };
 }
 
-async function recordSpend(tweetsReturned) {
+async function recordSpend(tweetsReturned, { now = Date.now() } = {}) {
     const spend = await readSpend();
     // A request that returns nothing still bills the floor, and a request that
     // returns tweets bills per tweet rather than both.
@@ -336,8 +367,87 @@ async function recordSpend(tweetsReturned) {
         usd: Number((spend.usd + units * COST_PER_UNIT_USD).toFixed(6)),
         calls: spend.calls + 1,
         tweets: spend.tweets + Math.max(0, tweetsReturned),
+        posted: spend.posted,
+        lifetime: {
+            credits: spend.lifetime.credits + units * CREDITS_PER_UNIT,
+            sinceMs: spend.lifetime.sinceMs || now,
+        },
     };
     await setSpeakConfigValue(SPEND_KEY, next);
+    return next;
+}
+
+/**
+ * How many of the tweets paid for actually reached the channel.
+ *
+ * Billing is per tweet returned, and the query returns things that get
+ * dropped: a burst over the per-tick ceiling, a duplicate another container
+ * already claimed. Without this the panel could say what was bought and never
+ * what was used, which is the half that tells you a filter is wrong.
+ */
+async function recordPosted(count) {
+    if (!(count > 0)) return null;
+    const spend = await readSpend();
+    const next = { ...spend, posted: (spend.posted || 0) + count };
+    await setSpeakConfigValue(SPEND_KEY, next);
+    return next;
+}
+
+/** The vendor's balance, as a number of credits, or null if unreachable. */
+async function fetchBalance(apiKey) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    try {
+        const res = await fetch(ACCOUNT_URL, {
+            headers: { 'X-API-Key': apiKey },
+            signal: controller.signal,
+        });
+        if (!res.ok) return null;
+        const data = await res.json().catch(() => null);
+        // Documented flat, but every other endpoint on this host wraps its
+        // payload in {status, data, msg}, so read both.
+        const credits = Number(data?.recharge_credits ?? data?.data?.recharge_credits);
+        return Number.isFinite(credits) ? { credits } : null;
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+/**
+ * The balance, plus whether this bot's own meter agrees with it.
+ *
+ * The reference point is the last time the balance went UP, which is a top-up.
+ * From there both numbers only fall, so "they billed X, we counted Y" is a
+ * real audit rather than a snapshot: it answers, permanently and without
+ * anybody doing arithmetic, whether the panel can be trusted for a year.
+ */
+async function accountBalance(apiKey, { now = Date.now(), force = false } = {}) {
+    if (!apiKey) return null;
+    const stored = await getSpeakConfigValue(BALANCE_KEY, null);
+    if (!force && stored && now - Number(stored.atMs || 0) < BALANCE_TTL_MS) return stored;
+
+    const fresh = await fetchBalance(apiKey);
+    // Keep the last known reading rather than blanking the panel over a blip.
+    if (!fresh) return stored;
+
+    const spend = await readSpend();
+    const meter = spend.lifetime.credits;
+    const toppedUp = stored?.ref && fresh.credits > Number(stored.ref.credits);
+    const ref = (!stored?.ref || toppedUp)
+        ? { credits: fresh.credits, meter, atMs: now }
+        : stored.ref;
+
+    const next = {
+        credits: fresh.credits,
+        meter,
+        atMs: now,
+        ref,
+        billed: Math.max(0, ref.credits - fresh.credits),
+        counted: Math.max(0, meter - ref.meter),
+    };
+    await setSpeakConfigValue(BALANCE_KEY, next);
     return next;
 }
 
@@ -592,6 +702,7 @@ async function runOnce(client, { now = Date.now(), sleep } = {}) {
 
     if (posted > 0) {
         logger.info('[TWEETS] Posted', { posted, found: found.length, spentUsd: newSpend.usd });
+        await recordPosted(posted).catch(() => { /* bookkeeping, never the tick */ });
         pruneMirroredTweets().catch(e => logger.warn('[TWEETS] Prune failed', { error: e.message }));
     }
 
@@ -702,7 +813,7 @@ function stopTweetMirror() {
 }
 
 /** Everything the /tweets_settings panel needs, in one read. */
-async function mirrorStatus() {
+async function mirrorStatus({ refreshBalance = false } = {}) {
     const [channelId, enabled, accounts, since, budget, style] = await Promise.all([
         getSpeakConfigValue(CHANNEL_KEY, null),
         getSpeakConfigValue(ENABLED_KEY, true),
@@ -717,6 +828,11 @@ async function mirrorStatus() {
     // found, which is the floor the bill cannot go below.
     const pollsPerMonth = (30 * 24 * 60 * 60 * 1000) / POLL_INTERVAL_MS;
 
+    // One call, only when somebody is looking at the panel, and cached for
+    // five minutes so the Refresh button cannot turn into a poller.
+    const balance = await accountBalance(process.env.TWITTERAPI_KEY, { force: refreshBalance })
+        .catch(() => null);
+
     return {
         hasKey: Boolean(process.env.TWITTERAPI_KEY),
         channelId: channelId || null,
@@ -726,6 +842,7 @@ async function mirrorStatus() {
         budgetUsd: Number(budget) || DEFAULT_BUDGET_USD,
         style: style === 'embed' ? 'embed' : 'link',
         spend,
+        balance,
         running: Boolean(timer),
         intervalMs: POLL_INTERVAL_MS,
         floorUsdPerMonth: Number((pollsPerMonth * COST_PER_UNIT_USD).toFixed(2)),
@@ -748,7 +865,10 @@ module.exports = {
     EMBED_GRACE_MS,
     readSpend,
     recordSpend,
+    recordPosted,
+    accountBalance,
     monthKey,
+    BALANCE_KEY,
     CHANNEL_KEY,
     ENABLED_KEY,
     ACCOUNTS_KEY,
@@ -763,4 +883,6 @@ module.exports = {
     SEARCH_PAGE_SIZE,
     MAX_LOOKBACK_MS,
     COST_PER_UNIT_USD,
+    CREDITS_PER_USD,
+    CREDITS_PER_UNIT,
 };

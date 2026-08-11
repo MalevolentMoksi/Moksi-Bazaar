@@ -206,6 +206,93 @@ describe('spend accounting', () => {
         await runOnce(client);
         expect((await readSpend()).calls).toBe(1);
     });
+
+    // The vendor's usage page is sampled and says so; its balance is exact.
+    // The only way to know this panel's arithmetic still matches that balance
+    // a year from now is to keep a counter that outlives the month.
+    describe('the meter that outlives the month', () => {
+        test('credits accumulate at fifteen to the billing unit', async () => {
+            await recordSpend(0);
+            await recordSpend(4);
+            const spend = await readSpend();
+            expect(spend.lifetime.credits).toBe(15 + 4 * 15);
+        });
+
+        test('a new month zeroes the month and not the meter', async () => {
+            mockStore.set(SPEND_KEY, {
+                month: '2001-01', usd: 19.99, calls: 500, tweets: 40,
+                lifetime: { credits: 123_456, sinceMs: 1 },
+            });
+            const spend = await readSpend();
+            expect(spend.usd).toBe(0);
+            expect(spend.lifetime.credits).toBe(123_456);
+        });
+
+        test('what was paid for and what was used are counted separately', async () => {
+            respond({ tweets: [apiTweet('1'), apiTweet('2')] });
+            await runOnce(client);
+            const spend = await readSpend();
+            expect(spend.tweets).toBe(2);
+            expect(spend.posted).toBe(2);
+        });
+    });
+});
+
+describe('reconciling against the vendor ledger', () => {
+    const balance = credits => global.fetch.mockResolvedValueOnce({
+        ok: true, status: 200, json: async () => ({ recharge_credits: credits }),
+    });
+
+    test('the first read only sets the reference point', async () => {
+        balance(1_000_000);
+        const out = await mirror.accountBalance('k', { now: 1000 });
+        expect(out.credits).toBe(1_000_000);
+        expect(out.billed).toBe(0);
+        expect(out.counted).toBe(0);
+    });
+
+    test('afterwards it compares their subtraction with ours', async () => {
+        balance(1_000_000);
+        await mirror.accountBalance('k', { now: 1000 });
+        await recordSpend(0); // 15 credits by our count
+        balance(999_985);
+        const out = await mirror.accountBalance('k', { now: 10 * 60_000, force: true });
+
+        expect(out.billed).toBe(15);
+        expect(out.counted).toBe(15);
+    });
+
+    test('a top-up moves the reference rather than reading as a refund', async () => {
+        balance(9_000);
+        await mirror.accountBalance('k', { now: 1000 });
+        await recordSpend(0);
+        balance(1_009_000);
+        const out = await mirror.accountBalance('k', { now: 2000, force: true });
+
+        expect(out.credits).toBe(1_009_000);
+        expect(out.billed).toBe(0);
+        expect(out.counted).toBe(0);
+    });
+
+    test('an unreachable vendor keeps the last known number, not a blank', async () => {
+        balance(500_000);
+        await mirror.accountBalance('k', { now: 1000 });
+        global.fetch.mockRejectedValueOnce(new Error('down'));
+        const out = await mirror.accountBalance('k', { now: 60 * 60_000, force: true });
+        expect(out.credits).toBe(500_000);
+    });
+
+    test('no key means no request', async () => {
+        expect(await mirror.accountBalance(null)).toBeNull();
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    test('a cached reading costs nothing', async () => {
+        balance(1_000);
+        await mirror.accountBalance('k', { now: 1000 });
+        await mirror.accountBalance('k', { now: 2000 });
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
 });
 
 // ── Not spending ────────────────────────────────────────────────────────────
@@ -604,6 +691,38 @@ describe('projecting the month', () => {
         expect(projected).toBeGreaterThan(0.9);
         expect(projected).toBeLessThan(1.1);
     });
+
+    // The live panel on 2026-08-11: $0.0996 over 570 checks, a mirror switched
+    // on partway through the month. Dividing by days-since-the-1st reported
+    // $0.28, which is not just wrong, it is BELOW the $0.66 floor the same
+    // panel prints for a month of checks that find nothing. The poll count is
+    // the honest clock: 570 checks at ten minutes is four days, not eleven.
+    test('a mirror switched on mid-month is not credited with the whole month', () => {
+        const spend = { month: '2026-08', usd: 0.0996, calls: 570, tweets: 388 };
+        const projected = panel.projectMonth(spend, new Date('2026-08-11T21:20:00Z'));
+
+        expect(projected).toBeGreaterThan(0.7);
+        expect(projected).toBeLessThan(0.85);
+        // The floor of a month of empty ten-minute checks. A projection under
+        // it is arithmetically impossible for a mirror that keeps running.
+        expect(projected).toBeGreaterThan(4464 * 0.00015);
+    });
+
+    test('the clock never runs faster than the calendar', () => {
+        // A "check now" spree cannot invent time the month has not had yet.
+        const spend = { month: '2026-08', usd: 0.05, calls: 99_999, tweets: 0 };
+        const projected = panel.projectMonth(spend, new Date('2026-08-16T00:00:00Z'));
+        expect(projected).toBeGreaterThan(0.09);
+        expect(projected).toBeLessThan(0.11);
+    });
+
+    test('the runway is the number a yearly top-up is judged in', () => {
+        // A million credits is $10. At $0.77 a month it is thirteen months.
+        expect(panel.runwayMonths(1_000_000, 0.77)).toBeGreaterThan(12);
+        expect(panel.runwayMonths(1_000_000, 0.77)).toBeLessThan(14);
+        expect(panel.runwayMonths(0, 0.77)).toBeNull();
+        expect(panel.runwayMonths(1_000_000, 0)).toBeNull();
+    });
 });
 
 describe('what the panel shows', () => {
@@ -631,6 +750,43 @@ describe('what the panel shows', () => {
         // dashboard displays; showing only dollars means doing the conversion
         // by hand every time the two are compared.
         expect(field.value).toContain('12,300 credits');
+    });
+
+    // He has prepaid a year. The question the panel has to answer stopped
+    // being "how much this month" and became "does this last until next
+    // August", which is a different number entirely.
+    test('the prepaid balance carries its own runway', () => {
+        const { embed } = panel.render(panelState({
+            spend: { month: '2026-08', usd: 0.0996, calls: 570, tweets: 388, posted: 41 },
+            balance: { credits: 999_950, meter: 9_960, atMs: Date.now(), billed: 9_960, counted: 9_960 },
+        }));
+        const field = embed.toJSON().fields.find(f => f.name === 'Prepaid balance');
+        expect(field.value).toContain('999,950');
+        expect(field.value).toContain('$10.00');
+        expect(field.value).toMatch(/about \*\*1[0-9] months\*\*/);
+        expect(field.value).toContain('the meter is calibrated');
+    });
+
+    test('a meter that has drifted says by how much, in their unit', () => {
+        const { embed } = panel.render(panelState({
+            balance: { credits: 900_000, meter: 50_000, atMs: Date.now(), billed: 100_000, counted: 50_000 },
+        }));
+        const field = embed.toJSON().fields.find(f => f.name === 'Prepaid balance');
+        expect(field.value).toContain('they are ahead by 50,000');
+    });
+
+    test('no balance yet means no block, rather than a block full of nothing', () => {
+        const { embed } = panel.render(panelState({ balance: null }));
+        expect(embed.toJSON().fields.some(f => f.name === 'Prepaid balance')).toBe(false);
+    });
+
+    test('the floor rides beside the projection, since one contradicting the other is the bug', () => {
+        const { embed } = panel.render(panelState({
+            spend: { month: '2026-08', usd: 0.0996, calls: 570, tweets: 388, posted: 41 },
+        }));
+        const field = embed.toJSON().fields.find(f => /Spent this month/.test(f.name));
+        expect(field.value).toContain('floor is $0.65');
+        expect(field.value).toContain('388 fetched · 41 posted');
     });
 
     test('says plainly when the cap has stopped it', () => {

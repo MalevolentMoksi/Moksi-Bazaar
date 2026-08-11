@@ -89,11 +89,83 @@ function bar(fraction, width = 14) {
  * Returns null early in the month, when the sample is too small to mean
  * anything and a projection would just be a scary number.
  */
-function projectMonth(spentUsd, now = new Date()) {
-    const daysInMonth = new Date(now.getUTCFullYear(), now.getUTCMonth() + 1, 0).getUTCDate();
-    const elapsed = (now.getUTCDate() - 1) + (now.getUTCHours() / 24);
-    if (elapsed < 0.5 || spentUsd <= 0) return null;
+/**
+ * What this month ends at, from how long the mirror has ACTUALLY been polling.
+ *
+ * This used to divide by the days elapsed in the calendar month, which is only
+ * right if the mirror ran from the 1st. Switched on partway through August it
+ * reported $0.28 against a real rate of $0.77: not merely wrong, but below the
+ * arithmetic floor of a month of empty checks that the same panel prints two
+ * lines down, which is a contradiction the panel could have caught itself.
+ *
+ * The poll count is the honest clock. A mirror on a ten-minute interval cannot
+ * have been running longer than calls * interval, and it cannot have been
+ * running longer than the month is old; the smaller of the two is the window
+ * the money was actually spent over. No stored start time, so it corrects
+ * itself for the month already in progress.
+ */
+function projectMonth(spend, now = new Date(), intervalMs = 10 * 60 * 1000) {
+    const spentUsd = Number(spend?.usd ?? spend) || 0;
+    if (spentUsd <= 0) return null;
+
+    // Date.UTC, because new Date(y, m, 0) is a LOCAL date and reading it back
+    // with getUTCDate is a day out for half the world.
+    const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+    const monthElapsed = (now.getUTCDate() - 1) + (now.getUTCHours() / 24);
+    const polledDays = ((Number(spend?.calls) || 0) * intervalMs) / 86_400_000;
+    const elapsed = polledDays > 0 ? Math.min(monthElapsed, polledDays) : monthElapsed;
+
+    if (elapsed < 0.25) return null;
     return (spentUsd / elapsed) * daysInMonth;
+}
+
+/**
+ * How long the prepaid credits last at the rate actually observed.
+ * Returned in months, because that is the unit a yearly top-up is judged in.
+ */
+function runwayMonths(credits, usdPerMonth) {
+    const perMonth = Number(usdPerMonth) || 0;
+    const left = Number(credits) || 0;
+    if (perMonth <= 0 || left <= 0) return null;
+    return left / (perMonth * CREDITS_PER_USD);
+}
+
+/**
+ * The balance block: what is left, how long it lasts, and whether this panel's
+ * own arithmetic still agrees with the vendor's ledger.
+ *
+ * That last line is the point. The vendor's usage page is sampled and admits
+ * it; the balance is exact. Comparing the two since the last top-up is the
+ * only way to know this panel can be trusted a year from now, and it costs
+ * nothing but a subtraction.
+ */
+function balanceLines(s, projectedUsd) {
+    const b = s.balance;
+    const usd = b.credits / CREDITS_PER_USD;
+    const months = runwayMonths(b.credits, projectedUsd);
+    const lines = [
+        `**${b.credits.toLocaleString('en-US')}** credits left (**$${usd.toFixed(2)}**)`
+        + (months
+            ? months >= 24
+                ? ' · years of runway at this rate'
+                : ` · about **${months < 2 ? months.toFixed(1) : Math.round(months)} month${Math.round(months) === 1 && months < 2 ? '' : 's'}** at this rate`
+            : ''),
+    ];
+
+    if (b.counted > 0 || b.billed > 0) {
+        const gap = b.billed - b.counted;
+        const off = b.billed > 0 ? Math.abs(gap) / b.billed : 0;
+        lines.push(
+            `-# since the last top-up they billed ${b.billed.toLocaleString('en-US')} credits and this panel counted `
+            + `${b.counted.toLocaleString('en-US')}: `
+            + (off <= 0.02
+                ? 'the meter is calibrated'
+                : `${gap > 0 ? 'they are ahead' : 'this panel is ahead'} by ${Math.abs(gap).toLocaleString('en-US')}`)
+        );
+    } else {
+        lines.push('-# the meter starts comparing itself against this balance from the next check');
+    }
+    return lines;
 }
 
 async function promptModal(componentInteraction, { title, inputs }) {
@@ -143,7 +215,7 @@ function render(s) {
 
     const pct = s.budgetUsd > 0 ? s.spend.usd / s.budgetUsd : 0;
     const credits = Math.round(s.spend.usd * CREDITS_PER_USD);
-    const projected = projectMonth(s.spend.usd);
+    const projected = projectMonth(s.spend, new Date(), s.intervalMs);
 
     const embed = new EmbedBuilder()
         .setTitle('🐦 Tweet mirror')
@@ -183,13 +255,22 @@ function render(s) {
                     // Locale pinned: bare toLocaleString() follows the host, so
                     // this panel would group digits differently on Railway than
                     // it does on a French Windows box.
-                    `${credits.toLocaleString('en-US')} credits · ${s.spend.calls} checks · ${s.spend.tweets} posts fetched`,
+                    `${credits.toLocaleString('en-US')} credits · ${s.spend.calls} checks · `
+                        + `${s.spend.tweets} fetched · ${s.spend.posted ?? 0} posted`,
                     projected
+                        // The floor rides along with the projection now. The two
+                        // disagreeing is what a broken projection looks like.
                         ? `On track for **$${projected.toFixed(2)}** this month${projected > s.budgetUsd ? ' ⚠️ over cap' : ''}`
+                          + `\n-# floor is $${s.floorUsdPerMonth.toFixed(2)}: a whole month of checks that find nothing`
                         : `A month of empty checks costs about $${s.floorUsdPerMonth.toFixed(2)}`,
                 ].join('\n'),
                 inline: false,
             },
+            ...(s.balance ? [{
+                name: 'Prepaid balance',
+                value: balanceLines(s, projected).join('\n'),
+                inline: false,
+            }] : []),
             {
                 name: 'Last checked',
                 value: s.sinceMs ? `<t:${Math.floor(s.sinceMs / 1000)}:R>` : 'never',
@@ -302,8 +383,8 @@ function testReport(r) {
         + cost;
 }
 
-async function buildPanel(guild = null) {
-    const state = await mirrorStatus();
+async function buildPanel(guild = null, { refreshBalance = false } = {}) {
+    const state = await mirrorStatus({ refreshBalance });
     // Re-checked on every render rather than once at setup, because a
     // permission can be taken away long after the channel was chosen and the
     // symptom of that is an empty channel, not an error.
@@ -336,8 +417,8 @@ module.exports = {
             idle: PANEL_IDLE_MS,
         });
 
-        const refresh = async (respondTo) => {
-            const rebuilt = await buildPanel(interaction.guild);
+        const refresh = async (respondTo, { balance = false } = {}) => {
+            const rebuilt = await buildPanel(interaction.guild, { refreshBalance: balance });
             const next = ui(rebuilt.embed, rebuilt.rows, { like: message });
             const canUpdate = respondTo && !respondTo.replied && !respondTo.deferred
                 && (typeof respondTo.isFromMessage !== 'function' || respondTo.isFromMessage());
@@ -354,7 +435,9 @@ module.exports = {
             try {
                 const id = i.customId;
 
-                if (id === 'tw_refresh') return refresh(i);
+                // Refresh is the one place worth asking the vendor again: it is
+                // pressed by a person who wants the current truth.
+                if (id === 'tw_refresh') return refresh(i, { balance: true });
 
                 if (id === 'tw_channel') {
                     const channelId = i.values[0];
@@ -500,6 +583,7 @@ module.exports = {
     // Exported for the tests; the command loader ignores anything but data/execute.
     parseAccounts,
     projectMonth,
+    runwayMonths,
     render,
     testReport,
 };
