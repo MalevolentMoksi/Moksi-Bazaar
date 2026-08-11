@@ -150,6 +150,26 @@ describe('the scout', () => {
         expect((await scoutMoment(fakeMessage(CHATTY), { model: 'x/y' })).worth).toBe(true);
     });
 
+    test('the test it applies is the remark, not the conversation', async () => {
+        // The night of the spam incident the room spent two minutes confused
+        // about the bot's own panel ("what", "it doesnt say who", "wiped out
+        // before I could open the profile") and the bouncer declined the one
+        // genuinely useful line of the evening. Correctly, by its old
+        // instructions: they only asked whether the chat offered material to
+        // riff on. Whether the bot's line would ADD anything, useful or
+        // funny, was not a concept the prompt contained.
+        callOpenRouterAPI.mockResolvedValue('{"worth": false, "hook": "", "mode": "banter"}');
+        await scoutMoment(fakeMessage(CHATTY), { model: 'x/y' });
+
+        const prompt = callOpenRouterAPI.mock.calls[0][1][0].content;
+        expect(prompt).toMatch(/The test is the remark, not the conversation/);
+        expect(prompt).toMatch(/genuinely useful or genuinely funny/);
+        // Usefulness explicitly includes the bot explaining its own actions.
+        expect(prompt).toMatch(/something the bot did\s+or plainly knows/);
+        // The silence bias survives the reframing untouched.
+        expect(prompt).toMatch(/worse than silence/);
+    });
+
     test('a channel with nothing but images is not a moment to react to', async () => {
         const read = await scoutMoment(fakeMessage(['']), { model: 'x/y' });
         expect(read.worth).toBe(false);

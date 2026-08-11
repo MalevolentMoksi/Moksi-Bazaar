@@ -35,9 +35,12 @@ const CLOSED = Object.freeze({ worth: false, hook: '', mode: 'banter' });
 const PROMPT = `Below is the tail of a Discord conversation. A dry, cynical bot is deciding
 whether to butt in uninvited with one remark.
 
-Say it is worth it only if there is something specific and concrete to react
-to: an opinion, a claim, a story, a complaint, a joke, an argument, someone
-being wrong about something.
+The test is the remark, not the conversation: would the bot's one line ADD
+something, either genuinely useful or genuinely funny? Useful looks like a
+real answer to confusion in the room, especially about something the bot did
+or plainly knows. Funny needs an actual target: an opinion, a claim, a story,
+a complaint, an argument, someone being wrong about something. A lively chat
+the bot has nothing for is still a no.
 
 Say it is not worth it if this is small talk, greetings, goodbyes, one-word
 replies, logistics ("anyone on tonight?"), link-dumps with no commentary, or a
@@ -48,12 +51,12 @@ CONVERSATION:
 {transcript}
 
 Answer in strict JSON, nothing else, exactly this shape:
-{"worth": true, "hook": "the ONE concrete thing here worth reacting to, under 20 words", "mode": "banter"}
+{"worth": true, "hook": "the ONE thing the bot's line would add, under 20 words", "mode": "banter"}
 
 mode: "question" = someone wants a real answer; "banter" = riffing or joking;
 "heavy" = something serious or emotional; "media" = the point is an image,
 video or link someone shared; "callout" = they are talking about the bot.
-hook: leave it empty when nothing is worth reacting to.`;
+hook: leave it empty when the bot has nothing to add.`;
 
 /**
  * @param {import('discord.js').Message} message the message that won the roll
