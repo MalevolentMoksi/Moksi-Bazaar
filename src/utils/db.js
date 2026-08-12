@@ -1093,6 +1093,41 @@ async function analyzeGifWithOpenRouter(gifUrl, prompt) {
     }
 }
 
+/**
+ * Describes in progress, keyed on media id.
+ *
+ * The cache below is a database round trip, and the context builder describes
+ * every message in the window CONCURRENTLY. So when the same GIF appears in
+ * six messages, all six lookups miss before any of them writes back: six
+ * downloads, six ffmpeg storyboards, six vision calls, one reply waiting on
+ * all of it. That is not hypothetical. On 2026-08-11 a single reply spent
+ * $0.0042 and 7.7 seconds describing joe-bart-joe-bartolozzi.mp4 six times,
+ * got six different answers, and `ON CONFLICT DO UPDATE` cached whichever
+ * finished last.
+ *
+ * A promise per media id closes the window between the miss and the write.
+ * Deliberately not an LRU: the database cache is the durable one, and this
+ * only has to survive the seconds while a describe is in the air.
+ */
+const describesInFlight = new Map();
+
+function describeOnce(mediaId, produce) {
+    const running = describesInFlight.get(mediaId);
+    if (running) return running;
+
+    let promise;
+    try {
+        promise = Promise.resolve(produce());
+    } catch (error) {
+        return Promise.reject(error);
+    }
+    // Cleared however it settles: a failed describe must not poison the id for
+    // the rest of the process.
+    const tracked = promise.finally(() => describesInFlight.delete(mediaId));
+    describesInFlight.set(mediaId, tracked);
+    return tracked;
+}
+
 async function processMediaInMessage(message, shouldAnalyze = true, options = {}) {
     const { forceReanalyze = false, deadlineAt = 0 } = options;
     const activeMedia = await getSettingState('active_media_analysis');
@@ -1113,7 +1148,19 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
     // next time they come up with budget to spare, and cached from then on.
     const outOfTime = () => deadlineAt > 0 && Date.now() > deadlineAt;
 
-    const MEDIA_PROMPT = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared. Prioritize anything visually striking, emotionally notable, or culturally significant. Name any recognizable characters, memes, or public figures. If text is visible in the image, include it.";
+    // "Name any recognizable characters, memes, or public figures" used to be
+    // an order, and a small vision model obeys an order to identify by
+    // guessing. Six calls on one clapping reaction GIF came back as Jidion,
+    // Cody Ko, Danny Gonzalez, Mikerina, Quackity and Jynxzi; the file was
+    // called joe-bart-joe-bartolozzi.mp4, so it was wrong six times out of six.
+    // Everything else about those descriptions (the clapping, the lava lamp,
+    // the plaques on the wall) was accurate. Only the name was invented.
+    //
+    // That matters because these descriptions are pasted into the conversation
+    // the writers read, so a fabricated name comes back as a confident reply
+    // about someone who is not in the picture. Naming is still wanted when it
+    // is real: Darth Vader, Tony Soprano and Shinada were all correct.
+    const MEDIA_PROMPT = "Describe what is shown in this image in 1-2 sentences. This description will be used by a chat AI to react to what was shared. Prioritize anything visually striking, emotionally notable, or culturally significant. Name characters, memes or public figures ONLY when you genuinely recognise them; if you are unsure who someone is, describe them instead (\"a streamer at a desk\") rather than guessing a name, because a confident wrong name is worse than no name. If text is visible in the image, include it.";
 
     const remember = (mediaId, desc, kind, url) => pool.query(
         `INSERT INTO media_cache (media_id, description, media_type, original_url)
@@ -1142,12 +1189,15 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
             return unseen(type);
         }
 
-        const desc = mediaMeta.isGif
-            ? await analyzeGifWithOpenRouter(url, MEDIA_PROMPT)
-            : await analyzeImageWithOpenRouter(url, MEDIA_PROMPT);
+        const desc = await describeOnce(mediaId, async () => {
+            const fresh = mediaMeta.isGif
+                ? await analyzeGifWithOpenRouter(url, MEDIA_PROMPT)
+                : await analyzeImageWithOpenRouter(url, MEDIA_PROMPT);
+            if (fresh) await remember(mediaId, fresh, mediaMeta.isGif ? 'gif' : 'image', url);
+            return fresh;
+        });
 
         if (!desc) return unseen(type);
-        await remember(mediaId, desc, mediaMeta.isGif ? 'gif' : 'image', url);
         return `[${type}: ${desc}]`;
     };
 
@@ -1166,15 +1216,17 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
             return unseen('Video');
         }
 
-        const frame = await firstFrameDataUri(att.url, { sizeBytes: att.size });
-        if (!frame) return unseen('Video');
+        const desc = await describeOnce(mediaId, async () => {
+            const frame = await firstFrameDataUri(att.url, { sizeBytes: att.size });
+            if (!frame) return null;
+            const fresh = await analyzeImageWithOpenRouter(frame, MEDIA_PROMPT);
+            // Keyed on the attachment URL, not the data URI: the frame is
+            // temporary and would never match again.
+            if (fresh) await remember(mediaId, fresh, 'video', att.url);
+            return fresh;
+        });
 
-        const desc = await analyzeImageWithOpenRouter(frame, MEDIA_PROMPT);
         if (!desc) return unseen('Video');
-
-        // Keyed on the attachment URL, not the data URI: the frame is temporary
-        // and would never match again.
-        await remember(mediaId, desc, 'video', att.url);
         return `[Video: ${desc}]`;
     };
 
@@ -2377,6 +2429,8 @@ module.exports = {
     applyAttitudeSignal,
     // Media & Cache
     processMediaInMessage,
+    // Exported so the stampede it prevents can be pinned in a test.
+    describeOnce,
     getMediaAnalysisProvider,
     cleanupMediaCache,
     normalizeMediaUrl,

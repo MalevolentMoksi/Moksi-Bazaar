@@ -169,10 +169,28 @@ describe('media tags never describe a file instead of a picture', () => {
         expect(db).toContain('describeVideo');
     });
 
+    // The regression this guards: only the newest message used to be described,
+    // so anything posted a moment earlier reached the model as an "unseen" tag
+    // forever and it answered a picture it had never been shown.
+    //
+    // Every message in the window is still passed through, and a cached
+    // description is always served whatever the budget says. What is bounded
+    // now is only how many NEW items one reply will pay to look at, which is a
+    // limit on spending rather than on what the model can see.
     test('every message in the window gets described, not only the newest', () => {
         const source = read('src/commands/tools/speak.js');
-        expect(source).toContain('processMediaInMessage(msg, true,');
+        expect(source).toMatch(/recent\.map\(async \(msg\) => \{/);
+        expect(source).toContain('processMediaInMessage(msg, freshMediaAllowed.has(msg.id)');
         expect(source).not.toContain('newestUserMsgId');
+    });
+
+    test('and the budget withholds fresh analysis only, never the cache', () => {
+        const db = read('src/utils/db.js');
+        // The cache lookup happens before the shouldAnalyze gate, so a message
+        // outside the budget still arrives fully described if it has been seen.
+        const describeUrl = db.slice(db.indexOf('const describeUrl ='), db.indexOf('const describeUrl =') + 900);
+        expect(describeUrl.indexOf('getCachedMediaDescription'))
+            .toBeLessThan(describeUrl.indexOf('if (!shouldAnalyze'));
     });
 });
 

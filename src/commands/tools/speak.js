@@ -340,6 +340,48 @@ function unresolvedGifTag(msg) {
   return ' [GIF link shared, contents not seen]';
 }
 
+/**
+ * How many pieces of NEW media one reply is willing to pay to look at.
+ *
+ * The media deadline bounds wall time, but the describes run concurrently, so
+ * eleven of them finish inside six seconds just as easily as four do and the
+ * deadline never fires. It bounds waiting, not spending. One reply on
+ * 2026-08-11 described eleven items, cost $0.00747 against a $0.005 ceiling,
+ * and then answered a question about a broken ffmpeg config without
+ * mentioning a single one of them.
+ */
+const FRESH_MEDIA_PER_REPLY = 6;
+
+function mediaItemCount(msg) {
+  return (msg.attachments?.size ?? 0) + (msg.embeds?.length ?? 0) + (msg.stickers?.size ?? 0);
+}
+
+/**
+ * Which messages may pay for a fresh look, newest first.
+ *
+ * Newest first because that is where the conversation is: the thing someone
+ * just posted is what the reply is about, and a GIF from eight messages ago
+ * has usually already been described and cached anyway. Messages left out
+ * still get their cached descriptions; only fresh analysis is withheld, which
+ * is exactly what the `shouldAnalyze` flag has always meant.
+ *
+ * @returns {Set<string>} message ids allowed to analyse
+ */
+function mediaBudget(recent, botId, limit = FRESH_MEDIA_PER_REPLY) {
+  const allowed = new Set();
+  let spent = 0;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const msg = recent[i];
+    if (msg.author?.id === botId) continue;
+    const items = mediaItemCount(msg);
+    if (items === 0) continue;
+    if (spent >= limit) continue;
+    allowed.add(msg.id);
+    spent += items;
+  }
+  return allowed;
+}
+
 async function buildConversationContext(messages, botId, pinnedIds = new Set(), { mediaDeadlineAt = 0 } = {}) {
   const sorted = Array.from(messages.values())
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
@@ -370,6 +412,8 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set(), 
     participants.set(msg.author.id, msg.member?.displayName || msg.author.username);
   }
 
+  const freshMediaAllowed = mediaBudget(recent, botId);
+
   const lines = await Promise.all(recent.map(async (msg) => {
     const isSelf = msg.author.id === botId;
     // "You" rather than the bot's name alone: the owner's display name is
@@ -387,7 +431,7 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set(), 
         // reached the model as an "unseen" tag forever, and it answered a
         // picture it had never been shown. Descriptions are cached
         // permanently, so the recurring cost is only genuinely new media.
-        const descriptions = await processMediaInMessage(msg, true, { deadlineAt: mediaDeadlineAt });
+        const descriptions = await processMediaInMessage(msg, freshMediaAllowed.has(msg.id), { deadlineAt: mediaDeadlineAt });
         if (descriptions.length > 0) mediaContent = ` ${descriptions.join(' ')}`;
       } catch (e) {
         logger.warn('Media processing failed in context builder', { error: e.message, messageId: msg.id });
@@ -1099,3 +1143,5 @@ module.exports.describeNonTextPayload = describeNonTextPayload;
 module.exports.waitForUnfurl = waitForUnfurl;
 module.exports.unresolvedGifTag = unresolvedGifTag;
 module.exports.hasVisibleMedia = hasVisibleMedia;
+module.exports.mediaBudget = mediaBudget;
+module.exports.FRESH_MEDIA_PER_REPLY = FRESH_MEDIA_PER_REPLY;
