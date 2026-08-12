@@ -5,7 +5,7 @@
 // than a giant outline across the whole frame. Supports:
 //   position: top | bottom     (esmBot gravity 2 / 8; bottom also vertically flips)
 //   color:    transparent | white | black
-//   scale:    0.01–1.0          (esmBot yscale: band height as a fraction of image height)
+//   scale:    0.01 to 1.0       (esmBot yscale: band height as a fraction of image height)
 //   flip:     mirror horizontally (esmBot flipX: points the tail the other way)
 //
 // Assets (esmBot's, grayscale+alpha, 1090×290):
@@ -111,6 +111,46 @@ async function renderSpeechBubbleImage(inputPath, opts) {
 // ---------------------------------------------------------------------------
 // Animated GIF
 // ---------------------------------------------------------------------------
+
+/**
+ * The filtergraph that puts the bubble on one frame.
+ *
+ * [0:v] is the scaled source, [1:v] the full-size overlay PNG rendered ahead of
+ * time so this stays readable. White and black composite on top; transparent
+ * punches the bubble out of the source's own alpha.
+ *
+ * The split is the whole point of this function existing. A filtergraph link
+ * label feeds exactly ONE consumer, and the transparent branch used to read
+ * [src] twice, once to extract its alpha and once to merge the result back
+ * onto it. ffmpeg rejects the entire graph for that:
+ *
+ *     ffmpeg exited with code 234: Error binding filtergraph inputs/outputs:
+ *     Invalid argument
+ *
+ * Transparent is the default colour, so this meant /speechbubble failed on
+ * every animated GIF anyone tried it on.
+ *
+ * @param {number} width
+ * @param {number} height
+ * @param {'transparent'|'white'|'black'} color
+ * @returns {string} a complexFilter chain ending in [bubbled]
+ */
+function bubbleChain(width, height, color) {
+    const scaled = `[0:v]scale=${width}:${height}:flags=lanczos`;
+
+    if (color !== 'transparent') {
+        return `${scaled}[src];[src][1:v]overlay=0:0:format=auto[bubbled]`;
+    }
+
+    // alphaextract on the overlay is the region to cut. Subtracting it from the
+    // source's own alpha makes that region transparent rather than white.
+    return `${scaled},format=rgba,split=2[keep][alpha];`
+        + `[1:v]alphaextract[mask];`
+        + `[alpha]alphaextract[srcalpha];`
+        + `[srcalpha][mask]blend=all_mode=subtract[cut];`
+        + `[keep][cut]alphamerge[bubbled]`;
+}
+
 async function renderSpeechBubbleGif(inputPath, opts) {
     const { position = 'top', color = 'transparent', scale = DEFAULT_SCALE, flip = false } = opts || {};
     const dims = await probeDimensions(inputPath);
@@ -130,18 +170,7 @@ async function renderSpeechBubbleGif(inputPath, opts) {
     const paletteGen = gifPaletteGen({ reserveTransparent });
     const paletteUse = gifPaletteUse({ reserveTransparent });
 
-    // [0:v] scaled source, [1:v] full-size overlay PNG.
-    //   transparent: use the overlay's alpha as a dest-out mask on the source.
-    //   white/black: overlay on top.
-    const chain = color === 'transparent'
-        // alphaextract from the overlay gives the cut-out region; subtract it from
-        // the source's own alpha so that region becomes transparent.
-        ? `[0:v]scale=${width}:${height}:flags=lanczos,format=rgba[src];`
-          + `[1:v]alphaextract[m];`
-          + `[src]format=rgba,alphaextract[sa];`
-          + `[sa][m]blend=all_mode=subtract[na];`
-          + `[src][na]alphamerge[bubbled]`
-        : `[0:v]scale=${width}:${height}:flags=lanczos[src];[src][1:v]overlay=0:0:format=auto[bubbled]`;
+    const chain = bubbleChain(width, height, color);
 
     try {
         await fs.promises.writeFile(overlayPath, overlayBuf);
@@ -221,5 +250,7 @@ module.exports = {
     renderSpeechBubbleImage,
     renderSpeechBubbleGif,
     renderSpeechBubbleVideo,
+    // Pure, and exported so the graph can be linted without ffmpeg or a GIF.
+    bubbleChain,
     DEFAULT_SCALE,
 };
