@@ -15,6 +15,53 @@ const AI_FAIL_STREAK = 3;
 let aiFailures = 0;
 
 /**
+ * How far above a model's list price a provider may be and still be used.
+ *
+ * The throughput sort takes the fastest provider and does not look at price,
+ * which on 2026-08-11 meant Wafer at 3.50x list for deepseek-v4-flash-0731.
+ * The 27 providers serving that model spread from $0.080 to $0.280, and only
+ * four sit above 2x list, so this rail leaves twenty-three of them eligible.
+ * It is a rail against gouging, not a switch to cheapest-first: sorting on
+ * price is what produced the 2 tokens/second host in the first place.
+ *
+ * Measured against the export, this moves a draft from ~837ms to ~1953ms in
+ * the worst case, on a reply budget of 20 seconds whose worst observed use was
+ * 7.98.
+ */
+const PRICE_CAP_MULTIPLE = 2;
+
+/**
+ * Provider routing for one call.
+ *
+ * Fails open in every direction. No known list price (catalogue never fetched,
+ * model not in it, free model) means no rail at all, because a request that
+ * cannot find a provider returns nothing and a silent bot is worse than an
+ * expensive one.
+ */
+function routing(model, noPriceCap = false) {
+    const base = { sort: 'throughput' };
+    if (noPriceCap) return base;
+
+    let list = null;
+    try {
+        // Required here rather than at the top: modelCheck imports the speak
+        // pipeline, which imports this file.
+        list = require('./modelCheck').listPrice(model);
+    } catch {
+        return base;
+    }
+    if (!list) return base;
+
+    return {
+        ...base,
+        max_price: {
+            prompt: Number((list.prompt * PRICE_CAP_MULTIPLE).toFixed(6)),
+            completion: Number((list.completion * PRICE_CAP_MULTIPLE).toFixed(6)),
+        },
+    };
+}
+
+/**
  * Every exit from callOpenRouterAPI passes through here, success or not, so
  * this is the whole of the AI's health signal. The fallback path recurses into
  * the same function, which is why a primary failure rescued by a fallback nets
@@ -64,7 +111,10 @@ async function callOpenRouterAPI(model, messages, options = {}) {
         provider = null,
         // {kind, extra}: names this call in telemetry. Rows are only written
         // when a telemetry trace is active (i.e. inside the speak pipeline).
-        telemetry: telemetryMeta = null
+        telemetry: telemetryMeta = null,
+        // Internal. Set on the one retry that drops the price rail, so a call
+        // is never lost to a rail that no provider happened to satisfy.
+        noPriceCap = false,
     } = options;
 
     if (!OPENROUTER_API_KEY) {
@@ -73,8 +123,12 @@ async function callOpenRouterAPI(model, messages, options = {}) {
     }
 
     const startedAt = Date.now();
-    const record = (fields) => {
-        noteApiOutcome(fields?.outcome);
+    const record = ({ health: countsTowardHealth = true, ...fields } = {}) => {
+        // A call that is about to be retried has not finished failing yet.
+        // Without this, one dead request counted twice against the streak (the
+        // railed attempt and the unrailed one) and "three in a row" tripped
+        // after one and a half.
+        if (countsTowardHealth) noteApiOutcome(fields?.outcome);
         return telemetry.logCall({
             kind: telemetryMeta?.kind ?? 'model_call',
             model,
@@ -112,9 +166,17 @@ async function callOpenRouterAPI(model, messages, options = {}) {
             reasoning: reasoning ?? { effort: 'none' },
             // Without a sort OpenRouter load-balances by price, which is how
             // a reply got routed to a host generating at 2 tokens/second
-            // while the same model did 121/s elsewhere. At this bot's token
-            // counts the price spread between providers is noise.
-            provider: provider ?? { sort: 'throughput' },
+            // while the same model did 121/s elsewhere. THE CLAIM THAT USED TO
+            // FOLLOW HERE, that the price spread between providers is noise at
+            // this bot's token counts, WAS WRONG, and the telemetry export of
+            // 2026-08-11 says by how much: 27 providers serve
+            // deepseek-v4-flash-0731 between $0.080 and $0.280 per million
+            // input tokens, the fastest of them is the dearest (Wafer, 3.50x
+            // list, 732ms against 1606ms), and sorting on throughput alone
+            // picked it. Across that export the same model, same prompt sizes,
+            // was billed anywhere from 0.37x to 3.50x of list, 2.29x on
+            // average. The sort is still right; it just needed a rail.
+            provider: provider ?? routing(model, noPriceCap),
             // Usage accounting: the response reports real token counts and the
             // actual dollar cost, so telemetry records facts, not estimates.
             usage: { include: true }
@@ -140,8 +202,25 @@ async function callOpenRouterAPI(model, messages, options = {}) {
         // below, and the finally clears the timer on every exit.
         if (!response.ok) {
             const errorText = await response.text();
+            const willDropRail = !noPriceCap && !provider;
             logger.error('OpenRouter API error', { status: response.status, error: errorText, model });
-            record({ outcome: `http_${response.status}`, error: errorText.slice(0, 300) });
+            record({
+                outcome: `http_${response.status}`,
+                error: errorText.slice(0, 300),
+                health: !willDropRail,
+            });
+
+            // The price rail comes off before anything else is given up on.
+            // OpenRouter fails a request outright when no provider satisfies
+            // max_price, and paying over the odds is enormously better than
+            // not answering. Tried before the fallback model, because the
+            // right model at a bad price beats the wrong model at a good one.
+            if (willDropRail) {
+                logger.warn('OpenRouter call failed with a price rail on; retrying without it', {
+                    model, status: response.status,
+                });
+                return await callOpenRouterAPI(model, messages, { ...options, noPriceCap: true });
+            }
 
             // Try fallback model if primary failed
             if (fallbackModel && fallbackModel !== model) {
@@ -221,5 +300,8 @@ function getErrorType(error) {
 
 module.exports = {
     callOpenRouterAPI,
-    getErrorType
+    getErrorType,
+    // Exported so the rail can be pinned without a network call.
+    routing,
+    PRICE_CAP_MULTIPLE,
 };

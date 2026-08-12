@@ -34,6 +34,19 @@ const TIMEOUT_MS = 10_000;
  */
 let lastResult = null;
 
+/**
+ * List price per model, in dollars per million tokens. Empty until the check
+ * has run, and left empty if it could not run.
+ *
+ * The catalogue was already being fetched to see which ids are alive, and it
+ * carries the canonical price alongside. Keeping it is what lets the price
+ * rail in apiHelpers be a multiple of the real number instead of a hardcoded
+ * table that would rot exactly the way three dead model ids already did.
+ *
+ * @type {Map<string, {prompt: number, completion: number}>}
+ */
+const listPrices = new Map();
+
 async function fetchCatalogue() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -41,12 +54,30 @@ async function fetchCatalogue() {
         const response = await fetch(CATALOGUE_URL, { signal: controller.signal });
         if (!response.ok) throw new Error(`catalogue returned ${response.status}`);
         const body = await response.json();
-        const ids = (body?.data ?? []).map(m => m?.id).filter(Boolean);
-        if (ids.length === 0) throw new Error('catalogue was empty');
-        return new Set(ids);
+        const entries = (body?.data ?? []).filter(m => m?.id);
+        if (entries.length === 0) throw new Error('catalogue was empty');
+
+        listPrices.clear();
+        for (const model of entries) {
+            const prompt = Number(model.pricing?.prompt) * 1e6;
+            const completion = Number(model.pricing?.completion) * 1e6;
+            // Free and unpriced models get no entry, so no rail is applied.
+            if (Number.isFinite(prompt) && prompt > 0 && Number.isFinite(completion)) {
+                listPrices.set(model.id, { prompt, completion });
+            }
+        }
+        return new Set(entries.map(m => m.id));
     } finally {
         clearTimeout(timer);
     }
+}
+
+/**
+ * What OpenRouter says a model costs, in dollars per million tokens.
+ * @returns {{prompt: number, completion: number}|null} null when unknown
+ */
+function listPrice(modelId) {
+    return listPrices.get(modelId) ?? null;
 }
 
 /**
@@ -85,4 +116,4 @@ function lastModelCheck() {
     return lastResult;
 }
 
-module.exports = { verifyModels, lastModelCheck, CATALOGUE_URL };
+module.exports = { verifyModels, lastModelCheck, listPrice, CATALOGUE_URL };
