@@ -348,6 +348,17 @@ describe('the sync script decides before it sends', () => {
     test('and every other spelling of the flag works too', () => {
         expect([...parseArgs(['--only=bored,sigh']).only]).toEqual(['bored', 'sigh']);
         expect([...parseArgs(['--only', 'bored', '--only', 'sigh']).only]).toEqual(['bored', 'sigh']);
+        // Bare spaces, which is what a person types when the comma version
+        // has just been mangled once already.
+        expect([...parseArgs(['--only', 'bored', 'sigh', 'laughing']).only])
+            .toEqual(['bored', 'sigh', 'laughing']);
+    });
+
+    test('the flags after a key list are still flags, not keys', () => {
+        const parsed = parseArgs(['--only', 'bored', 'sigh', '--yes', '--replace']);
+        expect([...parsed.only]).toEqual(['bored', 'sigh']);
+        expect(parsed.yes).toBe(true);
+        expect(parsed.replace).toBe(true);
     });
 
     test('a key with no source file is named as such, not silently skipped', () => {

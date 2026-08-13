@@ -52,8 +52,15 @@ function parseArgs(argv) {
     // contain neither character.
     const values = [];
     for (let i = 0; i < argv.length; i++) {
-        if (argv[i] === '--only') values.push(argv[++i] ?? '');
-        else if (argv[i].startsWith('--only=')) values.push(argv[i].slice('--only='.length));
+        if (argv[i] === '--only') {
+            // Everything up to the next flag, so `--only bored sigh laughing`
+            // does not quietly mean `--only bored`. There are no positional
+            // arguments to steal.
+            if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) values.push('');
+            while (i + 1 < argv.length && !argv[i + 1].startsWith('--')) values.push(argv[++i]);
+        } else if (argv[i].startsWith('--only=')) {
+            values.push(argv[i].slice('--only='.length));
+        }
     }
 
     return {
