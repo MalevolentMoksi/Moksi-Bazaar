@@ -49,6 +49,60 @@ function toUnix(ms) {
     return Math.floor(Number(ms) / 1000);
 }
 
+// ── FACTS, RANKED ───────────────────────────────────────────────────────────
+/**
+ * These reports are read once, late, by someone deciding in five seconds
+ * whether they have to do anything. Ranking is the whole job, and there are
+ * exactly three weights available:
+ *
+ *   the header block  what happened, to whom, on what grounds, and what
+ *                     happens next. Enough on its own to close the tab.
+ *   a fact            one line, one label, below the rule. Reserved for what
+ *                     varies per case and could change what a moderator does.
+ *   an aside          background, several items to a line, grey. Never
+ *                     actionable, never absent either.
+ *
+ * The previous version had one weight. Five items were strung onto a single
+ * subtext line with dots between them, so "eligible in 12 days", which is the
+ * answer to the only question staff ever ask about a kicked joiner, sat in the
+ * same grey as "caught on join", and the line wrapped mid-item on a normal
+ * window.
+ */
+
+/**
+ * One fact, one line.
+ *
+ * Deliberately not inline: an inline field shares its row with the next two,
+ * which is the compression this exists to undo. In the Components V2 rendering
+ * a short value sits beside its label; in the classic embed it sits under it.
+ * Both read as one fact either way.
+ */
+function fact(name, value) {
+    return { name, value: String(value), inline: false };
+}
+
+/** Discord's idiom for a field with no label. Written as an escape on purpose. */
+const BLANK_FIELD_NAME = '​';
+
+/**
+ * Background, clumped on purpose.
+ *
+ * This is the one place a run of items separated by dots is right, because
+ * here they really are equals: circumstances, none of which changes what
+ * anybody does, all of which you want on the record. Anything that would
+ * change a decision has no business in here.
+ */
+function aside(...items) {
+    const kept = items.filter(Boolean);
+    if (!kept.length) return null;
+    return { name: BLANK_FIELD_NAME, value: `-# ${kept.join(' · ')}`, inline: false };
+}
+
+/** True for the trivia line, which several callers need to tell apart. */
+function isAside(field) {
+    return String(field?.value ?? '').startsWith('-# ');
+}
+
 /**
  * Resolves the channel a category should be written to, or null.
  * Only channels inside the same guild are ever considered; a stale ID from
@@ -112,17 +166,42 @@ async function send(guild, settings, category, payload) {
 }
 
 /**
+ * When the door opens again, which is the only question anybody asks about a
+ * joiner the gate turned away.
+ *
+ * An age ban schedules its own lift for the exact instant the account becomes
+ * old enough (enforcement passes `decision.eligibleAt` straight through as
+ * `unbanAt`), so the report used to state one moment twice: once as "eligible
+ * in 12 days" buried in the grey line, and once as a full "Auto-unban" field.
+ * Two weights, one fact, and the louder of the two was the less useful.
+ */
+function returnLine(decision, result, dryRun) {
+    const at = result.action === 'ban' && result.unbanAt ? result.unbanAt : decision.eligibleAt;
+    if (!Number.isFinite(Number(at))) return null;
+
+    // A relative stamp carries the absolute one in its tooltip, so the long
+    // form is only worth the room when a ban is holding someone out and the
+    // exact moment is something staff might plan around.
+    if (!dryRun && result.ok && result.action === 'ban') {
+        return `Ban lifts <t:${toUnix(at)}:R>, on <t:${toUnix(at)}:F>`;
+    }
+    if (!dryRun && result.ok) return `Can rejoin <t:${toUnix(at)}:R>`;
+    // Nothing was done, so nothing is holding them out; the date is still the
+    // date they stop being too new.
+    return `Eligible <t:${toUnix(at)}:R>`;
+}
+
+/**
  * Reports the outcome of a single evaluated member.
  * Dry-run outcomes go to the preview category; everything else splits between
  * kick and failure so the two can live in different channels.
  *
  * Read top to bottom it answers, in order: what happened, to whom, on what
- * grounds, and only then the paperwork. It used to open with a bare mention
- * and lay seven equally weighted fields under it, so the two numbers the
- * decision actually turned on (the age, the threshold) sat in the same
- * typeface as the DM receipt.
+ * grounds, what happens next, and only then the paperwork.
+ *
+ * @returns {{embed: import('discord.js').EmbedBuilder, category: string}}
  */
-async function logOutcome(guild, settings, entry) {
+function outcomeEmbed(settings, entry) {
     const {
         user, decision, result, origin, attempt, dryRun,
     } = entry;
@@ -152,15 +231,7 @@ async function logOutcome(guild, settings, entry) {
         color = COLORS.failure;
     }
 
-    // The paperwork, in one subtext line. Every item is worth keeping and not
-    // one of them is worth a heading.
-    const paperwork = [
-        `account made <t:${toUnix(user.createdTimestamp)}:D>`,
-        `eligible <t:${toUnix(decision.eligibleAt)}:R>`,
-        `join attempt #${attempt}`,
-        `DM ${result.dm ?? 'n/a'}`,
-        origin === 'sweep' ? 'caught by the catch-up sweep' : 'caught on join',
-    ].join(' · ');
+    const returns = returnLine(decision, result, dryRun);
 
     const embed = new EmbedBuilder()
         .setColor(color)
@@ -175,23 +246,33 @@ async function logOutcome(guild, settings, entry) {
             `<@${user.id}>\n`
             + (lede ? `${lede}\n` : '')
             + `**${(decision.ageMs / DAY_MS).toFixed(2)} days old** at join, `
-            + `threshold is ${formatDays(settings.min_account_age_minutes)} days\n`
-            + `-# ${paperwork}`
+            + `threshold is ${formatDays(settings.min_account_age_minutes)} days`
+            + (returns ? `\n${returns}` : '')
         )
         .setTimestamp();
 
-    if (result.action === 'ban' && result.unbanAt) {
-        embed.addFields({
-            name: 'Auto-unban',
-            value: `<t:${toUnix(result.unbanAt)}:F> (<t:${toUnix(result.unbanAt)}:R>)`,
-            inline: false,
-        });
-    }
+    const repeat = Number(attempt) > 1;
 
-    if (result.hint) {
-        embed.addFields({ name: 'How to fix', value: result.hint.slice(0, 1024), inline: false });
-    }
+    embed.addFields([
+        // Whether they were told why. The one thing that decides how the
+        // conversation goes when they turn up in modmail asking.
+        fact('DM', result.dm ?? 'n/a'),
+        // At #1 this is noise on every single report. Past that it is somebody
+        // working out how to get in, which is worth a line of its own.
+        repeat ? fact('Join attempt', `#${attempt}`) : null,
+        result.hint ? fact('How to fix', result.hint.slice(0, 1024)) : null,
+        aside(
+            `account made <t:${toUnix(user.createdTimestamp)}:D>`,
+            origin === 'sweep' ? 'caught by the catch-up sweep' : 'caught on join',
+            repeat ? null : 'first attempt',
+        ),
+    ].filter(Boolean));
 
+    return { embed, category };
+}
+
+async function logOutcome(guild, settings, entry) {
+    const { embed, category } = outcomeEmbed(settings, entry);
     return send(guild, settings, category, ui(embed, [], { scope: 'mod' }));
 }
 
@@ -253,6 +334,10 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
     // anything themselves.
     let did;
     let qualifier = null;
+    // When it ends is not a footnote to what was done, it is the next thing
+    // anybody has to know, so it gets a line of its own rather than becoming
+    // the middle item of "banned · lifts in 7 days · 2 messages removed".
+    let until = null;
     if (dryRun) {
         did = '🧪 Dry run';
         qualifier = 'no action taken';
@@ -261,7 +346,7 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         qualifier = 'no action taken';
     } else if (actionOutcome?.ok && action === 'ban') {
         did = 'Temporarily banned';
-        if (actionOutcome.unbanAt) qualifier = `lifts <t:${toUnix(actionOutcome.unbanAt)}:R>`;
+        if (actionOutcome.unbanAt) until = `Ban lifts <t:${toUnix(actionOutcome.unbanAt)}:R>`;
     }
     // Every non-ban success used to render as "kicked", so a timeout was
     // reported in the audit log as a removal that never happened.
@@ -279,13 +364,6 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         qualifier = qualifier ? `${qualifier} · ${removed}` : removed;
     }
 
-    // Where and how new the account is: worth keeping, never worth a heading.
-    const context = [
-        channelId ? `in <#${channelId}>` : null,
-        `account made <t:${toUnix(user.createdTimestamp)}:R>`,
-        isBehaviour ? 'first messages after joining' : `${result.tier} tier`,
-    ].filter(Boolean).join(' · ');
-
     const embed = new EmbedBuilder()
         .setColor(style.color)
         .setAuthor({
@@ -295,10 +373,17 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
         .setTitle(`${style.icon} ${isBehaviour ? 'Behaviour flag' : style.word} · score ${result.score}`)
         // The clickable line. Staff were looking the offender up by hand
         // because the author header is plain text ("it doesnt say who").
+        //
+        // Where it happened is a link, and following it is the next thing a
+        // moderator does, so it is a line rather than the third item in a grey
+        // run. What left that run entirely is the tier: "suspect tier" under a
+        // title reading "Suspicious · score 51" is the same word twice, and
+        // "first messages after joining" is what the footer already says.
         .setDescription(
             `<@${user.id}>\n`
-            + `**${did}**${qualifier ? ` · ${qualifier}` : ''}\n`
-            + `-# ${context}`
+            + `**${did}**${qualifier ? ` · ${qualifier}` : ''}`
+            + (until ? `\n${until}` : '')
+            + (channelId ? `\nSeen in <#${channelId}>` : '')
         )
         .setFooter({
             text: isBehaviour
@@ -329,16 +414,20 @@ async function logSuspicion(guild, settings, { user, result, action, actionOutco
     }
     if (result.inviteInfo?.known) {
         const inv = result.inviteInfo;
-        embed.addFields({
-            name: 'Invite used',
-            value: `\`${inv.code}\`${inv.inviterId ? ` from <@${inv.inviterId}>` : ''}`
+        embed.addFields(fact(
+            'Invite used',
+            `\`${inv.code}\`${inv.inviterId ? ` from <@${inv.inviterId}>` : ''}`
                 + (inv.usesInWindow > 1 ? ` (${inv.usesInWindow} joins in 5min)` : '')
                 // Several codes moved between snapshots, so this is the most
                 // likely one rather than a known one. Say so.
                 + (inv.ambiguous ? '\n-# several invites moved at once; best guess' : ''),
-            inline: true,
-        });
+        ));
     }
+
+    // Last, because it is the least of it. How new the account is repeats a
+    // signal above whenever the age is what fired the report, and matters on
+    // its own when something else did.
+    embed.addFields(aside(`account made <t:${toUnix(user.createdTimestamp)}:R>`));
 
     // Filed before it is posted, because the buttons need the row id and the
     // signals only exist here. A failed write costs the panel its mark button
@@ -403,12 +492,12 @@ async function logConfigChange(guild, settings, { actor, summary, details }) {
         .setColor(COLORS.config)
         .setTitle('⚙️ Join gate configuration changed')
         .setDescription(summary.slice(0, 4096))
-        .addFields({ name: 'Changed by', value: `<@${actor.id}> (${actor.id})`, inline: false })
         .setTimestamp();
 
-    if (details) {
-        embed.addFields({ name: 'Details', value: details.slice(0, 1024), inline: false });
-    }
+    if (details) embed.addFields(fact('Details', details.slice(0, 1024)));
+    // Who did it is provenance: always wanted on an audit line, never the
+    // reason anybody opened it.
+    embed.addFields(aside(`changed by <@${actor.id}> (${actor.id})`));
 
     return send(guild, settings, 'config', ui(embed, [], { scope: 'mod' }));
 }
@@ -425,7 +514,7 @@ async function logTest(guild, settings, category, actor) {
         .setColor(COLORS.config)
         .setTitle('🧪 Join gate: routing test')
         .setDescription(`This is where **${label}** entries will appear.`)
-        .addFields({ name: 'Requested by', value: `<@${actor.id}>`, inline: true })
+        .addFields(aside(`requested by <@${actor.id}>`))
         .setTimestamp();
 
     if (isDefault) {
@@ -451,7 +540,7 @@ async function logUnban(guild, settings, { userId, bannedAtMs, ok, error }) {
                 ? `<@${userId}> (${userId}) can rejoin. Their account is now old enough.`
                 : `Could not unban <@${userId}> (${userId}): ${error ?? 'unknown error'}`
         )
-        .addFields({ name: 'Banned', value: `<t:${toUnix(bannedAtMs)}:R>`, inline: true })
+        .addFields(aside(`banned <t:${toUnix(bannedAtMs)}:R>`))
         .setTimestamp();
 
     return send(guild, settings, ok ? 'kick' : 'failure', ui(embed, [], { scope: 'mod' }));
@@ -462,6 +551,12 @@ module.exports = {
     resolveChannel,
     describeRouting,
     logOutcome,
+    // Rendering, separated from routing so the layout can be pinned without a
+    // fake guild and a fake channel in front of it.
+    outcomeEmbed,
+    fact,
+    aside,
+    isAside,
     logBurst,
     logConfigChange,
     logUnban,

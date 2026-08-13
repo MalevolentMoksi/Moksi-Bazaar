@@ -10,6 +10,14 @@
 // block, provenance is subtext, and anything a moderator must read is a
 // labelled group of its own. They also pin the two things that were simply
 // missing: a way to reach the message, and a report that wakes nobody.
+//
+// The second pass came from a photograph of a real kick report. Collapsing the
+// stack of equal fields into one subtext line fixed the forms and created a
+// different fault: five unrelated facts strung together with dots, wrapping
+// mid-item, everything grey. "eligible in 12 days", which is the only question
+// anybody asks about a joiner the gate turned away, read exactly like "caught
+// on join". So there are three weights now, and the rule about which fact goes
+// where is checked at the bottom of this file rather than left to taste.
 
 jest.mock('../src/utils/logger', () => ({
     info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
@@ -24,7 +32,10 @@ jest.mock('../src/utils/db', () => ({
 }));
 
 const db = require('../src/utils/db');
-const { logSuspicion, logOutcome } = require('../src/utils/joinGate/logging');
+const {
+    logSuspicion, logOutcome, logUnban, logConfigChange, logTest, logBurst,
+    outcomeEmbed, isAside,
+} = require('../src/utils/joinGate/logging');
 
 beforeEach(() => {
     db.recordSuspicionReport.mockClear();
@@ -82,14 +93,32 @@ async function report(overrides = {}) {
 describe('the behaviour flag reads as a card, not a form', () => {
     test('what the bot did is in the header block, in its own weight', async () => {
         const { embed } = await report();
-        const [mention, outcome, context] = embed.description.split('\n');
+        const [mention, outcome, where] = embed.description.split('\n');
 
         expect(mention).toBe(`<@${spammer.id}>`);
         expect(outcome).toBe('**Timed out for 60 min** · 2 messages removed');
-        // Where and how new the account is: kept, never a heading.
-        expect(context.startsWith('-# ')).toBe(true);
-        expect(context).toContain('in <#chan-x>');
-        expect(context).toContain('account made <t:');
+        // Where it happened is a link, and following it is the next thing a
+        // moderator does, so it is a line and not the first item of a grey run.
+        expect(where).toBe('Seen in <#chan-x>');
+    });
+
+    test('how new the account is survives, as the least of it', async () => {
+        const { embed } = await report();
+        const last = embed.fields[embed.fields.length - 1];
+        expect(last.value.startsWith('-# ')).toBe(true);
+        expect(last.value).toContain('account made <t:');
+    });
+
+    test('a temp-ban says when it lifts on a line of its own', async () => {
+        // It used to be the middle item of "banned · lifts in 7 days · 2
+        // messages removed", which is three unrelated facts in one breath.
+        const { embed } = await report({
+            action: 'ban',
+            actionOutcome: { ok: true, unbanAt: Date.now() + 604_800_000, deleted: 2 },
+        });
+        const lines = embed.description.split('\n');
+        expect(lines[1]).toBe('**Temporarily banned** · 2 messages removed');
+        expect(lines[2]).toMatch(/^Ban lifts <t:\d+:R>$/);
     });
 
     test('the score is the headline and the arithmetic is a labelled group', async () => {
@@ -101,7 +130,7 @@ describe('the behaviour flag reads as a card, not a form', () => {
 
     test('the four equal rows are gone, not restyled', async () => {
         const { embed } = await report();
-        const names = embed.fields.map(f => f.name);
+        const names = embed.fields.filter(f => !isAside(f)).map(f => f.name);
         // "Outcome" moved up into the header, "Source" repeated the footer and
         // "Tier" repeated the title, so none of them is a row any more.
         expect(names).not.toContain('Outcome');
@@ -121,8 +150,18 @@ describe('the behaviour flag reads as a card, not a form', () => {
         });
         expect(embed.title).toBe('⚠️ Suspicious · score 51');
         expect(embed.description).toContain('**Logged only** · no action taken');
-        expect(embed.description).toContain('suspect tier');
         expect(embed.fields[0].value).toContain('no signals fired');
+    });
+
+    // "suspect tier" under a title that reads "Suspicious · score 51" is the
+    // same word twice, and it was taking up a third of the context line.
+    test('the tier is not restated under a title that is the tier', async () => {
+        const { embed } = await report({
+            result: { tier: 'suspect', score: 51, source: 'profile', signals: [] },
+            action: 'log', actionOutcome: null, evidence: [],
+        });
+        expect(embed.description).not.toContain('suspect tier');
+        expect(embed.fields.map(f => f.value).join('\n')).not.toContain('suspect tier');
     });
 
     // The arithmetic is the entire point of the report, and an embed field
@@ -137,7 +176,9 @@ describe('the behaviour flag reads as a card, not a form', () => {
             result: { tier: 'malicious', score: 300, source: 'profile', signals },
         });
 
-        const breakdown = embed.fields.filter(f => f.name === 'Why it fired' || f.name === '​');
+        const breakdown = embed.fields
+            .filter(f => !isAside(f))
+            .filter(f => f.name === 'Why it fired' || f.name === '​');
         expect(breakdown.length).toBeGreaterThan(1);
         for (const field of breakdown) expect(field.value.length).toBeLessThanOrEqual(1024);
         expect(breakdown.map(f => f.value).join('\n')).toContain('Signal number 20');
@@ -215,15 +256,32 @@ describe('the kick and ban report answers in the same order', () => {
     test('what happened is the title and the grounds are the line under it', async () => {
         const embed = await outcome();
         expect(embed.title).toBe('👢 Kicked');
-        const [mention, grounds, paperwork] = embed.description.split('\n');
+        const [mention, grounds, returns] = embed.description.split('\n');
         expect(mention).toBe(`<@${spammer.id}>`);
         expect(grounds).toBe('**0.42 days old** at join, threshold is 14 days');
-        // Seven fields of equal weight became one subtext line of receipts.
-        expect(paperwork.startsWith('-# ')).toBe(true);
-        expect(paperwork).toContain('join attempt #2');
-        expect(paperwork).toContain('DM sent');
-        expect(paperwork).toContain('caught on join');
-        expect(embed.fields ?? []).toHaveLength(0);
+        // The only question anybody asks about a kicked joiner, answered in
+        // the header block instead of buried third in a grey line.
+        expect(returns).toMatch(/^Can rejoin <t:\d+:R>$/);
+    });
+
+    test('and the receipts are lines, not a run-on', async () => {
+        const embed = await outcome();
+        const named = embed.fields.filter(f => !isAside(f));
+        expect(named.map(f => f.name)).toEqual(['DM', 'Join attempt']);
+        expect(named[0].value).toBe('sent');
+        expect(named[1].value).toBe('#2');
+    });
+
+    // At #1 this is on every report the gate ever writes, which makes it
+    // furniture. Past #1 it is somebody working out how to get in.
+    test('a first attempt is background; a repeat is a line', async () => {
+        const first = await outcome({ attempt: 1 });
+        expect(first.fields.map(f => f.name)).not.toContain('Join attempt');
+        expect(first.fields[first.fields.length - 1].value).toContain('first attempt');
+
+        const again = await outcome({ attempt: 4 });
+        expect(again.fields.find(f => f.name === 'Join attempt').value).toBe('#4');
+        expect(again.fields[again.fields.length - 1].value).not.toContain('first attempt');
     });
 
     test('a failure leads with the error and still shows the grounds', async () => {
@@ -234,13 +292,103 @@ describe('the kick and ban report answers in the same order', () => {
         expect(embed.description).toContain('Missing Permissions');
         expect(embed.description).toContain('at join, threshold is');
         expect(embed.fields.map(f => f.name)).toContain('How to fix');
+        // Nothing is holding them out, so the date is when they stop being new.
+        expect(embed.description).toMatch(/Eligible <t:\d+:R>/);
     });
 
-    test('a temp-ban keeps the unban time as a group of its own', async () => {
+    // enforcement.js hands the ban scheduler decision.eligibleAt verbatim, so
+    // these were always the same instant. The report stated it twice, in two
+    // different weights, and the louder one was the less useful.
+    test('a temp-ban states the one moment once', async () => {
+        const unbanAt = Date.now() + 604_800_000;
         const embed = await outcome({
-            result: { ok: true, action: 'ban', dm: 'sent', unbanAt: Date.now() + 604_800_000 },
+            result: { ok: true, action: 'ban', dm: 'sent', unbanAt },
+            decision: { ageMs: 0.42 * 86_400_000, eligibleAt: unbanAt },
         });
         expect(embed.title).toBe('🔨 Temporarily banned');
-        expect(embed.fields.map(f => f.name)).toContain('Auto-unban');
+        expect(embed.description).toContain(`Ban lifts <t:${Math.floor(unbanAt / 1000)}:R>`);
+        expect(embed.fields.map(f => f.name)).not.toContain('Auto-unban');
+
+        const stamps = JSON.stringify(embed).match(/<t:\d+:/g) ?? [];
+        const unbanStamps = stamps.filter(s => s.includes(String(Math.floor(unbanAt / 1000))));
+        expect(unbanStamps).toHaveLength(2); // the relative and the absolute, one line
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The rule, applied to every embed the join gate writes rather than to the one
+// that was photographed. A moderation channel is read at a glance, and a glance
+// resolves a line at a time: two facts on one line is a comparison, five is a
+// paragraph in grey, and the eye gives up on it.
+//
+// So: a line carries one fact, unless the facts are two halves of one thought
+// ("Timed out for 60 min · 2 messages removed"). Background is the exception
+// that proves it, because there the items really are equals and none of them
+// is going to change anybody's mind.
+describe('no report strings its facts together', () => {
+    const linesOf = (embed) => [
+        ...String(embed.description ?? '').split('\n'),
+        ...(embed.fields ?? []).flatMap(f => String(f.value ?? '').split('\n')),
+    ].map(l => l.trim()).filter(Boolean);
+
+    /** Every embed the gate can write, built with realistic input. */
+    async function everyEmbed() {
+        const decision = { ageMs: 0.26 * 86_400_000, eligibleAt: Date.now() + 12 * 86_400_000 };
+        const base = { user: spammer, decision, origin: 'join', attempt: 1, dryRun: false };
+        const out = [
+            outcomeEmbed(settings, { ...base, result: { ok: true, action: 'kick', dm: 'delivered' } }).embed.data,
+            outcomeEmbed(settings, { ...base, attempt: 5, origin: 'sweep', result: { ok: true, action: 'ban', dm: 'failed', unbanAt: decision.eligibleAt } }).embed.data,
+            outcomeEmbed(settings, { ...base, dryRun: true, result: { ok: true, action: 'kick', dm: 'would send' } }).embed.data,
+            outcomeEmbed(settings, { ...base, result: { ok: false, benign: true, action: 'kick', error: 'they already left', dm: 'n/a' } }).embed.data,
+            outcomeEmbed(settings, { ...base, result: { ok: false, action: 'kick', error: 'Missing Permissions', hint: 'Move my role above theirs.', dm: 'n/a' } }).embed.data,
+        ];
+
+        const capture = async (fn) => {
+            const { guild, channel } = fakeGuild();
+            await fn(guild);
+            return channel.send.mock.calls[0][0].embeds[0].data;
+        };
+
+        out.push((await report({ action: 'ban', actionOutcome: { ok: true, unbanAt: Date.now() + 604_800_000, deleted: 2 } })).embed);
+        out.push((await report({ result: { tier: 'watch', score: 22, source: 'profile', signals: [], inviteInfo: { known: true, code: 'abc', inviterId: 'u9', usesInWindow: 3 } } })).embed);
+        out.push(await capture(g => logUnban(g, settings, { userId: 'u1', bannedAtMs: Date.now() - 86_400_000, ok: true })));
+        out.push(await capture(g => logUnban(g, settings, { userId: 'u1', bannedAtMs: Date.now() - 86_400_000, ok: false, error: 'Unknown Ban' })));
+        out.push(await capture(g => logConfigChange(g, settings, { actor: { id: 'u1' }, summary: 'Minimum account age is now 14 days.', details: 'min_account_age_minutes 10080 -> 20160' })));
+        out.push(await capture(g => logTest(g, settings, 'kick', { id: 'u1' })));
+        out.push(await capture(g => logBurst(g, settings, { count: 9, windowSeconds: 60 })));
+        return out;
+    }
+
+    test('a line carries one fact, or two that are one thought', async () => {
+        const offenders = [];
+        for (const embed of await everyEmbed()) {
+            for (const line of linesOf(embed)) {
+                const items = line.split(' · ').length;
+                const limit = isAside({ value: line }) ? 3 : 2;
+                if (items > limit) offenders.push(`${embed.title}: ${line}`);
+            }
+        }
+        expect(offenders).toEqual([]);
+    });
+
+    test('and the background line is the only grey one', async () => {
+        for (const embed of await everyEmbed()) {
+            const grey = (embed.fields ?? []).filter(isAside);
+            expect(grey.length).toBeLessThanOrEqual(1);
+            // It is last, because it is the least of it.
+            if (grey.length) expect(embed.fields[embed.fields.length - 1]).toBe(grey[0]);
+        }
+    });
+
+    // A label is the weight. Something that reads as a sentence is not a fact
+    // with a name, it is a paragraph wearing one.
+    test('every named fact is short enough to sit beside its label', async () => {
+        for (const embed of await everyEmbed()) {
+            for (const field of (embed.fields ?? []).filter(f => !isAside(f))) {
+                if (field.name === 'How to fix' || field.name === 'Why it fired') continue;
+                if (field.name === 'What they posted') continue;
+                expect(field.name.length).toBeLessThanOrEqual(14);
+            }
+        }
     });
 });
