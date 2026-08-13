@@ -45,14 +45,24 @@ const SOURCE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 const NAME_RULE = /^[a-z0-9_]{2,32}$/;
 
 function parseArgs(argv) {
-    const onlyAt = argv.indexOf('--only');
+    // Keys are collected from every form of the flag and split on commas OR
+    // whitespace, because `railway run` rewrites a comma in an argument as a
+    // space before the script ever sees it: `--only bored,sigh` arrives as
+    // `--only "bored sigh"`. Splitting on both costs nothing and a key can
+    // contain neither character.
+    const values = [];
+    for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === '--only') values.push(argv[++i] ?? '');
+        else if (argv[i].startsWith('--only=')) values.push(argv[i].slice('--only='.length));
+    }
+
     return {
         yes: argv.includes('--yes'),
         replace: argv.includes('--replace'),
         prune: argv.includes('--prune'),
-        only: onlyAt === -1
+        only: values.length === 0
             ? null
-            : new Set((argv[onlyAt + 1] ?? '').split(',').map(key => key.trim().toLowerCase()).filter(Boolean)),
+            : new Set(values.join(' ').split(/[,\s]+/).map(key => key.trim().toLowerCase()).filter(Boolean)),
     };
 }
 
@@ -67,6 +77,12 @@ function parseArgs(argv) {
  * that also said "20 uploaded". Cheap to detect, so it is detected before
  * anything is sent rather than discovered on the CDN afterwards.
  */
+/** Keys named by --only that no file in the folder answers to. */
+function unknownKeys(sources, only) {
+    if (!only) return [];
+    return [...only].filter(key => !sources.some(source => source.key === key));
+}
+
 function duplicateKeys(sources) {
     const byKey = new Map();
     for (const source of sources) {
@@ -197,6 +213,21 @@ async function main(argv = process.argv.slice(2), injected = null) {
         process.exit(1);
     }
 
+    // A filter that matches nothing must never read as success. Asked for two
+    // keys and told "nothing to do", the only available conclusion is that the
+    // work was already done, which is the opposite of what happened.
+    if (args.only) {
+        const unknown = unknownKeys(sources, args.only);
+        if (args.only.size === 0 || unknown.length > 0) {
+            console.error(args.only.size === 0
+                ? '--only was given no keys.'
+                : `--only named ${unknown.length === 1 ? 'a key' : 'keys'} with no source file: ${unknown.join(', ')}`);
+            console.error(`\nThe folder holds: ${sources.map(s => s.key).join(', ')}`);
+            console.error('Nothing has been sent.');
+            process.exit(1);
+        }
+    }
+
     const clashes = duplicateKeys(sources);
     if (clashes.length > 0) {
         console.error('Two files want the same emoji name. Discord takes the first and rejects the rest,');
@@ -256,6 +287,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-    sourceFiles, normalize, plan, apply, parseArgs, duplicateKeys,
+    sourceFiles, normalize, plan, apply, parseArgs, duplicateKeys, unknownKeys,
     NAME_RULE, SIZE, MAX_BYTES, EMOJI_DIR,
 };

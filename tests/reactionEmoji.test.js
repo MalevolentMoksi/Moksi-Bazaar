@@ -23,7 +23,8 @@ const { extractEmojiKey } = require('../src/commands/tools/speak');
 const { REACTION_EMOJI, REACTION_FALLBACK } = require('../src/utils/constants');
 const registry = require('../src/utils/emojiRegistry');
 const {
-    sourceFiles, normalize, plan, apply, parseArgs, duplicateKeys, NAME_RULE, MAX_BYTES, EMOJI_DIR,
+    sourceFiles, normalize, plan, apply, parseArgs, duplicateKeys, unknownKeys,
+    NAME_RULE, MAX_BYTES, EMOJI_DIR,
 } = require('../scripts/syncEmojis');
 
 const KEYS = ['smile', 'sad', 'shock', 'point', 'neutral'];
@@ -333,6 +334,36 @@ describe('the sync script decides before it sends', () => {
     test('--only is parsed from a comma list, case and spacing forgiven', () => {
         expect([...parseArgs(['--only', 'Bored, sigh']).only]).toEqual(['bored', 'sigh']);
         expect(parseArgs(['--yes']).only).toBeNull();
+    });
+
+    // `railway run node scripts/syncEmojis.js --only bored,sigh` delivers
+    // `["--only", "bored sigh"]`: the Railway CLI rewrites the comma as a
+    // space before the script sees a thing. The first version of this flag
+    // then matched no key at all and reported "nothing to do", which reads
+    // exactly like the work already being done.
+    test('a comma the CLI turned into a space still names two keys', () => {
+        expect([...parseArgs(['--only', 'bored sigh']).only]).toEqual(['bored', 'sigh']);
+    });
+
+    test('and every other spelling of the flag works too', () => {
+        expect([...parseArgs(['--only=bored,sigh']).only]).toEqual(['bored', 'sigh']);
+        expect([...parseArgs(['--only', 'bored', '--only', 'sigh']).only]).toEqual(['bored', 'sigh']);
+    });
+
+    test('a key with no source file is named as such, not silently skipped', () => {
+        const sources = src('bored', 'sigh');
+        expect(unknownKeys(sources, new Set(['bored']))).toEqual([]);
+        expect(unknownKeys(sources, new Set(['bored sigh']))).toEqual(['bored sigh']);
+        expect(unknownKeys(sources, new Set(['bore', 'sigh']))).toEqual(['bore']);
+        expect(unknownKeys(sources, null)).toEqual([]);
+    });
+
+    test('a flag with no value at all is empty rather than absent, which is not the same thing', () => {
+        // An empty Set is truthy, so this filtered out every source and did
+        // nothing quietly. main() now refuses to run on it.
+        const parsed = parseArgs(['--only']);
+        expect(parsed.only).not.toBeNull();
+        expect(parsed.only.size).toBe(0);
     });
 
     test('replacing deletes the old emoji before creating the new one', async () => {
