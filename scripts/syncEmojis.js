@@ -14,15 +14,17 @@
  * which is the word the model writes and the word src/utils/constants.js
  * describes. All three have to agree, and the tests check that they do.
  *
- *   node scripts/syncEmojis.js                 # dry run, prints the plan
- *   node scripts/syncEmojis.js --yes           # upload what is missing
- *   node scripts/syncEmojis.js --yes --replace # re-upload images that changed
- *   node scripts/syncEmojis.js --yes --prune   # delete emojis with no source file
+ *   node scripts/syncEmojis.js                        # dry run, prints the plan
+ *   node scripts/syncEmojis.js --yes                  # upload what is missing
+ *   node scripts/syncEmojis.js --yes --replace        # re-upload images that changed
+ *   node scripts/syncEmojis.js --yes --prune          # delete emojis with no source file
+ *   node scripts/syncEmojis.js --yes --replace --only bored,sad
  *
  * Nothing happens without --yes. Discord returns no checksum for an uploaded
  * emoji, so a changed image cannot be detected: --replace deletes and recreates
  * every one, which changes their ids. That is safe here precisely because no id
- * is written down anywhere; the bot reads them at boot.
+ * is written down anywhere; the bot reads them at boot. --only narrows any of
+ * this to named keys, for when one image is wrong and the other twenty are not.
  *
  * Needs TOKEN (or DISCORD_TOKEN) in the environment, the same one the bot uses.
  */
@@ -43,11 +45,37 @@ const SOURCE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 const NAME_RULE = /^[a-z0-9_]{2,32}$/;
 
 function parseArgs(argv) {
+    const onlyAt = argv.indexOf('--only');
     return {
         yes: argv.includes('--yes'),
         replace: argv.includes('--replace'),
         prune: argv.includes('--prune'),
+        only: onlyAt === -1
+            ? null
+            : new Set((argv[onlyAt + 1] ?? '').split(',').map(key => key.trim().toLowerCase()).filter(Boolean)),
     };
+}
+
+/**
+ * Source files that would fight over one emoji name.
+ *
+ * The name comes from the file's base name, so `bored.jpg` and `bored.webp`
+ * are two different pictures claiming one emoji. Discord takes whichever
+ * arrives first and rejects the rest with ALREADY_TAKEN, which means the set
+ * ends up holding a picture nobody chose: the loser's name is live, the
+ * winner's image is under it, and the only sign is one failed line in a log
+ * that also said "20 uploaded". Cheap to detect, so it is detected before
+ * anything is sent rather than discovered on the CDN afterwards.
+ */
+function duplicateKeys(sources) {
+    const byKey = new Map();
+    for (const source of sources) {
+        if (!byKey.has(source.key)) byKey.set(source.key, []);
+        byKey.get(source.key).push(path.basename(source.file));
+    }
+    return [...byKey.entries()]
+        .filter(([, files]) => files.length > 1)
+        .map(([key, files]) => ({ key, files }));
 }
 
 /** Every usable source image, as `{key, file}`, sorted for a stable plan. */
@@ -100,12 +128,17 @@ const dataUri = ({ buffer, mime }) => `data:${mime};base64,${buffer.toString('ba
  * @param {{key: string, file: string}[]} sources
  * @param {Map<string, {id: string, name: string}>} live what the app already owns
  */
-function plan(sources, live, { replace = false, prune = false } = {}) {
+function plan(sources, live, { replace = false, prune = false, only = null } = {}) {
+    // Orphans are always measured against the WHOLE folder, so --only never
+    // makes the other sixteen look abandoned.
     const orphans = [...live.values()].filter(emoji => !sources.some(s => s.key === emoji.name.toLowerCase()));
+    const selected = only ? sources.filter(s => only.has(s.key)) : sources;
     return {
-        create: sources.filter(s => !live.has(s.key)),
-        replace: replace ? sources.filter(s => live.has(s.key)) : [],
-        prune: prune ? orphans : [],
+        create: selected.filter(s => !live.has(s.key)),
+        replace: replace ? selected.filter(s => live.has(s.key)) : [],
+        // --only names what to touch; deleting everything else in the same
+        // breath would be the opposite of what it says.
+        prune: prune && !only ? orphans : [],
         orphans,
     };
 }
@@ -164,6 +197,15 @@ async function main(argv = process.argv.slice(2), injected = null) {
         process.exit(1);
     }
 
+    const clashes = duplicateKeys(sources);
+    if (clashes.length > 0) {
+        console.error('Two files want the same emoji name. Discord takes the first and rejects the rest,');
+        console.error('so the surviving emoji would carry a picture you did not choose:');
+        for (const clash of clashes) console.error(`  ${clash.key}  <-  ${clash.files.join(', ')}`);
+        console.error('\nRename one of them. Nothing has been sent.');
+        process.exit(1);
+    }
+
     let rest = injected;
     if (!rest) {
         const token = process.env.TOKEN || process.env.DISCORD_TOKEN;
@@ -213,4 +255,7 @@ if (require.main === module) {
     });
 }
 
-module.exports = { sourceFiles, normalize, plan, apply, parseArgs, NAME_RULE, SIZE, MAX_BYTES, EMOJI_DIR };
+module.exports = {
+    sourceFiles, normalize, plan, apply, parseArgs, duplicateKeys,
+    NAME_RULE, SIZE, MAX_BYTES, EMOJI_DIR,
+};

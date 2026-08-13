@@ -23,7 +23,7 @@ const { extractEmojiKey } = require('../src/commands/tools/speak');
 const { REACTION_EMOJI, REACTION_FALLBACK } = require('../src/utils/constants');
 const registry = require('../src/utils/emojiRegistry');
 const {
-    sourceFiles, normalize, plan, apply, parseArgs, NAME_RULE, MAX_BYTES, EMOJI_DIR,
+    sourceFiles, normalize, plan, apply, parseArgs, duplicateKeys, NAME_RULE, MAX_BYTES, EMOJI_DIR,
 } = require('../scripts/syncEmojis');
 
 const KEYS = ['smile', 'sad', 'shock', 'point', 'neutral'];
@@ -289,6 +289,50 @@ describe('the sync script decides before it sends', () => {
     test('nothing at all happens without --yes', () => {
         expect(parseArgs([]).yes).toBe(false);
         expect(parseArgs(['--yes']).yes).toBe(true);
+    });
+
+    // This one happened. bored.jpg and bored.webp both claimed the name
+    // `bored`; Discord took the jpg and rejected the webp as ALREADY_TAKEN,
+    // so the emoji called `bored` ended up holding the other picture entirely.
+    // One FAILED line in a run that also said "20 uploaded" is not a signal
+    // anybody catches, so the clash is now found before anything is sent.
+    test('two files claiming one name are caught before a single upload', () => {
+        const clashes = duplicateKeys([
+            { key: 'bored', file: 'emojis/bored.jpg' },
+            { key: 'bored', file: 'emojis/bored.webp' },
+            { key: 'sad', file: 'emojis/sad.webp' },
+        ]);
+        expect(clashes).toEqual([{ key: 'bored', files: ['bored.jpg', 'bored.webp'] }]);
+    });
+
+    test('the folder as it stands has no clash', () => {
+        expect(duplicateKeys(sourceFiles())).toEqual([]);
+    });
+
+    test('--only narrows the work to the keys named', () => {
+        const sources = src('bored', 'sad', 'yell');
+        const live = owned('bored', 'sad');
+        const steps = plan(sources, live, { replace: true, only: new Set(['bored']) });
+
+        expect(steps.replace.map(s => s.key)).toEqual(['bored']);
+        expect(steps.create).toEqual([]);
+    });
+
+    test('--only still creates a named key that does not exist yet', () => {
+        const steps = plan(src('bored', 'sigh'), owned('bored'), { only: new Set(['bored', 'sigh']) });
+        expect(steps.create.map(s => s.key)).toEqual(['sigh']);
+    });
+
+    test('--only never prunes, since it names what to touch', () => {
+        const steps = plan(src('bored'), owned('bored', 'goat_pet'), { prune: true, only: new Set(['bored']) });
+        expect(steps.prune).toEqual([]);
+        // Still reported, so the orphan does not become invisible.
+        expect(steps.orphans.map(e => e.name)).toEqual(['goat_pet']);
+    });
+
+    test('--only is parsed from a comma list, case and spacing forgiven', () => {
+        expect([...parseArgs(['--only', 'Bored, sigh']).only]).toEqual(['bored', 'sigh']);
+        expect(parseArgs(['--yes']).only).toBeNull();
     });
 
     test('replacing deletes the old emoji before creating the new one', async () => {
