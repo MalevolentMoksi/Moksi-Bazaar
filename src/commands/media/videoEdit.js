@@ -229,7 +229,7 @@ const addaudio = {
             opt.setName('media').setDescription('Video file (optional: uses recent media if omitted)').setRequired(false)
         )
         .addNumberOption(opt =>
-            opt.setName('volume').setDescription('Audio volume (0–2, default 1)').setMinValue(0).setMaxValue(2)
+            opt.setName('volume').setDescription('Audio volume (0-2, default 1)').setMinValue(0).setMaxValue(2)
         ),
     async execute(interaction) {
         await interaction.deferReply();
@@ -345,7 +345,7 @@ const shuffle = {
         .setName('shuffle')
         .setDescription('Randomly shuffle the frames of a video or GIF')
         .addIntegerOption(opt =>
-            opt.setName('frames').setDescription('Frames held in the shuffle cache (2–512, default 30)').setMinValue(2).setMaxValue(512)
+            opt.setName('frames').setDescription('Frames held in the shuffle cache (2-512, default 30)').setMinValue(2).setMaxValue(512)
         )
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Video or GIF (optional: uses recent media if omitted)').setRequired(false)
@@ -377,7 +377,7 @@ const fps = {
         .setName('fps')
         .setDescription('Change the frame rate of a video or GIF')
         .addNumberOption(opt =>
-            opt.setName('fps').setDescription('Target frames per second (1–60)').setRequired(true).setMinValue(1).setMaxValue(60)
+            opt.setName('fps').setDescription('Target frames per second (1-60)').setRequired(true).setMinValue(1).setMaxValue(60)
         )
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Video or GIF (optional: uses recent media if omitted)').setRequired(false)

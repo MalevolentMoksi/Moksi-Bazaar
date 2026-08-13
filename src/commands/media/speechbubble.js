@@ -35,7 +35,7 @@ const speechbubble = {
         )
         .addNumberOption(opt =>
             opt.setName('scale')
-                .setDescription('Bubble height as a fraction of the image (0.01–1.0, default 0.2)')
+                .setDescription('Bubble height as a fraction of the image (0.01-1.0, default 0.2)')
                 .setMinValue(0.01)
                 .setMaxValue(1.0)
         )

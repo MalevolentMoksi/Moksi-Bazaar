@@ -16,7 +16,7 @@ const uncaptionCmd = {
             opt.setName('media').setDescription('Captioned image, GIF, or video (optional: uses recent media if omitted)').setRequired(false)
         )
         .addIntegerOption(opt =>
-            opt.setName('threshold').setDescription('Color tolerance for detecting the caption (0–255, default 10)').setMinValue(0).setMaxValue(255)
+            opt.setName('threshold').setDescription('Color tolerance for detecting the caption (0-255, default 10)').setMinValue(0).setMaxValue(255)
         ),
     async execute(interaction) {
         const threshold = interaction.options.getInteger('threshold') ?? 10;

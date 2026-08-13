@@ -28,7 +28,7 @@ const hue = {
         .setName('hue')
         .setDescription('Rotate the hue (colors) of an image, GIF, or video')
         .addIntegerOption(opt =>
-            opt.setName('degrees').setDescription('Hue rotation in degrees (0–360, default 180)').setMinValue(0).setMaxValue(360)
+            opt.setName('degrees').setDescription('Hue rotation in degrees (0-360, default 180)').setMinValue(0).setMaxValue(360)
         )
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Image, GIF, or video (optional: uses recent media if omitted)').setRequired(false)
@@ -69,10 +69,10 @@ const jpeg = {
         .setName('jpeg')
         .setDescription('Crush an image, GIF, or video into a low-quality JPEG mess')
         .addIntegerOption(opt =>
-            opt.setName('strength').setDescription('Compression passes (1–60, default 30); higher = more destroyed').setMinValue(1).setMaxValue(60)
+            opt.setName('strength').setDescription('Compression passes (1-60, default 30); higher = more destroyed').setMinValue(1).setMaxValue(60)
         )
         .addIntegerOption(opt =>
-            opt.setName('quality').setDescription('JPEG quality per pass (1–31, default 10); lower = worse').setMinValue(1).setMaxValue(31)
+            opt.setName('quality').setDescription('JPEG quality per pass (1-31, default 10); lower = worse').setMinValue(1).setMaxValue(31)
         )
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Image, GIF, or video (optional: uses recent media if omitted)').setRequired(false)

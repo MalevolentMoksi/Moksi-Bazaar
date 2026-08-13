@@ -11,7 +11,7 @@ module.exports = {
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
     .addIntegerOption(o =>
       o.setName('limit')
-       .setDescription('Messages to scan (1–25, default 10)')
+       .setDescription('Messages to scan (1-25, default 10)')
        .setMinValue(1)
        .setMaxValue(25)
     ),

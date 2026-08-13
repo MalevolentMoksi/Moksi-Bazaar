@@ -60,10 +60,10 @@ const vibrato = {
         .setName('vibrato')
         .setDescription('Apply a wavy-pitch vibrato effect to a video or audio file')
         .addNumberOption(opt =>
-            opt.setName('frequency').setDescription('Vibrato speed in Hz (0.1–20000, default 5)').setMinValue(0.1).setMaxValue(20000)
+            opt.setName('frequency').setDescription('Vibrato speed in Hz (0.1-20000, default 5)').setMinValue(0.1).setMaxValue(20000)
         )
         .addNumberOption(opt =>
-            opt.setName('depth').setDescription('Vibrato depth (0–1, default 0.5)').setMinValue(0).setMaxValue(1)
+            opt.setName('depth').setDescription('Vibrato depth (0-1, default 0.5)').setMinValue(0).setMaxValue(1)
         )
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Video or audio (optional: uses recent media if omitted)').setRequired(false)
@@ -101,7 +101,7 @@ const videoloop = {
         .setName('videoloop')
         .setDescription('Loop a video (or audio) by duplicating its contents')
         .addIntegerOption(opt =>
-            opt.setName('count').setDescription('Extra times to repeat (1–15, default 1)').setMinValue(1).setMaxValue(15)
+            opt.setName('count').setDescription('Extra times to repeat (1-15, default 1)').setMinValue(1).setMaxValue(15)
         )
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Video or audio (optional: uses recent media if omitted)').setRequired(false)

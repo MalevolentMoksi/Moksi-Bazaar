@@ -19,7 +19,7 @@ module.exports = {
     .setDescription('Spin the roulette wheel and bet currency')
     .addSubcommand(sub =>
       sub.setName('number')
-         .setDescription('Bet on one or more specific numbers (0–36)')
+         .setDescription('Bet on one or more specific numbers (0-36)')
          .addStringOption(opt =>
            opt.setName('numbers')
               .setDescription('Comma-separated numbers to bet on (e.g., 3,7,25)')
