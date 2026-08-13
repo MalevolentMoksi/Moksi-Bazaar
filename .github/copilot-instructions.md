@@ -88,7 +88,7 @@ Central repository for all configuration values:
 - `MEMORY_LIMITS` - Message/memory limits (conversation context, fetch limits, etc.)
 - `TIMEOUTS` - API call and interaction timeouts
 - `EMBED_COLORS` - Consistent color scheme for all embeds
-- `GOAT_EMOJIS` - Animated emoji mappings
+- `REACTION_EMOJI` / `REACTION_FALLBACK` - reaction key descriptions, no ids: the ids are read from the Discord API at boot by `emojiRegistry.js`
 - Helper functions: `getColorForAttitude()`, `getEmojiForAttitude()`, `isOwner()`
 
 #### apiHelpers.js
@@ -284,7 +284,7 @@ Optional:
 - **Cost optimization**: `buildConversationContext()` only analyzes images in the newest message
 - Caches media descriptions in `media_cache` table to avoid redundant API calls (~60-70% hit rate)
 - User sentiment tracked in `user_preferences` table via `analyzeMessageSentiment()`
-- Personality uses custom animated emojis (`GOAT_EMOJIS` object)
+- Replies end with a reaction face owned by the application; images live in `emojis/`, are uploaded by `scripts/syncEmojis.js`, and are resolved at boot by `src/utils/emojiRegistry.js`
 - **Cache control enabled**: System prompts cached for 20% input cost savings on repeated calls
 
 ### Media Analysis

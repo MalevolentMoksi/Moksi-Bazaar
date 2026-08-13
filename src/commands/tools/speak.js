@@ -26,8 +26,8 @@ const telemetry = require('../../utils/telemetry');
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { handleCommandError, sendError } = require('../../utils/errorHandler');
 const {
-  GOAT_EMOJIS,
-  GOAT_EMOJI_DESCRIPTIONS,
+  REACTION_EMOJI,
+  REACTION_FALLBACK,
   ATTITUDE_INSTRUCTIONS,
   SPEAK_DISABLED_REPLIES,
   MEMORY_LIMITS,
@@ -36,6 +36,7 @@ const {
   botCapabilities,
   isOwner
 } = require('../../utils/constants');
+const { emojiFor, emojiHints, emojiKeys } = require('../../utils/emojiRegistry');
 const logger = require('../../utils/logger');
 
 // ── LATENCY BUDGET ──────────────────────────────────────────────────────────
@@ -545,55 +546,76 @@ function formatParticipants(participants, contexts, askerId, profiles = new Map(
 
 // ── EMOJI KEY EXTRACTION ────────────────────────────────────────────────────
 /**
- * Pulls the trailing emoji key off a reply.
+ * Discord's own emoji syntax: `:smile:` and `<:smile:123>` / `<a:smile:123>`.
+ * Neither shape occurs in written prose, which is the whole reason they can be
+ * stripped from anywhere in a reply while a bare word cannot.
+ */
+const EMOJI_SYNTAX = /<a?:([a-z0-9_]+):\d+>|:([a-z0-9_]+):/gi;
+
+/**
+ * Pulls the reaction key off a reply, whatever shape the model wrote it in.
  *
- * The previous implementation matched `\b(goat_...|none)\b` anywhere in the
- * response, so an ordinary sentence containing the word "none" had that word
- * deleted from it. Worse, because only the first match was consumed, the real
- * key on the last line then survived and leaked into the message as raw text:
- * "that's none of your concern" + goat_sleep became
- * "that's  of your concern goat_sleep".
+ * Two rules, and the split between them is the point.
  *
- * So: the last non-empty line is consumed only when the WHOLE line is a key or
- * "none". As a safety net for the model ignoring the format, a `goat_*` token
- * at the very end of that line is also stripped; those tokens never occur in
- * natural prose, so unlike "none" they cannot be a false positive.
+ * A key in Discord's emoji syntax is unambiguous, so it is removed wherever it
+ * appears. This is the bug that shipped: told to answer with a key on its own
+ * line, the model wrote ":goat_pet:" at the end of a sentence instead, and the
+ * old matcher only accepted a bare token followed by `.!?`. A trailing colon
+ * defeated it, so the key was sent to the channel as literal text.
  *
+ * A bare key is a different animal now that the keys are ordinary English
+ * words. "sad" or "point" at the end of a line is far more likely to be the
+ * reply than a reaction, so a bare key is only ever consumed when it is alone
+ * on the last line AND something is left to send afterwards. A reply whose
+ * entire content is the word "bored" is a one-word answer, not a stray key.
+ *
+ * @param {string} rawContent
+ * @param {string[]} keys keys the model was offered; anything else is somebody
+ *   else's emoji and is left in the text untouched
  * @returns {{replyText: string, emojiKey: string|null}}
  */
-function extractEmojiKey(rawContent) {
-  const lines = String(rawContent ?? '').split('\n');
+function extractEmojiKey(rawContent, keys = Object.keys(REACTION_EMOJI)) {
+  const known = new Set(keys.map(key => String(key).toLowerCase()));
+  let emojiKey = null;
 
+  // Pass 1: the unambiguous forms, line by line so the cleanup after a removal
+  // only ever touches the line it happened on.
+  const lines = String(rawContent ?? '').split('\n').map(line => {
+    let touched = false;
+    const stripped = line.replace(EMOJI_SYNTAX, (match, mention, shortcode) => {
+      const key = String(mention ?? shortcode).toLowerCase();
+      if (!known.has(key)) return match;
+      emojiKey = emojiKey ?? key;
+      touched = true;
+      return '';
+    });
+    if (!touched) return line;
+    // Close the hole the key left: doubled spaces, and a separator that was
+    // only there to hold the key on. \p{Pd} is every width of dash without
+    // naming one; sentence-ending punctuation is deliberately kept, because
+    // "you serious? :shock:" still ends in a question.
+    return stripped
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/[ \t]*[,;:\p{Pd}]+[ \t]*$/u, '')
+      .replace(/[ \t]+$/, '');
+  });
+
+  // Pass 2: the documented format, a bare key alone on the last line.
   let last = lines.length - 1;
   while (last >= 0 && lines[last].trim() === '') last--;
-  if (last < 0) return { replyText: '', emojiKey: null };
 
-  const lineText = lines[last].trim();
-  const candidate = lineText.toLowerCase();
-
-  // Case 1: the line is exactly the key (the documented format).
-  if (candidate === 'none') {
-    return { replyText: lines.slice(0, last).join('\n').trim(), emojiKey: null };
-  }
-  if (Object.prototype.hasOwnProperty.call(GOAT_EMOJIS, candidate)) {
-    return { replyText: lines.slice(0, last).join('\n').trim(), emojiKey: candidate };
-  }
-
-  // Case 2: the model appended the key inline. Safe to strip because a
-  // `goat_*` token is never a real word. "none" is deliberately excluded here.
-  const inline = lineText.match(/\b(goat_[a-z_]+)\s*[.!?]*$/i);
-  if (inline) {
-    const key = inline[1].toLowerCase();
-    if (Object.prototype.hasOwnProperty.call(GOAT_EMOJIS, key)) {
-      // Trim whatever separator preceded it. The Unicode punctuation class
-      // covers dashes of every width without naming one literally.
-      const trimmedLine = lineText.slice(0, inline.index).replace(/[\s\p{P}]+$/u, '').trim();
-      const rebuilt = [...lines.slice(0, last), trimmedLine].join('\n').trim();
-      return { replyText: rebuilt, emojiKey: key };
+  if (last >= 0) {
+    const candidate = lines[last].trim().toLowerCase().replace(/[.!?]+$/, '');
+    const isKey = known.has(candidate);
+    if (isKey || candidate === 'none') {
+      const rest = lines.slice(0, last).join('\n').trim();
+      // "none" means the model declined the slot, which says nothing about an
+      // emoji it deliberately wrote into the text above.
+      if (rest) return { replyText: rest, emojiKey: isKey ? candidate : emojiKey };
     }
   }
 
-  return { replyText: String(rawContent ?? '').trim(), emojiKey: null };
+  return { replyText: lines.join('\n').trim(), emojiKey };
 }
 
 // Turn raw interaction count into a short relationship-age phrase
@@ -841,10 +863,17 @@ module.exports = {
         ? `#${interaction.channel?.name ?? 'unknown'} in the server "${interaction.guild.name}"`
         : 'a direct message';
 
-      // Emoji list with semantic hints so the AI picks meaningfully.
-      const emojiHints = Object.keys(GOAT_EMOJIS)
-        .map(key => `${key} (${GOAT_EMOJI_DESCRIPTIONS[key] || 'n/a'})`)
-        .join(', ');
+      // Only what the application actually owns, with the hint that tells the
+      // model which one is the right one. An empty registry drops the whole
+      // block below rather than asking for a pick from a list of nothing.
+      const availableEmoji = emojiKeys();
+      const emojiBlock = availableEmoji.length === 0 ? '' : `
+- After your reply text, on a new line by itself, write exactly ONE key from this list, nothing else on that line. Write "none" if nothing fits.
+   Available: ${emojiHints()}
+- These keys name reaction images, not you. They are NOT a description of you and say nothing about what you are. Never write a key inside your reply text, never wrap one in colons, and never take an identity from one.
+Example output format:
+yeah that's pretty fair
+${availableEmoji.includes('neutral') ? 'neutral' : availableEmoji[0]}`;
 
       const userRoleContext = userIsOwner
         ? "CREATOR (Moksi): you respect him, though you tease him."
@@ -885,13 +914,7 @@ ${lengthRule}
 - If a reply lands more naturally as two or three very short beats, put each beat on its own line; each line is sent as its own message, like a person typing. Never force it, and never exceed three.${adaptiveLength ? ' Beats are for short quips only; a longer answer stays one single message.' : ''}` : ''}
 
 REACTION EMOJI:
-- Do NOT use standard emojis (😂, 💀, etc.) in your reply text.
-- After your reply text, on a new line by itself, write exactly ONE key from this list, nothing else on that line. Write "none" if nothing fits.
-   Available: ${emojiHints}
-- These keys are internal filenames for this server's reaction images. They are NOT a description of you and say nothing about what you are. Never mention a key in your reply text and never take an identity from one.
-Example output format:
-yeah that's pretty fair
-goat_meditate
+- Do NOT use standard emojis (😂, 💀, etc.) in your reply text.${emojiBlock}
 
 SITUATION:
 - It is ${situation} (local time for this community).
@@ -1041,22 +1064,21 @@ ${memoryText}`;
         );
       }
 
-      // 7. EMOJI PARSING: only ever consume the trailing key line.
+      // 7. EMOJI PARSING. The key is stripped whatever shape it arrived in,
+      //    because a key that reaches the channel as text is worse than no
+      //    reaction at all.
       const { replyText: parsedText, emojiKey } = extractEmojiKey(rawContent);
       let replyText = parsedText;
-      let finalEmoji = emojiKey ? (GOAT_EMOJIS[emojiKey] || '') : '';
+      let finalEmoji = emojiFor(emojiKey);
 
-      // Fallback: map attitude/sentiment to emojis that actually exist in GOAT_EMOJIS
+      // Fallback when the model declined the slot, or picked a key whose image
+      // has not been uploaded. emojiFor returns '' for anything the app does
+      // not own, so an empty registry simply means no reaction, never a broken
+      // mention in the message.
       if (!finalEmoji) {
         const lvl = userContext.attitudeLevel;
-        if (lvl === 'hostile') {
-          finalEmoji = GOAT_EMOJIS.goat_scream;
-        } else if (lvl === 'cautious') {
-          finalEmoji = GOAT_EMOJIS.goat_meditate;
-        } else if (lvl === 'friendly') {
-          finalEmoji = GOAT_EMOJIS.goat_smile;
-        } else if (lvl === 'familiar') {
-          finalEmoji = GOAT_EMOJIS.goat_small_bleat;
+        if (REACTION_FALLBACK[lvl]) {
+          finalEmoji = emojiFor(REACTION_FALLBACK[lvl]);
         } else {
           // Only the neutral case consults the sentiment verdict, and only
           // if it arrives within a short grace: an emoji is never worth
@@ -1066,14 +1088,16 @@ ${memoryText}`;
             new Promise(resolve => { const t = setTimeout(() => resolve(null), 1_000); t.unref?.(); }),
           ]);
           if (verdict && verdict.originalSentiment <= SENTIMENT_THRESHOLDS.AUTO_EMOJI_NEGATIVE) {
-            finalEmoji = GOAT_EMOJIS.goat_exhausted;
+            finalEmoji = emojiFor(REACTION_FALLBACK.negativeSentiment);
           } else if (verdict && verdict.originalSentiment >= SENTIMENT_THRESHOLDS.AUTO_EMOJI_POSITIVE) {
-            finalEmoji = GOAT_EMOJIS.goat_smile;
+            finalEmoji = emojiFor(REACTION_FALLBACK.positiveSentiment);
           }
         }
       }
 
-      if (!replyText) replyText = "bleat.";
+      // Only reachable when the model wrote nothing but a reaction. A message
+      // has to carry something, and silence in this voice is three dots.
+      if (!replyText) replyText = '...';
 
       // 8. DELIVERY. With multi-message on, each short line the model wrote
       //    becomes its own message with a typing gap, the way a person sends

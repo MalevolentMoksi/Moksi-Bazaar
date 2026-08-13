@@ -5,9 +5,11 @@
 // prompts carried that identity, which is exactly how a persona survives
 // being removed from the one you remembered.
 //
-// The reaction emoji are still goat images and their KEY NAMES still say so;
-// that is deliberate and stays. What must not come back is a prompt telling
-// the model what it is.
+// The reaction emoji were the last thing carrying the name: eleven goat images
+// whose keys sat in the same prompt as the identity block. They have been
+// replaced by faces named after what they express, so the disclaimer changed
+// job rather than going away. The faces are of a character, and a character is
+// exactly the kind of thing a model will decide it is.
 
 const fs = require('fs');
 const path = require('path');
@@ -30,9 +32,10 @@ describe('no prompt tells the model it is an animal', () => {
         }
     });
 
-    test('the emoji keys are explicitly disclaimed, since they still say goat', () => {
+    test('the emoji keys are explicitly disclaimed, whatever they are named', () => {
         // Without this the identity walks straight back in through the key
-        // names sitting in the same prompt.
+        // names sitting in the same prompt. It said "goat" before and says
+        // "sad" now; either way the model is told the list is not about it.
         const speak = read('src/commands/tools/speak.js');
         expect(speak).toContain('NOT a description of you');
     });
@@ -47,10 +50,20 @@ describe('no prompt tells the model it is an animal', () => {
         }
     });
 
-    test('the goat emoji themselves are untouched: they were explicitly kept', () => {
+    test('the last of the goat is gone from the emoji table too', () => {
         const constants = read('src/utils/constants.js');
-        expect(constants).toContain('goat_meditate');
-        expect(constants).toContain('GOAT_EMOJIS');
+        expect(constants).toContain('REACTION_EMOJI');
+        expect(constants).not.toContain('GOAT_EMOJIS');
+        // "bleat." was the reply when the model wrote nothing but a key, so
+        // the species survived in the one line nobody looked at.
+        expect(read('src/commands/tools/speak.js')).not.toContain('bleat');
+    });
+
+    test('and nothing in the bot bleats, rests as a goat, or names a species', () => {
+        const { SPEAK_DISABLED_REPLIES } = require('../src/utils/constants');
+        for (const line of SPEAK_DISABLED_REPLIES) {
+            expect(line.toLowerCase()).not.toMatch(/goat|bleat/);
+        }
     });
 });
 

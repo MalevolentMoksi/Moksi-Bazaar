@@ -278,19 +278,54 @@ const EMBED_COLORS = {
 };
 
 // ── EMOJIS ──────────────────────────────────────────────────────────────────
-// Animated goat emojis (server-specific)
-const GOAT_EMOJIS = {
-    goat_cry: '<a:goat_cry:1395455098716688424>',
-    goat_puke: '<a:goat_puke:1398407422187540530>',
-    goat_meditate: '<a:goat_meditate:1395455714901884978>',
-    goat_hurt: '<a:goat_hurt:1395446681826234531>',
-    goat_exhausted: '<a:goat_exhausted:1397511703855366154>',
-    goat_boogie: '<a:goat_boogie:1396947962252234892>',
-    goat_small_bleat: '<a:goat_small_bleat:1395444644820684850>',
-    goat_scream: '<a:goat_scream:1399489715555663972>',
-    goat_smile: '<a:goat_smile:1399444751165554982>',
-    goat_pet: '<a:goat_pet:1273634369445040219>',
-    goat_sleep: '<a:goat_sleep:1395450280161710262>'
+/**
+ * The reaction faces the model may end a reply with, and what each one means.
+ *
+ * Keys, not ids: the id of every one of these is read from the Discord API at
+ * boot by emojiRegistry, because an id written into source cannot be told apart
+ * from a working one once it stops resolving. A key here with no uploaded image
+ * is offered to nobody, so adding a line to this table does nothing until
+ * `emojis/<key>.<ext>` exists and `node scripts/syncEmojis.js` has run.
+ *
+ * The descriptions are written to be mutually exclusive. Sixteen faces of the
+ * same person are easy to confuse, and a hint like "annoyed" on three of them
+ * makes the choice a coin flip; each line below names the thing that makes
+ * that face the only right answer.
+ */
+const REACTION_EMOJI = {
+    angry:     'snapping at someone, actually annoyed rather than playing at it',
+    bored:     'tuned out, nothing here is holding your attention',
+    confused:  'thrown by what was just said, genuinely not following',
+    dazed:     'vacant, nothing behind the eyes, no thought at all',
+    huh:       'a blank "???", you have no idea what they are on about',
+    neutral:   'a flat stare, deliberately no reaction',
+    peace:     'a casual sign-off, leaving it there, "sure, whatever"',
+    point:     'calling attention to one specific thing, "that, there"',
+    sad:       'genuinely down about it, not joking',
+    scold:     'telling someone off, an exasperated lecture',
+    shock:     'caught off guard, did not see that coming',
+    smile:     'sly and pleased, smug approval',
+    talking:   'mid-sentence, making a point in passing',
+    tired:     'worn out, a long day of exactly this',
+    unamused:  'not laughing, unimpressed by the attempt',
+    upset:     'hurt, taking it badly',
+    yell:      'a loud outburst, shouting it',
+};
+
+/**
+ * What to react with when the model picked nothing.
+ *
+ * Every value has to be a key of REACTION_EMOJI; a fallback pointing at a
+ * missing key silently produced no emoji at all, which is how the old
+ * `goat_small_bleat` mapping survived long after anyone read it.
+ */
+const REACTION_FALLBACK = {
+    hostile: 'angry',
+    cautious: 'neutral',
+    friendly: 'smile',
+    familiar: 'talking',
+    negativeSentiment: 'tired',
+    positiveSentiment: 'smile',
 };
 
 // Nuanced persona instruction per attitude level (all 5 buckets, not just 3)
@@ -302,25 +337,10 @@ const ATTITUDE_INSTRUCTIONS = {
     friendly: "You actually like this one. Warm but never gushing. Easy to joke with, still understated."
 };
 
-// Short semantic hints so the AI picks emojis meaningfully instead of blindly
-const GOAT_EMOJI_DESCRIPTIONS = {
-    goat_cry:         'crying / genuinely hurt',
-    goat_puke:        'disgust / revulsion',
-    goat_meditate:    'pensive / thinking / skeptical',
-    goat_hurt:        'mild pain / disappointment',
-    goat_exhausted:   'tired / done with it',
-    goat_boogie:      'excited / dancing / happy',
-    goat_small_bleat: 'chatty / unbothered / small talk',
-    goat_scream:      'shocked / angry / alarmed',
-    goat_smile:       'pleased / approval / warm',
-    goat_pet:         'affection / genuine care',
-    goat_sleep:       'bored / indifferent / uninterested'
-};
-
 // ── MESSAGES ────────────────────────────────────────────────────────────────
 const SPEAK_DISABLED_REPLIES = [
     "Sorry, no more talking for now.",
-    "The goat rests.",
+    "Off duty.",
     "Shush.",
     "No."
 ];
@@ -411,8 +431,8 @@ module.exports = {
     
     // Visual
     EMBED_COLORS,
-    GOAT_EMOJIS,
-    GOAT_EMOJI_DESCRIPTIONS,
+    REACTION_EMOJI,
+    REACTION_FALLBACK,
     ATTITUDE_INSTRUCTIONS,
 
     // Messages

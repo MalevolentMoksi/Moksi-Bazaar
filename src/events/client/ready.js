@@ -3,6 +3,7 @@
 const { EmbedBuilder } = require('discord.js');
 const { init } = require('../../utils/db');
 const { initPresence } = require('../../utils/presence');
+const { loadEmojis } = require('../../utils/emojiRegistry');
 const { startReminderScheduler } = require('../../commands/tools/remind.js');
 const { initWarnReminderScheduler } = require('../../utils/warnReminderScheduler');
 const { initJoinGate } = require('../../utils/joinGate');
@@ -92,6 +93,10 @@ module.exports = {
     // session already agrees with the toggle.
     await runBootStep(results, 'Embed mode', () => loadModes());
     await runBootStep(results, 'Presence', () => initPresence(client));
+    // Reaction faces. Their ids live on Discord's side rather than in the
+    // source, so this is the one moment they are read; a failure here costs
+    // the emoji on replies and nothing else.
+    await runBootStep(results, 'Reaction emojis', () => loadEmojis(client));
     await runBootStep(results, 'Reminder scheduler', () => startReminderScheduler(client));
     await runBootStep(results, 'Warn reminder scheduler', () => initWarnReminderScheduler(client));
     // initJoinGate swallows its own errors: a broken gate must not take the
