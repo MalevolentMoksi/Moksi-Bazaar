@@ -53,7 +53,7 @@ CONVERSATION:
 Answer in strict JSON, nothing else, exactly this shape:
 {"worth": true, "hook": "the ONE thing the bot's line would add, under 20 words", "mode": "banter"}
 
-mode: "question" = someone wants a real answer; "banter" = riffing or joking;
+mode: "question" = someone wants a real answer, including a playful ask for real information; "banter" = riffing or joking;
 "heavy" = something serious or emotional; "media" = the point is an image,
 video or link someone shared; "callout" = they are talking about the bot.
 hook: leave it empty when the bot has nothing to add.`;

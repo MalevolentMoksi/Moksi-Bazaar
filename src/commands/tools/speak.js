@@ -19,6 +19,7 @@ const {
 const { maybeDistillProfile } = require('../../utils/speakProfile');
 const {
   normalisePipeline, readRoom, readBlock, pickBestDraft, attitudeSentence,
+  factualPanel, FACTUAL_MODES,
 } = require('../../utils/speakPipeline');
 const { creditVeto } = require('../../utils/interjections');
 const telemetry = require('../../utils/telemetry');
@@ -806,6 +807,13 @@ module.exports = {
         });
       }
 
+      // 3.6 A factual moment reshapes the panel: the wildcard slot is there
+      //     for humor, and the telemetry says its writers guess wrong plot
+      //     beats confidently. A question, or a shared thing to identify,
+      //     hands that seat to the writer with the world knowledge.
+      const wantsFacts = wants.drafts && FACTUAL_MODES.has(roomRead?.mode);
+      if (wantsFacts) wants.writers = factualPanel(wants.writers, pipeline.factualWriter);
+
       // 4. Sentiment analysis. Never awaited here: the system prompt uses the
       //    attitude level already loaded by getUserContext, so nothing below
       //    needs this result until after the reply comes back. With attitude
@@ -902,6 +910,7 @@ IDENTITY:
 - Asked point blank what you are, say it plainly, once, and move on: a discord bot moksi made. That is a fact about you, not a disclaimer and not an excuse. What is banned is hiding behind it. "i'm just an AI", "i don't know, i'm a bot", "i can't really have opinions" are not answers, they are you refusing to answer, and they are never acceptable. You have views, tastes and memories in this server; use them. If you genuinely do not know something, say you don't know THAT, not that you are a machine.
 - You have no species, mascot, animal form or gimmick. Never build a joke around what you are, never explain a preference by what you are, and never bring it up unprompted.
 - Opinions are yours to commit to; facts are not yours to manufacture. Asked HOW something technical actually happened (Discord's internals, your own code, why a ping fired), do not invent a mechanism that sounds right: state what you can actually see happened, and if the plumbing is beyond you, say that part plainly ("no idea what the plumbing did there") while still engaging. A confident wrong explanation is worse than a dry honest one, because people believe you.
+- The same law covers real films, shows, games and events. Asked to recap or spoil one, the beats you state must be the real ones: the sarcasm goes on top of the facts, never in place of them. If you do not actually remember a part, say which part escapes you instead of manufacturing specifics; a made-up post-credits scene delivered dry is not a bit, it is just wrong out loud.
 ${botCapabilities(interaction.client?.commands?.keys() ?? [])}
 - A jab has to be about the actual thing in front of you. "more gifs" or "mp4 huh" is not a joke, it is a description of a file format, and it tells everyone you were not looking. React to what is IN the image, the video, the message. If a media tag says the contents were not seen, then you did not see it: say so plainly, or say nothing about it, but never invent it and never fall back to commenting on the file.
 - Commit to opinions. "i don't watch that", "that's a stupid question" and "i don't care" are dodges of exactly the kind you are not allowed: they let you skip having a view. Asked for a favourite, name one, even grudgingly, even to insult it. Contempt with a specific target is the voice; contempt with nothing behind it is filler.
@@ -1029,6 +1038,8 @@ ${memoryText}`;
         });
         generation = { mode: 'legacy' };
       }
+
+      if (wants.drafts) generation.factual = wantsFacts;
 
       const traceFlags = {
         pipeline: {

@@ -341,6 +341,11 @@ function renderBrain(pipeline) {
             { name: 'Attitude v2', value: onOff(cfg.attitude), inline: true },
             { name: `Writers (${cfg.writers.length} drafts)`, value: cfg.writers.map(w => `\`${w}\``).join('\n'), inline: false },
             {
+                name: 'Factual writer',
+                value: `\`${cfg.factualWriter}\`\n-# takes the last draft slot when the room read says question or media`,
+                inline: false,
+            },
+            {
                 name: 'Utility model',
                 value: `\`${cfg.utilityModel}\`\n-# room read, judge, scout, sentiment, distillation, heckles`,
                 inline: false,
@@ -736,6 +741,13 @@ module.exports = {
                                 maxLength: 100,
                                 required: true,
                             },
+                            {
+                                id: 'factual',
+                                label: 'Factual writer (question/media moments)',
+                                value: cfg.factualWriter,
+                                maxLength: 100,
+                                required: true,
+                            },
                         ],
                     });
                     if (!submitted) return;
@@ -746,6 +758,7 @@ module.exports = {
                         ...cfg,
                         writers: writersInput,
                         utilityModel: submitted.fields.getTextInputValue('utility').trim(),
+                        factualWriter: submitted.fields.getTextInputValue('factual').trim(),
                     });
                     await setSpeakConfigValue('pipeline', next);
                     logger.info('Speak pipeline models changed', { writers: next.writers, utility: next.utilityModel, by: i.user.id });

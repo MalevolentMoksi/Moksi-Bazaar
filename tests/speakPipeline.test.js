@@ -19,6 +19,7 @@ const { callOpenRouterAPI } = require('../src/utils/apiHelpers');
 const {
     DEFAULT_PIPELINE, normalisePipeline, readRoom, readBlock,
     pickBestDraft, recentOwnReplies, attitudeSentence,
+    factualPanel, FACTUAL_MODES,
 } = require('../src/utils/speakPipeline');
 
 beforeEach(() => jest.clearAllMocks());
@@ -217,5 +218,62 @@ describe('nothing legacy was lost', () => {
         expect(settings).toContain("'BEGIN'");
         expect(settings).toContain("'COMMIT'");
         expect(settings).toContain("'ROLLBACK'");
+    });
+});
+
+// The August 2026 telemetry round: the worst-rated cluster was fabricated
+// real-world facts, every draft equally wrong, judge marked blameless. A rule
+// or a criterion only selects among fabrications; the fix is a writer that
+// actually knows the answer, seated only for the moments that need one.
+describe('factual moments get a writer that knows things', () => {
+    test('the factual writer is a different lineage from the panel and the judge', () => {
+        expect(DEFAULT_PIPELINE.factualWriter).toBe('google/gemini-3.7-flash');
+        expect(DEFAULT_PIPELINE.writers).not.toContain(DEFAULT_PIPELINE.factualWriter);
+        expect(DEFAULT_PIPELINE.utilityModel).not.toBe(DEFAULT_PIPELINE.factualWriter);
+    });
+
+    test('a garbage factual writer falls back; a real id is kept', () => {
+        expect(normalisePipeline({ factualWriter: 'not a model' }).factualWriter)
+            .toBe(DEFAULT_PIPELINE.factualWriter);
+        expect(normalisePipeline({ factualWriter: 'vendor/some-model' }).factualWriter)
+            .toBe('vendor/some-model');
+    });
+
+    test('question and media are factual moments; banter and callout are not', () => {
+        expect(FACTUAL_MODES.has('question')).toBe(true);
+        expect(FACTUAL_MODES.has('media')).toBe(true);
+        expect(FACTUAL_MODES.has('banter')).toBe(false);
+        expect(FACTUAL_MODES.has('callout')).toBe(false);
+    });
+
+    test('the factual writer takes the last slot and never doubles up', () => {
+        expect(factualPanel(['a/x', 'a/x', 'b/y'], 'c/z')).toEqual(['a/x', 'a/x', 'c/z']);
+        expect(factualPanel(['a/x', 'c/z'], 'c/z')).toEqual(['a/x', 'c/z']);
+        expect(factualPanel([], 'c/z')).toEqual([]);
+        expect(factualPanel(['a/x'], null)).toEqual(['a/x']);
+    });
+
+    test('the model-id watchdog covers the factual writer', () => {
+        expect(read('src/utils/speakPipeline.js'))
+            .toMatch(/cfg\.factualWriter,\s*\n\s*\.\.\.Object\.values\(SPEAK_MODELS\)/);
+    });
+
+    test('the prepass is told a playful factual ask is still a question', async () => {
+        callOpenRouterAPI.mockResolvedValue('{"mode":"question","focus":"x","tone":0}');
+        await readRoom({ conversationContext: 'a: hi', askerName: 'a', userRequest: 'spoil me thor', utilityModel: 'm/m' });
+        const prompt = callOpenRouterAPI.mock.calls[0][1][0].content;
+        expect(prompt).toContain('a playful ask for real information');
+    });
+
+    test('speak.js swaps the panel on a factual read, and only then', () => {
+        const speak = read('src/commands/tools/speak.js');
+        expect(speak).toContain('FACTUAL_MODES.has(roomRead?.mode)');
+        expect(speak).toContain('factualPanel(wants.writers, pipeline.factualWriter)');
+    });
+
+    test('the persona extends the no-manufactured-facts law to real media', () => {
+        const speak = read('src/commands/tools/speak.js');
+        expect(speak).toContain('real films, shows, games and events');
+        expect(speak).toContain('the beats you state must be the real ones');
     });
 });

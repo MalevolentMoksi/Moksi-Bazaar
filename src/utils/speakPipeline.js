@@ -32,6 +32,21 @@ const logger = require('./logger');
 const FLASH = 'deepseek/deepseek-v4-flash-0731';
 const WILDCARD = 'moonshotai/kimi-k2.6';
 /**
+ * The writer for moments where being right matters more than being funny.
+ *
+ * The August 2026 telemetry round found the worst-rated cluster was fabricated
+ * real-world facts: movie recaps where every draft invented plot beats and
+ * post-credits scenes, all marked "judge picked fine, all drafts wrong". That
+ * is a knowledge failure of the budget writers, and no amount of judging fixes
+ * a panel where nobody knows the answer.
+ *
+ * Verified live on OpenRouter (August 2026): $0.38/M in, $1.88/M out, which at
+ * this bot's ~3k in / 80 out shape is ~$0.0013 a draft, cheaper than the
+ * wildcard slot it replaces. Different lineage from every other writer AND the
+ * judge, which the panel was missing entirely.
+ */
+const FACTUAL = 'google/gemini-3.7-flash';
+/**
  * The fourth voice on the interjection panel. A different lineage from the
  * other three on purpose: two DeepSeek drafts and a Moonshot draft already
  * rhyme with each other, and the point of a wider panel is a wider spread to
@@ -73,6 +88,8 @@ const DEFAULT_PIPELINE = Object.freeze({
      *  personas, fed by the pre-pass instead of a per-message model cascade. */
     attitude: false,
     writers: Object.freeze([FLASH, FLASH, WILDCARD]),
+    /** Takes the last panel slot when the room read says the moment is factual. */
+    factualWriter: FACTUAL,
     /** Pre-pass, scout and judge all run here: tiny outputs, price barely matters. */
     utilityModel: FLASH,
     interjection: DEFAULT_INTERJECTION_PROFILE,
@@ -105,6 +122,9 @@ function normalisePipeline(raw) {
     cfg.writers = cleanWriters(raw.writers, 4) ?? cfg.writers;
     if (typeof raw.utilityModel === 'string' && MODEL_ID_RE.test(raw.utilityModel.trim())) {
         cfg.utilityModel = raw.utilityModel.trim();
+    }
+    if (typeof raw.factualWriter === 'string' && MODEL_ID_RE.test(raw.factualWriter.trim())) {
+        cfg.factualWriter = raw.factualWriter.trim();
     }
 
     if (raw.interjection && typeof raw.interjection === 'object') {
@@ -151,6 +171,7 @@ async function configuredModels() {
         ...cfg.writers,
         ...cfg.interjection.writers,
         cfg.utilityModel,
+        cfg.factualWriter,
         ...Object.values(SPEAK_MODELS),
     ])];
 }
@@ -158,12 +179,33 @@ async function configuredModels() {
 // ── READ THE ROOM ───────────────────────────────────────────────────────────
 
 const READ_MODES = {
-    question: 'a real question that wants a real answer',
+    question: 'a real question that wants a real answer; if it is about something real, the facts must be right',
     banter: 'banter; wit matters more than information',
     heavy: 'something genuinely serious; drop the bit and be straight',
     media: 'a reaction to something they shared; talk about its contents',
     callout: 'about you specifically; answer as yourself, no bit',
 };
+
+/**
+ * Which modes want the factual writer on the panel. `media` is included
+ * because identifying what was shared is a knowledge task too: "it's thor,
+ * just a bad comment" was a media reply, not a question.
+ */
+const FACTUAL_MODES = new Set(['question', 'media']);
+
+/**
+ * The panel for a factual moment: the last slot, wildcard by convention in
+ * both the reply and interjection panels, hands its seat to the writer with
+ * the world knowledge. The telemetry behind this is unambiguous: on "spoil me
+ * X" asks every budget draft invented different wrong facts, so adding a rule
+ * or a judge criterion selects among fabrications. Only a writer that knows
+ * the answer fixes it.
+ */
+function factualPanel(writers, factualWriter) {
+    if (!factualWriter || !Array.isArray(writers) || writers.length === 0) return writers;
+    if (writers.includes(factualWriter)) return writers;
+    return [...writers.slice(0, -1), factualWriter];
+}
 
 function modeSentence(mode) {
     return READ_MODES[mode] || READ_MODES.banter;
@@ -204,7 +246,7 @@ ${ask}
 Answer in strict JSON, nothing else, exactly this shape:
 {"mode": "question" | "banter" | "heavy" | "media" | "callout", "focus": "the ONE concrete detail most worth reacting to, under 20 words", "tone": 0.0}
 
-mode: "question" = they want a real answer; "banter" = riffing, a joke opening; "heavy" = something serious or emotional; "media" = the point is an image/video/link they shared; "callout" = it is about the bot itself.
+mode: "question" = they want a real answer, and a playful ask for real information (a recap, a spoiler, who someone is) is still a question; "banter" = riffing, a joke opening; "heavy" = something serious or emotional; "media" = the point is an image/video/link they shared; "callout" = it is about the bot itself.
 tone: how ${askerName} is treating the bot here, -1 (hostile) to 1 (warm), 0 if unclear.`;
 
     try {
@@ -364,6 +406,7 @@ function attitudeSentence(userContext) {
 module.exports = {
     DEFAULT_PIPELINE,
     DEFAULT_INTERJECTION_PROFILE,
+    FACTUAL_MODES,
     normalisePipeline,
     getUtilityModel,
     configuredModels,
@@ -371,6 +414,7 @@ module.exports = {
     readBlock,
     modeSentence,
     extractJson,
+    factualPanel,
     pickBestDraft,
     recentOwnReplies,
     attitudeSentence,
