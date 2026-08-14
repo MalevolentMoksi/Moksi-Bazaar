@@ -1,6 +1,6 @@
 // src/commands/tools/relationoverview.js - Refactored with New Utilities
 const { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
-const { pool } = require('../../utils/db.js');
+const { pool, getSpeakProfilesBulk, getAttitudeTrendsBulk } = require('../../utils/db.js');
 const { callOpenRouterAPI } = require('../../utils/apiHelpers');
 const { getUtilityModel } = require('../../utils/speakPipeline');
 const { SPEAK_MODELS } = require('../../utils/constants');
@@ -28,7 +28,7 @@ async function getAllUserRelationships(limit = 20) {
     LIMIT $1
   `, [limit]);
 
-  return rows.map(row => ({
+  const relationships = rows.map(row => ({
     userId: row.user_id,
     displayName: row.display_name,
     attitudeLevel: row.attitude_level || 'neutral',
@@ -37,11 +37,29 @@ async function getAllUserRelationships(limit = 20) {
     lastSeen: row.last_seen,
     isActive: row.last_seen && (Date.now() - new Date(row.last_seen).getTime()) < (7 * 24 * 60 * 60 * 1000)
   }));
+
+  // Texture the flat rows: which way each relationship has been moving this
+  // week (the attitude ledger has recorded every shift all along; this is
+  // the first user-facing thing to read it), and the one thing the bot
+  // actually knows about each person, from the distilled profile.
+  const ids = relationships.map(r => r.userId);
+  const [trends, profiles] = await Promise.all([
+    getAttitudeTrendsBulk(ids).catch(() => new Map()),
+    getSpeakProfilesBulk(ids).catch(() => new Map()),
+  ]);
+  for (const rel of relationships) {
+    rel.drift = trends.get(rel.userId) ?? 0;
+    const hook = String(profiles.get(rel.userId) ?? '')
+      .split('\n')[0].replace(/^- /, '').trim();
+    rel.hook = hook || null;
+  }
+
+  return relationships;
 }
 
 // ── AI SUMMARY GENERATOR ──────────────────────────────────────────────────────
 async function generateRelationshipSummary(relationships) {
-  if (relationships.length === 0) return "i don't really know anyone yet.";
+  if (relationships.length === 0) return { text: "i don't really know anyone yet.", canned: false };
 
   const countBy = lvl => relationships.filter(r => r.attitudeLevel === lvl).length;
   const stats = {
@@ -90,8 +108,14 @@ No zoomer slang. No standard emojis. If mentioning names, use them naturally in 
     return null;
   });
 
+  // The canned line is marked as canned: the screenshot that triggered this
+  // rework was the fallback quietly wearing the AI summary's clothes.
   const warmCount = stats.friendly + stats.familiar;
-  return response || `i know ${stats.total} people. ${warmCount} are cool, the rest are testing my patience.`;
+  if (response) return { text: response, canned: false };
+  return {
+    text: `i know ${stats.total} people. ${warmCount} are cool, the rest are testing my patience.`,
+    canned: true,
+  };
 }
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
@@ -116,8 +140,11 @@ module.exports = {
       }
 
       let summaryText = null;
+      let summaryCanned = false;
       if (includeSummary) {
-        summaryText = await generateRelationshipSummary(relationships);
+        const summary = await generateRelationshipSummary(relationships);
+        summaryText = summary.text;
+        summaryCanned = summary.canned;
       }
 
       // Pagination logic: 20 users per page
@@ -133,6 +160,7 @@ module.exports = {
 
       const embed = createOverviewEmbed(getPageData(currentPage), {
         summary: summaryText,
+        summaryCanned,
         page: currentPage,
         totalPages
       });
@@ -167,6 +195,7 @@ module.exports = {
 
           const newEmbed = createOverviewEmbed(getPageData(currentPage), {
             summary: summaryText,
+            summaryCanned,
             page: currentPage,
             totalPages
           });

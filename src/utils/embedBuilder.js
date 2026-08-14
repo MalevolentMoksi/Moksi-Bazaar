@@ -100,6 +100,7 @@ function createRelationshipEmbed(userContext, targetUser, options = {}) {
 function createOverviewEmbed(relationships, options = {}) {
     const {
         summary = null,
+        summaryCanned = false,
         page = 1,
         totalPages = 1
     } = options;
@@ -113,57 +114,30 @@ function createOverviewEmbed(relationships, options = {}) {
         embed.setDescription(`*"${summary}"*\n`);
     }
 
-    // Group by attitude for better organization
-    const grouped = {
-        familiar: [],
-        friendly: [],
-        neutral: [],
-        cautious: [],
-        hostile: []
-    };
+    // Warmest first, and named for what the scores actually mean: friendly
+    // (the top band) used to render BELOW familiar, under a "Close Friends"
+    // label that belonged to the wrong tier.
+    const TIERS = [
+        { level: 'friendly', name: '💚 Actually likes' },
+        { level: 'familiar', name: '🙂 Warming up to' },
+        { level: 'neutral', name: '😐 Neutral' },
+        { level: 'cautious', name: '🤨 Cautious' },
+        { level: 'hostile', name: '🖕 Hostile' },
+    ];
 
+    const grouped = Object.fromEntries(TIERS.map(t => [t.level, []]));
     relationships.forEach(rel => {
         const level = rel.attitudeLevel || 'neutral';
         if (grouped[level]) grouped[level].push(rel);
     });
 
-    // Add fields for each non-empty group
-    if (grouped.familiar.length > 0) {
+    for (const tier of TIERS) {
+        if (grouped[tier.level].length === 0) continue;
         embed.addFields([{
-            name: '💚 Close Friends',
-            value: grouped.familiar.map((r, i) => formatRelationshipLine(r, i)).join('\n') || 'None',
-            inline: false
-        }]);
-    }
-
-    if (grouped.friendly.length > 0) {
-        embed.addFields([{
-            name: '😊 Friendly',
-            value: grouped.friendly.map((r, i) => formatRelationshipLine(r, i)).join('\n') || 'None',
-            inline: false
-        }]);
-    }
-
-    if (grouped.neutral.length > 0) {
-        embed.addFields([{
-            name: '😐 Neutral',
-            value: grouped.neutral.map((r, i) => formatRelationshipLine(r, i)).join('\n').substring(0, 1024) || 'None',
-            inline: false
-        }]);
-    }
-
-    if (grouped.cautious.length > 0) {
-        embed.addFields([{
-            name: '🤨 Cautious',
-            value: grouped.cautious.map((r, i) => formatRelationshipLine(r, i)).join('\n') || 'None',
-            inline: false
-        }]);
-    }
-
-    if (grouped.hostile.length > 0) {
-        embed.addFields([{
-            name: '🖕 Hostile',
-            value: grouped.hostile.map((r, i) => formatRelationshipLine(r, i)).join('\n') || 'None',
+            name: tier.name,
+            // Hooks made lines taller, so every tier gets the 1024 guard the
+            // neutral block alone used to carry.
+            value: grouped[tier.level].map(r => formatRelationshipLine(r)).join('\n').substring(0, 1024) || 'None',
             inline: false
         }]);
     }
@@ -171,7 +145,10 @@ function createOverviewEmbed(relationships, options = {}) {
     // Footer with stats and pagination
     const avgSentiment = relationships.reduce((sum, r) => sum + (r.sentimentScore || 0), 0) / relationships.length;
     let footerText = `Tracking ${relationships.length} users | Avg sentiment: ${avgSentiment >= 0 ? '+' : ''}${avgSentiment.toFixed(2)}`;
-    
+
+    if (summaryCanned) {
+        footerText += ' | summary model failed; canned line';
+    }
     if (totalPages > 1) {
         footerText += ` | Page ${page}/${totalPages}`;
     }
@@ -271,8 +248,21 @@ function formatRelationshipLine(rel) {
     const name = hasDisplayName ? rel.displayName : `<@${rel.userId}>`;
     const emoji = getEmojiForAttitude(rel.attitudeLevel);
     const sentimentStr = rel.sentimentScore ? ` (${rel.sentimentScore > 0 ? '+' : ''}${rel.sentimentScore.toFixed(2)})` : '';
+
+    // Which way this week has been moving, from the attitude ledger. The
+    // 0.05 bar keeps the arrow for real movement: one ordinary reading
+    // shifts a score by ~0.015, so an arrow means a pattern, not a mood.
+    const drift = Number(rel.drift) || 0;
+    const driftIcon = drift >= 0.05 ? ' ↗' : drift <= -0.05 ? ' ↘' : '';
+
     const activeIcon = rel.isActive ? '🟢' : '';
-    return `${emoji} **${name}** - ${rel.interactionCount || 0} msgs${sentimentStr} ${activeIcon}`;
+    let line = `${emoji} **${name}** - ${rel.interactionCount || 0} msgs${sentimentStr}${driftIcon} ${activeIcon}`;
+
+    // The one thing the bot actually knows about them, from the distilled
+    // profile: it is what separates a row from the seven identical rows
+    // around it.
+    if (rel.hook) line += `\n-# ${String(rel.hook).slice(0, 120)}`;
+    return line;
 }
 
 // Classification lives in utils/trend.js (canonical 0.15 threshold; this

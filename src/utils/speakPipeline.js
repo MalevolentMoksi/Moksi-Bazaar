@@ -26,7 +26,7 @@
  */
 
 const { callOpenRouterAPI } = require('./apiHelpers');
-const { BOT_IDENTITY, SPEAK_MODELS, REACTION_EMOJI } = require('./constants');
+const { BOT_IDENTITY, SPEAK_MODELS, REACTION_EMOJI, SENTIMENT_THRESHOLDS } = require('./constants');
 const logger = require('./logger');
 
 const FLASH = 'deepseek/deepseek-v4-flash-0731';
@@ -445,12 +445,15 @@ function attitudeSentence(userContext) {
         : n < 60 ? `you have talked plenty (${n} exchanges)`
         : `they are a regular; you have talked a lot (${n} exchanges)`;
 
-    const feel = s <= -0.6 ? 'they have earned real hostility; be sharp and unwelcoming with them'
-        : s <= -0.25 ? 'they have been rude enough that you are guarded and terse with them'
-        : s < 0.25 ? (n >= 20
+    // The bands come from the same constants that set the attitude level, so
+    // the sentence can never contradict the tier shown everywhere else.
+    const T = SENTIMENT_THRESHOLDS;
+    const feel = s <= T.HOSTILE_THRESHOLD ? 'they have earned real hostility; be sharp and unwelcoming with them'
+        : s <= T.CAUTIOUS_THRESHOLD ? 'they have been rude enough that you are guarded and terse with them'
+        : s < T.FAMILIAR_THRESHOLD ? (n >= 20
             ? 'no strong feelings either way; familiar, not close'
             : 'no history to speak of; dry and indifferent, like a stranger')
-        : s < 0.6 ? 'you are warming to them; a little less guarded than usual'
+        : s < T.FRIENDLY_THRESHOLD ? 'you are warming to them; a little less guarded than usual'
         : 'you genuinely like this one; warm but never gushing';
 
     return `${age}; ${feel}.`;

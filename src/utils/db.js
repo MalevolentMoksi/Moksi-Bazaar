@@ -1702,6 +1702,29 @@ async function recordAttitudeChange(userId, { delta, newScore, newLevel, rawSent
     );
 }
 
+/**
+ * Net attitude movement per user over the last `days`, one query for the
+ * whole room. Feeds the overview's trend arrows: the ledger already records
+ * every shift and its reason, and until now nothing user-facing read it.
+ *
+ * @returns {Promise<Map<string, number>>} userId -> summed delta
+ */
+async function getAttitudeTrendsBulk(userIds, days = 7) {
+    const out = new Map();
+    const ids = [...new Set(userIds)].filter(Boolean);
+    if (ids.length === 0) return out;
+
+    const { rows } = await pool.query(
+        `SELECT user_id, SUM(delta) AS drift
+         FROM attitude_ledger
+         WHERE user_id = ANY($1) AND created_at > NOW() - ($2::int * INTERVAL '1 day')
+         GROUP BY user_id`,
+        [ids, days]
+    );
+    for (const row of rows) out.set(row.user_id, Number(row.drift) || 0);
+    return out;
+}
+
 /** Most recent first. */
 async function getAttitudeLedger(userId, limit = 10) {
     const { rows } = await pool.query(
@@ -2466,6 +2489,7 @@ module.exports = {
     // Attitude ledger
     recordAttitudeChange,
     getAttitudeLedger,
+    getAttitudeTrendsBulk,
     // Warns
     recordWarn,
     recordModAction,

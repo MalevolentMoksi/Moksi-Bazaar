@@ -94,15 +94,20 @@ const SENTIMENT_THRESHOLDS = {
     AUTO_EMOJI_NEGATIVE: -0.6,
     AUTO_EMOJI_POSITIVE: 0.6,
     
-    // Attitude level transitions
-    HOSTILE_THRESHOLD: -0.6,
-    CAUTIOUS_THRESHOLD: -0.25,
-    FAMILIAR_THRESHOLD: 0.25,
-    FRIENDLY_THRESHOLD: 0.6,
-    
-    // Impact factors
-    HIGH_IMPACT: 0.2,  // For messages with sentiment > 0.8
-    LOW_IMPACT: 0.1,   // For normal messages
+    // Attitude level transitions. Recalibrated 2026-08-14: the smoothing
+    // below makes a score converge on the average raw reading, and this
+    // room's banter reads 0.2-0.3, so the old familiar bar of 0.25 sat at
+    // the very ceiling of what sustained warmth could reach. After 41
+    // messages the creator himself stood at +0.06 and the overview was
+    // eight identical neutral rows: tiers nobody can reach are decoration.
+    HOSTILE_THRESHOLD: -0.4,
+    CAUTIOUS_THRESHOLD: -0.15,
+    FAMILIAR_THRESHOLD: 0.15,
+    FRIENDLY_THRESHOLD: 0.4,
+
+    // Impact factors: how far one reading moves the smoothed score.
+    HIGH_IMPACT: 0.3,   // For messages with sentiment > 0.8
+    LOW_IMPACT: 0.15,   // For normal messages
     MAX_CHANGE: 0.3    // Maximum single-message sentiment shift
 };
 
