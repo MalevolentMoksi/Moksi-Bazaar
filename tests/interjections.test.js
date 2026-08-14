@@ -95,6 +95,11 @@ describe('the silence gate', () => {
     const drafts = ['first draft', 'second draft', 'third draft'];
     const args = { drafts, conversationContext: 'a: hello\nb: hi', userPrompt: '(interjection)', utilityModel: 'x/y' };
 
+    // Candidates are seated in shuffled order; r ≈ 1 pins the identity
+    // permutation so seat numbers still name the drafts they always did.
+    beforeEach(() => jest.spyOn(Math, 'random').mockReturnValue(0.9999));
+    afterEach(() => Math.random.mockRestore());
+
     test('a judge that answers 0 posts nothing at all', async () => {
         callOpenRouterAPI.mockResolvedValue('0');
         expect(await pickBestDraft({ ...args, veto: true })).toBeNull();

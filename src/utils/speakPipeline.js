@@ -252,7 +252,11 @@ tone: how ${askerName} is treating the bot here, -1 (hostile) to 1 (warm), 0 if 
     try {
         const reply = await callOpenRouterAPI(utilityModel, [
             { role: 'user', content: prompt },
-        ], { maxTokens: 120, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'room_read' } });
+            // 220 rather than 120: three room reads in the August export came
+            // back "empty" by hitting the old cap mid-JSON. The read is
+            // ~60 tokens when healthy; the headroom only ever costs when a
+            // model rambles, and a truncated read costs the whole pre-pass.
+        ], { maxTokens: 220, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'room_read' } });
 
         const parsed = extractJson(reply);
         if (!parsed) return null;
@@ -346,7 +350,20 @@ async function pickBestDraft({ drafts, conversationContext, userPrompt, utilityM
 
     const tail = String(conversationContext ?? '').split('\n').slice(-12).join('\n');
     const ownReplies = recentOwnReplies(conversationContext);
-    const numbered = drafts.map((d, i) => `${i + 1}: ${stripReactionKey(d).replace(/\s+/g, ' ').trim()}`).join('\n');
+
+    // Candidates go in shuffled, and the permutation is logged. The August
+    // export's picks split 36/26/4 across three FIXED slots, which is either
+    // a wildcard that genuinely loses or a judge with first-position and
+    // same-family bias, and with a fixed order those are indistinguishable.
+    // order[displayPosition] = index into `drafts`.
+    const order = drafts.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+    }
+    const numbered = order
+        .map((originalIndex, pos) => `${pos + 1}: ${stripReactionKey(drafts[originalIndex]).replace(/\s+/g, ' ').trim()}`)
+        .join('\n');
 
     const vetoClause = veto
         ? `\n\nNobody asked this bot anything: it is about to interrupt a conversation it was not part of. That is only welcome when the remark is genuinely worth reading. If none of the candidates clears every bar below, answer 0 and it will stay silent, which is always an acceptable outcome. Do not settle for the least bad one.`
@@ -380,9 +397,12 @@ Judge in this order:
 ${answerLine}`;
 
     try {
+        // 16 tokens, not 6: four verdicts in the export came back with no
+        // digit in them, and a budget that cannot survive one stray word
+        // turns a working judge into a silent draft-one fallback.
         const verdict = await callOpenRouterAPI(utilityModel, [
             { role: 'user', content: prompt },
-        ], { maxTokens: 6, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'judge', extra: { candidates: drafts.length, veto } } });
+        ], { maxTokens: 16, temperature: 0, timeout: timeoutMs, telemetry: { kind: 'judge', extra: { candidates: drafts.length, veto, order: order.map(i => i + 1).join('') } } });
 
         const match = String(verdict ?? '').match(/\d+/);
         const picked = match ? Number(match[0]) : -1;
@@ -390,9 +410,11 @@ ${answerLine}`;
             logger.debug('[SPEAK] Judge vetoed every draft', { of: drafts.length });
             return null;
         }
-        const index = picked - 1;
+        // The verdict names a display position; the shuffle map turns it back
+        // into the draft that was actually standing there.
+        const index = picked >= 1 && picked <= order.length ? order[picked - 1] : -1;
         if (index >= 0 && index < drafts.length) {
-            logger.debug('[SPEAK] Judge picked draft', { index: picked, of: drafts.length });
+            logger.debug('[SPEAK] Judge picked draft', { position: picked, index: index + 1, of: drafts.length });
             return drafts[index];
         }
         // An unreadable verdict is not a veto; it is a judge that did not

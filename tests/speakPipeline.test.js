@@ -106,6 +106,11 @@ describe('judging drafts', () => {
     const drafts = ['first draft', 'second draft', 'third draft'];
     const base = { conversationContext: 'a: hi\nYou (Cooler Moksi): hello', userPrompt: 'a: hi', utilityModel: 'x/y' };
 
+    // Candidates are shuffled before judging; r ≈ 1 makes Fisher-Yates swap
+    // every element with itself, so these tests see the identity order.
+    beforeEach(() => jest.spyOn(Math, 'random').mockReturnValue(0.9999));
+    afterEach(() => Math.random.mockRestore());
+
     test('the winning number picks the draft', async () => {
         callOpenRouterAPI.mockResolvedValue('2');
         expect(await pickBestDraft({ drafts, ...base })).toBe('second draft');
@@ -285,6 +290,10 @@ describe('factual moments get a writer that knows things', () => {
 describe('the judge holds repetition and captions against a draft', () => {
     const base = { conversationContext: 'a: hi\nYou (Cooler Moksi): hello', userPrompt: 'a: hi', utilityModel: 'x/y' };
 
+    // Seating is shuffled; r ≈ 1 pins the identity permutation.
+    beforeEach(() => jest.spyOn(Math, 'random').mockReturnValue(0.9999));
+    afterEach(() => Math.random.mockRestore());
+
     test('a reused callback and a media caption are named losing conditions', async () => {
         callOpenRouterAPI.mockResolvedValue('1');
         await pickBestDraft({ drafts: ['a', 'b'], ...base });
@@ -321,5 +330,51 @@ describe('the judge holds repetition and captions against a draft', () => {
         const speak = read('src/commands/tools/speak.js');
         expect(speak).toContain('A callback lands once');
         expect(speak).toContain('a caption, not a reaction');
+    });
+});
+
+// The pick distribution across three FIXED slots was 36/26/4, which is either
+// a wildcard that genuinely loses or a judge with first-position bias, and a
+// fixed order cannot tell those apart. Shuffled seating with the permutation
+// logged makes the next export able to.
+describe('the judge cannot be gamed by seating order', () => {
+    const drafts = ['first draft', 'second draft', 'third draft'];
+    const base = { conversationContext: 'a: hi', userPrompt: 'a: hi', utilityModel: 'x/y' };
+
+    // Not every test in here spies; restore only when one did.
+    afterEach(() => Math.random.mockRestore?.());
+
+    test('the verdict names a seat; the shuffle map returns the draft that sat there', async () => {
+        // First Fisher-Yates step (i=2) draws j=0, second (i=1) keeps its
+        // place: order becomes [2,1,0], so seat 1 holds the third draft.
+        const rolls = [0.0, 0.9999];
+        jest.spyOn(Math, 'random').mockImplementation(() => rolls.shift() ?? 0.9999);
+        callOpenRouterAPI.mockResolvedValue('1');
+        expect(await pickBestDraft({ drafts, ...base })).toBe('third draft');
+    });
+
+    test('the permutation rides into telemetry so bias is measurable', async () => {
+        jest.spyOn(Math, 'random').mockReturnValue(0.9999);
+        callOpenRouterAPI.mockResolvedValue('2');
+        await pickBestDraft({ drafts, ...base });
+        const options = callOpenRouterAPI.mock.calls[0][2];
+        expect(options.telemetry.extra.order).toBe('123');
+    });
+
+    test('the judge and the room read have budgets that survive a stray word', async () => {
+        jest.spyOn(Math, 'random').mockReturnValue(0.9999);
+        callOpenRouterAPI.mockResolvedValue('1');
+        await pickBestDraft({ drafts, ...base });
+        expect(callOpenRouterAPI.mock.calls[0][2].maxTokens).toBe(16);
+
+        callOpenRouterAPI.mockResolvedValue('{"mode":"banter","focus":"","tone":0}');
+        await readRoom({ conversationContext: 'a: hi', askerName: 'a', userRequest: 'x', utilityModel: 'm/m' });
+        expect(callOpenRouterAPI.mock.calls[1][2].maxTokens).toBe(220);
+    });
+
+    test('twin writers run at different temperatures, so a panel cannot photocopy itself', () => {
+        const speak = read('src/commands/tools/speak.js');
+        expect(speak).toContain('nth * 0.15');
+        expect(speak).toContain('modelRuns.get(model)');
     });
 });

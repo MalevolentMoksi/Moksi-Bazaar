@@ -994,12 +994,21 @@ ${memoryText}`;
             wants.deadlineMs - (Date.now() - startedAt) - JUDGE_MIN_BUDGET_MS
           )
         );
-        const draftResults = await Promise.all(wants.writers.map((model, index) =>
-          callOpenRouterAPI(model, writerMessages, {
+        // Twin slots of the same model at the same temperature can collapse
+        // into byte-identical drafts (one shipped panel in the August export
+        // did), which pays twice for the same dice roll. Later duplicates run
+        // warmer, so a twin is a second opinion rather than a photocopy.
+        const modelRuns = new Map();
+        const draftResults = await Promise.all(wants.writers.map((model, index) => {
+          const nth = modelRuns.get(model) ?? 0;
+          modelRuns.set(model, nth + 1);
+          return callOpenRouterAPI(model, writerMessages, {
             ...writerOptions,
+            temperature: writerOptions.temperature + nth * 0.15,
             timeout: writerTimeout,
             telemetry: { kind: 'draft', extra: { index: index + 1 } },
-          })));
+          });
+        }));
 
         const drafts = draftResults.filter(Boolean);
         const timeLeft = wants.deadlineMs - (Date.now() - startedAt);
