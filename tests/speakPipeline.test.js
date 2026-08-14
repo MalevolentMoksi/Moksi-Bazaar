@@ -18,7 +18,7 @@ jest.mock('../src/utils/apiHelpers', () => ({
 const { callOpenRouterAPI } = require('../src/utils/apiHelpers');
 const {
     DEFAULT_PIPELINE, normalisePipeline, readRoom, readBlock,
-    pickBestDraft, recentOwnReplies, attitudeSentence,
+    pickBestDraft, stripReactionKey, recentOwnReplies, attitudeSentence,
     factualPanel, FACTUAL_MODES,
 } = require('../src/utils/speakPipeline');
 
@@ -275,5 +275,51 @@ describe('factual moments get a writer that knows things', () => {
         const speak = read('src/commands/tools/speak.js');
         expect(speak).toContain('real films, shows, games and events');
         expect(speak).toContain('the beats you state must be the real ones');
+    });
+});
+
+// The other August 2026 cluster: repetition. The "typo apology" bit was
+// referenced three times inside ten minutes, every repeat downvoted, and two
+// media replies were the media's name plus a stock jab. The judge is where
+// pleas become bars, so both faults are losing conditions now.
+describe('the judge holds repetition and captions against a draft', () => {
+    const base = { conversationContext: 'a: hi\nYou (Cooler Moksi): hello', userPrompt: 'a: hi', utilityModel: 'x/y' };
+
+    test('a reused callback and a media caption are named losing conditions', async () => {
+        callOpenRouterAPI.mockResolvedValue('1');
+        await pickBestDraft({ drafts: ['a', 'b'], ...base });
+        const prompt = callOpenRouterAPI.mock.calls[0][1][0].content;
+        expect(prompt).toContain('It does not repeat the bot');
+        expect(prompt).toContain('repetition, not memory');
+        expect(prompt).toContain('a caption, not a reaction');
+    });
+
+    test('the repetition window sees five own replies, not two', () => {
+        const log = ['one', 'two', 'three', 'four', 'five', 'six']
+            .map(t => `You (Cooler Moksi): ${t}`).join('\n');
+        expect(recentOwnReplies(log)).toEqual(['two', 'three', 'four', 'five', 'six']);
+    });
+
+    test('the judge reads candidates without their reaction-key plumbing', async () => {
+        callOpenRouterAPI.mockResolvedValue('1');
+        await pickBestDraft({ drafts: ['fine, keep the hat\n\nunamused', 'no'], ...base });
+        const prompt = callOpenRouterAPI.mock.calls[0][1][0].content;
+        expect(prompt).toContain('1: fine, keep the hat');
+        expect(prompt).not.toContain('unamused');
+    });
+
+    test('stripReactionKey mirrors the extractor: bare last line only, text must remain', () => {
+        expect(stripReactionKey('sure.\nsmile')).toBe('sure.');
+        expect(stripReactionKey('sure.\n\nnone')).toBe('sure.');
+        // A one-word reply that happens to be a key is a reply, not plumbing.
+        expect(stripReactionKey('tired')).toBe('tired');
+        // A key mid-prose is prose; only the trailing bare line is plumbing.
+        expect(stripReactionKey('i am tired of this')).toBe('i am tired of this');
+    });
+
+    test('the persona carries the same two lessons', () => {
+        const speak = read('src/commands/tools/speak.js');
+        expect(speak).toContain('A callback lands once');
+        expect(speak).toContain('a caption, not a reaction');
     });
 });

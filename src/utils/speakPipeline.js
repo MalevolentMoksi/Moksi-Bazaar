@@ -26,7 +26,7 @@
  */
 
 const { callOpenRouterAPI } = require('./apiHelpers');
-const { BOT_IDENTITY, SPEAK_MODELS } = require('./constants');
+const { BOT_IDENTITY, SPEAK_MODELS, REACTION_EMOJI } = require('./constants');
 const logger = require('./logger');
 
 const FLASH = 'deepseek/deepseek-v4-flash-0731';
@@ -277,8 +277,37 @@ function readBlock(read) {
 
 // ── JUDGE ───────────────────────────────────────────────────────────────────
 
-/** The bot's own recent lines, for the shape-variety criterion. */
-function recentOwnReplies(conversationContext, count = 2) {
+/**
+ * Strips the trailing reaction-key line off a draft before the judge sees it.
+ *
+ * The key is plumbing, not prose: left in place the judge compares which
+ * reaction image each writer asked for as if it were part of the reply, and
+ * "you goat_small_bleat" is noise in every candidate. Mirrors the rule in
+ * extractEmojiKey: only a bare key alone on the last line, and only when text
+ * remains, so a one-word reply that happens to be a key ("tired") survives.
+ */
+function stripReactionKey(text) {
+    const known = new Set(Object.keys(REACTION_EMOJI).map(k => k.toLowerCase()));
+    const lines = String(text ?? '').split('\n');
+    let last = lines.length - 1;
+    while (last >= 0 && lines[last].trim() === '') last--;
+    if (last < 0) return String(text ?? '').trim();
+
+    const bare = lines[last].trim().toLowerCase().replace(/[.!?]+$/, '');
+    if (known.has(bare) || bare === 'none') {
+        const rest = lines.slice(0, last).join('\n').trim();
+        if (rest) return rest;
+    }
+    return lines.join('\n').trim();
+}
+
+/**
+ * The bot's own recent lines, for the repetition and shape criteria. Five
+ * rather than two since the August 2026 export: the "typo apology" bit was
+ * re-referenced three replies apart, each repeat downvoted, and a two-line
+ * window cannot see a joke being run into the ground.
+ */
+function recentOwnReplies(conversationContext, count = 5) {
     const label = `${BOT_IDENTITY.ownLineLabel}:`;
     return String(conversationContext ?? '')
         .split('\n')
@@ -317,7 +346,7 @@ async function pickBestDraft({ drafts, conversationContext, userPrompt, utilityM
 
     const tail = String(conversationContext ?? '').split('\n').slice(-12).join('\n');
     const ownReplies = recentOwnReplies(conversationContext);
-    const numbered = drafts.map((d, i) => `${i + 1}: ${String(d).replace(/\s+/g, ' ').trim()}`).join('\n');
+    const numbered = drafts.map((d, i) => `${i + 1}: ${stripReactionKey(d).replace(/\s+/g, ' ').trim()}`).join('\n');
 
     const vetoClause = veto
         ? `\n\nNobody asked this bot anything: it is about to interrupt a conversation it was not part of. That is only welcome when the remark is genuinely worth reading. If none of the candidates clears every bar below, answer 0 and it will stay silent, which is always an acceptable outcome. Do not settle for the least bad one.`
@@ -342,9 +371,11 @@ ${numbered}
 
 Judge in this order:
 1. It reacts to the actual content of the moment, not a format or category, and invents nothing that is not in the log. If media was shared and no tag describes its contents, any reply describing those contents is invention and loses.
-2. It commits to something: an opinion, an answer, a specific jab. Contentless dismissal loses.
-3. Its shape differs from the recent replies above; if those were flat one-line sneers, another one loses.
-4. It reads like a person typing, not a bot performing.
+2. It does not repeat the bot. A candidate that reuses a joke, callback, opening, or verbal tic visible in the recent replies above loses to one that finds a new angle; referencing the same running joke a second time is repetition, not memory.
+3. For shared media, naming what it is plus a stock jab ("ah, the X clip. bold move.") is a caption, not a reaction: it loses to a reply that engages with the content itself or with why they posted it.
+4. It commits to something: an opinion, an answer, a specific jab. Contentless dismissal loses.
+5. Its shape differs from the recent replies above; if those were flat one-line sneers, another one loses.
+6. It reads like a person typing, not a bot performing.
 
 ${answerLine}`;
 
@@ -416,6 +447,7 @@ module.exports = {
     extractJson,
     factualPanel,
     pickBestDraft,
+    stripReactionKey,
     recentOwnReplies,
     attitudeSentence,
 };
