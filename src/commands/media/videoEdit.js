@@ -263,7 +263,7 @@ const addaudio = {
 
         const audioExt = extFromUrl(audioAttachment.url);
 
-        const videoPath = await downloadMediaToTemp(videoInfo);
+        const videoPath = await downloadMediaToTemp(videoInfo, interaction.client?.rest ?? null);
         const audioPath = await downloadToTemp(audioAttachment.url, audioExt);
         const outputPath = createTempPath('mp4');
         let sendPath = outputPath;

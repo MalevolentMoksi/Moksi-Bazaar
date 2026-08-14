@@ -75,7 +75,7 @@ const info = {
 
         let inputPath = null;
         try {
-            inputPath = await downloadMediaToTemp(mediaInfo);
+            inputPath = await downloadMediaToTemp(mediaInfo, interaction.client?.rest ?? null);
             const probeData = await probeFile(inputPath);
             const fileSize = fs.statSync(inputPath).size;
             const v = probeData.streams?.find(s => s.codec_type === 'video');

@@ -63,22 +63,94 @@ function mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo = al
         || (allowGifLikeVideo && allowImage && info.isGifLike);
 }
 
-async function downloadMediaToTemp(mediaInfo) {
-    const limits = { maxBytes: MAX_INPUT_BYTES, timeoutMs: DOWNLOAD_TIMEOUT_MS };
+// ---------------------------------------------------------------------------
+// Expired Discord CDN links
+// ---------------------------------------------------------------------------
+
+/** Discord's CDN hosts sign their URLs; every other host is left alone. */
+const DISCORD_CDN_RE = /^https?:\/\/(?:cdn|media)\.discordapp\.(?:com|net)\//i;
+
+/**
+ * When a signed Discord CDN link dies, in ms since epoch (the `ex` query
+ * param is hex epoch seconds). A link a user re-posts by copy-paste, or one
+ * carried inside a forwarded message, keeps the ORIGINAL signature: the
+ * Discord client re-signs what it renders, so the GIF looks perfectly alive
+ * while the raw URL answers 404 "This content is no longer available." to
+ * everyone else, this bot included.
+ */
+function discordUrlExpiry(url) {
+    if (!DISCORD_CDN_RE.test(String(url ?? ''))) return null;
     try {
-        return await downloadToTemp(mediaInfo.url, mediaInfo.ext, limits);
-    } catch (primaryErr) {
-        if (!mediaInfo.backupUrl || mediaInfo.backupUrl === mediaInfo.url) throw primaryErr;
+        const ex = new URL(url).searchParams.get('ex');
+        if (!ex || !/^[0-9a-f]{1,12}$/i.test(ex)) return null;
+        return parseInt(ex, 16) * 1000;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Asks Discord for fresh signatures on dead CDN links. discord.js does not
+ * wrap POST /attachments/refresh-urls, but the raw REST client speaks it
+ * fine. Best-effort by design: a refresh that fails leaves the original
+ * URLs to fail on their own and say why.
+ *
+ * @returns {Promise<Map<string, string>>} original -> refreshed
+ */
+async function refreshDiscordUrls(rest, urls) {
+    const refreshed = new Map();
+    const eligible = [...new Set(urls.filter(u => DISCORD_CDN_RE.test(String(u ?? ''))))];
+    if (!rest?.post || eligible.length === 0) return refreshed;
+    try {
+        const data = await rest.post('/attachments/refresh-urls', {
+            body: { attachment_urls: eligible },
+        });
+        for (const entry of data?.refreshed_urls ?? []) {
+            if (entry?.original && entry?.refreshed) refreshed.set(entry.original, entry.refreshed);
+        }
+    } catch (error) {
+        logger.warn('Attachment URL refresh failed', { count: eligible.length, error: error.message });
+    }
+    return refreshed;
+}
+
+async function downloadMediaToTemp(mediaInfo, rest = null) {
+    const limits = { maxBytes: MAX_INPUT_BYTES, timeoutMs: DOWNLOAD_TIMEOUT_MS };
+
+    // A signature that is already dead (or dies within the minute) gets its
+    // refresh BEFORE the doomed request rather than after it.
+    let urls = [mediaInfo.url, mediaInfo.backupUrl].filter((u, i, arr) => u && arr.indexOf(u) === i);
+    const dying = urls.filter(u => {
+        const at = discordUrlExpiry(u);
+        return at !== null && at < Date.now() + 60_000;
+    });
+    if (dying.length > 0) {
+        const fresh = await refreshDiscordUrls(rest, dying);
+        urls = urls.map(u => fresh.get(u) ?? u);
+    }
+
+    let lastErr = null;
+    for (const url of urls) {
         try {
-            return await downloadToTemp(mediaInfo.backupUrl, mediaInfo.ext, limits);
-        } catch (secondaryErr) {
-            const combinedErr = new Error(
-                `Failed to download media from both primary and proxy URLs: ${secondaryErr.message}`
-            );
-            combinedErr.cause = primaryErr;
-            throw combinedErr;
+            return await downloadToTemp(url, mediaInfo.ext, limits);
+        } catch (err) {
+            lastErr = err;
+            // A signature can also be revoked before its ex says so, which
+            // lands here as a 404/403. One refresh, one retry, then honesty.
+            if (/HTTP 40[34]/.test(String(err.message)) && DISCORD_CDN_RE.test(url)) {
+                const fresh = (await refreshDiscordUrls(rest, [url])).get(url);
+                if (fresh) {
+                    try {
+                        return await downloadToTemp(fresh, mediaInfo.ext, limits);
+                    } catch (retryErr) {
+                        lastErr = retryErr;
+                    }
+                }
+            }
         }
     }
+
+    throw lastErr ?? new Error('No URL to download media from.');
 }
 
 // ---------------------------------------------------------------------------
@@ -99,64 +171,74 @@ async function fetchRecentMedia(interaction, {
         const messages = await channel.messages.fetch({ limit: 20 });
 
         for (const msg of messages.values()) {
-            // Attachments
-            for (const att of msg.attachments.values()) {
-                const info = resolveMedia(att.url, att.contentType, att.proxyURL);
-                if (!info) continue;
-                const allowedByType = mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo, allowAudio);
-                const allowedByPredicate = !mediaPredicate || mediaPredicate(info);
-                if (allowedByType && allowedByPredicate) return info;
-            }
+            // A forwarded message carries its payload in messageSnapshots and
+            // nothing at the top level, so forwards were simply invisible
+            // here: the scanner walked past the GIF everyone was looking at.
+            // Snapshot attachments keep the original message's (often long
+            // expired) signatures; the download path knows how to refresh
+            // those, this scanner only has to see them.
+            const sources = [msg, ...(msg.messageSnapshots?.values?.() ? msg.messageSnapshots.values() : [])];
 
-            // Embed media (prefer GIF images first, then video, then static images)
-            for (const embed of msg.embeds) {
-                const embedType = String(embed.type || '').toLowerCase();
-                const embedUrl = String(embed.url || '');
-                // "GIF-like" means the embed represents an animated GIF even though
-                // Discord often serves it as a silent MP4 proxy. Detect it broadly:
-                //   - a "gifv" embed type,
-                //   - the embed's own URL is a .gif (klipy, imgur, most GIF hosts), or
-                //   - a known GIF host. This drives whether the video proxy is tagged
-                //     isGifLike so downstream commands output a GIF, not an MP4.
-                const gifHostRe = /tenor\.com|giphy\.com|klipy\.com|gfycat\.com|redgifs\.com/i;
-                const urlIsGif = /\.gif(\?|$)/i.test(embedUrl);
-                const isGifLikeEmbed = embedType === 'gifv' || urlIsGif || gifHostRe.test(embedUrl);
-
-                let staticImageCandidate = null;
-                if (allowImage) {
-                    // Prefer a real .gif URL from the embed's own url/image/thumbnail
-                    // over Discord's MP4 video proxy, so GIFs stay GIFs.
-                    const gifCandidates = [
-                        urlIsGif ? embedUrl : null,
-                        embed.image?.url, embed.image?.proxyURL,
-                        embed.thumbnail?.url, embed.thumbnail?.proxyURL,
-                    ].filter(Boolean);
-                    for (const src of gifCandidates) {
-                        const info = resolveMedia(src, null, src);
-                        if (info?.ext === 'gif' && (!mediaPredicate || mediaPredicate(info))) return info;
-                    }
-                    for (const key of ['image', 'thumbnail']) {
-                        const src = embed[key]?.url || embed[key]?.proxyURL;
-                        if (!src) continue;
-                        const info = resolveMedia(src, null, embed[key]?.proxyURL);
-                        if (!info?.isImage) continue;
-                        if (mediaPredicate && !mediaPredicate(info)) continue;
-                        if (!staticImageCandidate) staticImageCandidate = info;
-                    }
+            for (const source of sources) {
+                // Attachments
+                for (const att of (source.attachments?.values?.() ? source.attachments.values() : [])) {
+                    const info = resolveMedia(att.url, att.contentType, att.proxyURL);
+                    if (!info) continue;
+                    const allowedByType = mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo, allowAudio);
+                    const allowedByPredicate = !mediaPredicate || mediaPredicate(info);
+                    if (allowedByType && allowedByPredicate) return info;
                 }
 
-                if (allowVideo || (allowGifLikeVideo && allowImage && isGifLikeEmbed)) {
-                    const videoSrc = embed.video?.url || embed.video?.proxyURL;
-                    if (videoSrc) {
-                        // Tag the proxy as GIF-like when the embed is a GIF, so commands
-                        // (reverse, speed, …) emit a GIF instead of an MP4.
-                        const info = resolveMedia(videoSrc, null, embed.video?.proxyURL, { isGifLike: isGifLikeEmbed });
-                        const allowedByType = info && mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo);
-                        if (allowedByType && (!mediaPredicate || mediaPredicate(info))) return info;
-                    }
-                }
+                // Embed media (prefer GIF images first, then video, then static images)
+                for (const embed of (source.embeds ?? [])) {
+                    const embedType = String(embed.type || '').toLowerCase();
+                    const embedUrl = String(embed.url || '');
+                    // "GIF-like" means the embed represents an animated GIF even though
+                    // Discord often serves it as a silent MP4 proxy. Detect it broadly:
+                    //   - a "gifv" embed type,
+                    //   - the embed's own URL is a .gif (klipy, imgur, most GIF hosts), or
+                    //   - a known GIF host. This drives whether the video proxy is tagged
+                    //     isGifLike so downstream commands output a GIF, not an MP4.
+                    const gifHostRe = /tenor\.com|giphy\.com|klipy\.com|gfycat\.com|redgifs\.com/i;
+                    const urlIsGif = /\.gif(\?|$)/i.test(embedUrl);
+                    const isGifLikeEmbed = embedType === 'gifv' || urlIsGif || gifHostRe.test(embedUrl);
 
-                if (staticImageCandidate) return staticImageCandidate;
+                    let staticImageCandidate = null;
+                    if (allowImage) {
+                        // Prefer a real .gif URL from the embed's own url/image/thumbnail
+                        // over Discord's MP4 video proxy, so GIFs stay GIFs.
+                        const gifCandidates = [
+                            urlIsGif ? embedUrl : null,
+                            embed.image?.url, embed.image?.proxyURL,
+                            embed.thumbnail?.url, embed.thumbnail?.proxyURL,
+                        ].filter(Boolean);
+                        for (const src of gifCandidates) {
+                            const info = resolveMedia(src, null, src);
+                            if (info?.ext === 'gif' && (!mediaPredicate || mediaPredicate(info))) return info;
+                        }
+                        for (const key of ['image', 'thumbnail']) {
+                            const src = embed[key]?.url || embed[key]?.proxyURL;
+                            if (!src) continue;
+                            const info = resolveMedia(src, null, embed[key]?.proxyURL);
+                            if (!info?.isImage) continue;
+                            if (mediaPredicate && !mediaPredicate(info)) continue;
+                            if (!staticImageCandidate) staticImageCandidate = info;
+                        }
+                    }
+
+                    if (allowVideo || (allowGifLikeVideo && allowImage && isGifLikeEmbed)) {
+                        const videoSrc = embed.video?.url || embed.video?.proxyURL;
+                        if (videoSrc) {
+                            // Tag the proxy as GIF-like when the embed is a GIF, so commands
+                            // (reverse, speed, …) emit a GIF instead of an MP4.
+                            const info = resolveMedia(videoSrc, null, embed.video?.proxyURL, { isGifLike: isGifLikeEmbed });
+                            const allowedByType = info && mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo);
+                            if (allowedByType && (!mediaPredicate || mediaPredicate(info))) return info;
+                        }
+                    }
+
+                    if (staticImageCandidate) return staticImageCandidate;
+                }
             }
         }
     } catch {
@@ -258,7 +340,7 @@ async function handleMediaCommand(interaction, {
     let outputPath = null;
 
     try {
-        inputPath = await downloadMediaToTemp(mediaInfo);
+        inputPath = await downloadMediaToTemp(mediaInfo, interaction.client?.rest ?? null);
 
         // Normalize oversized/overlong input before processing (resolution/FPS/frames).
         // Audio has no resolution/FPS to cap, so it's never normalized.
@@ -345,4 +427,8 @@ async function handleMediaCommand(interaction, {
     }
 }
 
-module.exports = { handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp };
+module.exports = {
+    handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp,
+    // Exported so the expiry parser and refresh flow can be pinned in tests.
+    discordUrlExpiry, refreshDiscordUrls,
+};
