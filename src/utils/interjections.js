@@ -24,11 +24,17 @@ const lastInterjection = new Map();
 
 /**
  * How much of the cooldown is forgiven when a moment fails a late gate: it
- * costs the remaining quarter. Charging the full window would let one dull
+ * costs a tenth of the window. Charging the full window would let one dull
  * moment buy silence through an interesting one; charging nothing would put
  * the scout on every message in a busy channel.
+ *
+ * 0.9 rather than the original 0.75: the August 2026 export showed the scout
+ * reached only four moments in two days and fired zero interjections. The
+ * quality gates (the scout itself, then the writer's veto) are the ones
+ * deciding what gets said; the gates ahead of them only decide how often
+ * there is anything to judge, and they were starving the judges.
  */
-const REJECTED_COOLDOWN_FORGIVEN = 0.75;
+const REJECTED_COOLDOWN_FORGIVEN = 0.9;
 
 /**
  * Decides whether this message earns an unprompted remark, cheapest gate

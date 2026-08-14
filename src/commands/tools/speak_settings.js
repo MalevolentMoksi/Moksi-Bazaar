@@ -39,7 +39,12 @@ const MODAL_TIMEOUT_MS = 120_000;
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 
 const DEFAULT_INTERJECTIONS = Object.freeze({
-    enabled: false, channels: [], keywords: [], chance: 15, cooldownMinutes: 10,
+    // chance 30 / cooldown 6, loosened from 15 / 10 in August 2026: those
+    // dials predate the scout and the veto and were doing quality duty the
+    // quality gates now own. At the old settings the scout reached four
+    // moments in two days and fired nothing; the gates ahead of the judges
+    // only decide how often there is anything to judge.
+    enabled: false, channels: [], keywords: [], chance: 30, cooldownMinutes: 6,
     // The scout: reads the moment before the roll counts, and hands what it
     // found forward to the writer. Off by default like every other addition;
     // see utils/interjectionBouncer.js.

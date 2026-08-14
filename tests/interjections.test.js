@@ -218,21 +218,22 @@ describe('the gauntlet', () => {
         expect(verdict).toEqual({ ok: true, scout: { hook: 'the guns', mode: 'banter' } });
     });
 
-    test('a scout that refuses costs a quarter of the window, not all of it', async () => {
+    test('a scout that refuses costs a tenth of the window, not all of it', async () => {
         getSpeakConfigValue.mockImplementation(async (key) =>
             (key === 'interjections' ? config({ bouncer: true }) : null));
         callOpenRouterAPI.mockResolvedValue('{"worth": false, "hook": "", "mode": "banter"}');
 
         expect((await shouldInterject(fakeMessage(CHATTY))).ok).toBe(false);
 
-        // Two and a half minutes of a ten minute window remain: a dull moment
-        // must not buy silence through an interesting one.
+        // One minute of a ten minute window remains: a dull moment must not
+        // buy silence through an interesting one, and at four scouted moments
+        // in two days the old quarter was still starving the judges.
         const now = Date.now();
-        jest.spyOn(Date, 'now').mockReturnValue(now + 2 * 60_000);
+        jest.spyOn(Date, 'now').mockReturnValue(now + 30_000);
         callOpenRouterAPI.mockResolvedValue('{"worth": true, "hook": "x", "mode": "banter"}');
         expect((await shouldInterject(fakeMessage(CHATTY))).ok).toBe(false);
 
-        jest.spyOn(Date, 'now').mockReturnValue(now + 3 * 60_000);
+        jest.spyOn(Date, 'now').mockReturnValue(now + 90_000);
         expect((await shouldInterject(fakeMessage(CHATTY))).ok).toBe(true);
         Date.now.mockRestore();
     });
@@ -284,5 +285,20 @@ describe('the wiring', () => {
 
     test('an interjection never shows a typing indicator', () => {
         expect(read('src/events/client/messageCreate.js')).toContain('if (!interjecting) this._startTyping()');
+    });
+});
+
+// August 2026: the scout reached four moments in two days and fired nothing.
+// The chance/cooldown dials predate the scout and the veto and were doing
+// quality duty the quality gates now own; what is ahead of the judges only
+// decides how often there is anything to judge.
+describe('the gate feeds the judges instead of starving them', () => {
+    test('a declined moment costs a tenth of the window, not a quarter', () => {
+        expect(require('../src/utils/interjections').REJECTED_COOLDOWN_FORGIVEN).toBe(0.9);
+    });
+
+    test('the default dials are loose enough for moments to reach the scout', () => {
+        const settings = read('src/commands/tools/speak_settings.js');
+        expect(settings).toMatch(/chance: 30, cooldownMinutes: 6/);
     });
 });
