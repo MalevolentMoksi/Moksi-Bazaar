@@ -54,17 +54,40 @@ const rotate = {
     },
 };
 
+/**
+ * Every way /flip can turn a picture, in the order the picker shows them.
+ *
+ * One list, two jobs: the choices Discord offers and the work each one does,
+ * so a direction cannot be offered without something behind it. The first
+ * entry is the default, which keeps a bare /flip doing exactly what it always
+ * did. The right angles go through the same rotate the /rotate command uses,
+ * which pads video back to even dimensions afterwards.
+ */
+const FLIP_MOVES = [
+    { value: 'vertical', name: 'Vertical: upside down', run: (input, ext, ctx) => img.flip(input, ext, ctx) },
+    { value: 'horizontal', name: 'Horizontal: mirrored', run: (input, ext, ctx) => img.flop(input, ext, ctx) },
+    { value: '90', name: 'Quarter turn: 90 clockwise', run: (input, ext, ctx) => img.rotate(input, 90, ext, ctx) },
+    { value: '180', name: 'Half turn: 180', run: (input, ext, ctx) => img.rotate(input, 180, ext, ctx) },
+    { value: '270', name: 'Quarter turn: 270 clockwise', run: (input, ext, ctx) => img.rotate(input, 270, ext, ctx) },
+];
+
 const flip = {
     data: new SlashCommandBuilder()
         .setName('flip')
-        .setDescription('Flip an image, GIF, or video vertically')
+        .setDescription('Flip an image, GIF, or video: upside down, mirrored, or turned')
         .addAttachmentOption(opt =>
             opt.setName('media').setDescription('Image, GIF, or video to flip (optional: uses recent media if omitted)').setRequired(false)
+        )
+        .addStringOption(opt =>
+            opt.setName('direction').setDescription('Which way to turn it (default: vertical)').setRequired(false)
+                .addChoices(...FLIP_MOVES.map(({ name, value }) => ({ name, value })))
         ),
     async execute(interaction) {
+        const asked = interaction.options.getString('direction');
+        const move = FLIP_MOVES.find(m => m.value === asked) ?? FLIP_MOVES[0];
         await handleMediaCommand(interaction, {
             allowImage: true, allowVideo: true,
-            processFn: (inputPath, ext, context) => img.flip(inputPath, ext, context),
+            processFn: (inputPath, ext, context) => move.run(inputPath, ext, context),
         });
     },
 };
