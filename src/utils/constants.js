@@ -77,8 +77,17 @@ function botCapabilities(names) {
         + `advertise it; if something is not on it, you cannot do it.`;
 }
 
-// Sleepy command allowed guilds
-const SLEEPY_GUILDS = ['1217066705537204325', '1347922267853553806'];
+/**
+ * The only server the sleepytime leaderboard belongs to.
+ *
+ * Two jobs, deliberately the same list: it is the registration scope, so
+ * /sleepy is never published to any other guild's command picker
+ * (utils/commandScope.js), and it is the command's own runtime check for the
+ * case where an old registration survives. A second guild used to be listed
+ * here; it was cut on 2026-08-17. Its tallies stay in sleepy_counts, keyed by
+ * guild, unreachable and harmless.
+ */
+const SLEEPY_GUILDS = ['1347922267853553806'];
 
 // ── ATTITUDE & SENTIMENT ────────────────────────────────────────────────────
 const ATTITUDE_LEVELS = {

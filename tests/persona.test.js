@@ -112,7 +112,9 @@ describe('the bot has to actually say something', () => {
 
     test('it knows which commands exist, so it stops inventing features', () => {
         const { botCapabilities } = require('../src/utils/constants');
-        expect(speak()).toContain('botCapabilities(interaction.client?.commands?.keys()');
+        // Per guild, not per process: a command scoped to one server would
+        // otherwise be offered in the others (tests/commandScope.test.js).
+        expect(speak()).toContain('botCapabilities(commandNamesFor(interaction.client, interaction.guildId))');
         // A list it recites is worse than no list.
         expect(botCapabilities(['bj', 'caption'])).toMatch(/Never recite this list/);
     });

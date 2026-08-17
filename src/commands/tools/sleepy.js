@@ -1,10 +1,14 @@
 // src/commands/tools/sleepy.js
 //
-// RETIRED. The sleepytime leaderboard was an in-joke in a server that is no
-// longer alive, so the command and its three subcommands are withheld from
-// registration and from client.commands, which is also what tells the persona
-// which commands it has. The code and the tallies are kept: this is a
-// one-word change to bring back, not a rewrite.
+// The sleepytime leaderboard: an in-joke that only ever made sense in one
+// server. It was retired wholesale rather than trimmed, which took it away
+// from the server where it still meant something.
+//
+// It is back scoped instead, which is what it should have been from the start.
+// `guilds` keeps it out of every other server's command picker and out of the
+// persona's capability list there (utils/commandScope.js); the guild check in
+// execute() stays, because a registration outlives the deploy that made it and
+// Discord keeps offering whatever it was last given.
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db.js');
@@ -12,7 +16,7 @@ const { SLEEPY_GUILDS } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
 
 module.exports = {
-  retired: true,
+  guilds: SLEEPY_GUILDS,
   data: new SlashCommandBuilder()
     .setName('sleepy')
     .setDescription('Manage the sleepytime leaderboard')

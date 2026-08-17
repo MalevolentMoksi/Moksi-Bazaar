@@ -1,14 +1,17 @@
 // tests/retiredCommands.test.js
 //
-// A command can outlive its reason. /sleepy was an in-joke in a server that is
-// no longer alive, and deleting the file would take the tallies and the code
-// with it for what is really a display decision.
+// A command can outlive its reason. `retired: true` withholds it from
+// registration AND from client.commands, which matters more than it sounds:
+// client.commands is what tells the persona which commands the bot has, and
+// the system prompt says outright that the list is exhaustive. A command left
+// loaded but unregistered would produce a bot that offers something Discord
+// will not let anyone run.
 //
-// `retired: true` withholds it from registration AND from client.commands,
-// which matters more than it sounds: client.commands is what tells the persona
-// which commands the bot has, and the system prompt says outright that the
-// list is exhaustive. A command left loaded but unregistered would produce a
-// bot that offers something Discord will not let anyone run.
+// Nothing is retired today. /sleepy was the one user of this and came back as
+// a guild-scoped command instead (tests/commandScope.test.js), which is the
+// better answer whenever the real problem is "this belongs to one server"
+// rather than "this belongs to no one". The mechanism stays because the next
+// command to genuinely run out of reason should not have to be deleted.
 //
 // Checked at the source, like the other wiring guarantees in this suite: the
 // loader walks the real commands directory and starts real schedulers, so
@@ -21,14 +24,6 @@ const read = rel => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
 describe('a retired command is withheld, not deleted', () => {
     const loader = read('src/functions/handlers/handleCommands.js');
-
-    test('/sleepy declares itself retired and still exports a working command', () => {
-        const sleepy = require('../src/commands/tools/sleepy');
-        expect(sleepy.retired).toBe(true);
-        // Kept whole on purpose: bringing it back is deleting one line.
-        expect(typeof sleepy.execute).toBe('function');
-        expect(sleepy.data.name).toBe('sleepy');
-    });
 
     test('the loader skips it before it can reach either list', () => {
         // The order is the whole point: the guard sits above the two writes,
@@ -49,7 +44,9 @@ describe('a retired command is withheld, not deleted', () => {
         expect(loader).toMatch(/if \(cmd\.retired\) \{[\s\S]{0,120}usable\+\+;/);
     });
 
-    test('nothing else in the tree is retired by accident', () => {
+    test('nothing in the tree is retired by accident', () => {
+        // Also the canary for the other direction: a command that quietly
+        // acquires the flag disappears from Discord with no other symptom.
         const dir = path.join(__dirname, '..', 'src', 'commands');
         const retired = [];
         for (const category of fs.readdirSync(dir)) {
@@ -61,6 +58,6 @@ describe('a retired command is withheld, not deleted', () => {
                 }
             }
         }
-        expect(retired).toEqual(['tools/sleepy.js']);
+        expect(retired).toEqual([]);
     });
 });

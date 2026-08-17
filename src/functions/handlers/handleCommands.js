@@ -4,6 +4,7 @@ const path  = require('path');
 const crypto = require('crypto');
 const { REST, Routes } = require('discord.js');
 const { probeCapabilities, unmetRequirements } = require('../../utils/media/capabilities');
+const { guildAllowlist, scopeTo } = require('../../utils/commandScope');
 
 /**
  * Every boot used to PUT the full command list to every guild, whether or not
@@ -37,6 +38,8 @@ module.exports = (client) => {
     const retired = [];
     /** name -> the command module, so requirements can be read after loading. */
     const loaded = new Map();
+    /** name -> the guild ids it is offered in; absent means everywhere. */
+    const scopes = new Map();
     const commandsPath = path.join(__dirname, '..', '..', 'commands');
     for (const category of fs.readdirSync(commandsPath)) {
       const categoryPath = path.join(commandsPath, category);
@@ -61,6 +64,11 @@ module.exports = (client) => {
               client.commands.set(cmd.data.name, cmd);
               commands.push(cmd.data.toJSON());
               loaded.set(cmd.data.name, cmd);
+              // A command may belong to one server rather than to all of them.
+              // It still loads and still answers; it is simply left out of the
+              // payload everyone else gets. See utils/commandScope.js.
+              const only = guildAllowlist(cmd);
+              if (only) scopes.set(cmd.data.name, only);
               usable++;
             }
           }
@@ -83,10 +91,16 @@ module.exports = (client) => {
     if (retired.length) {
       console.log(`[COMMANDS] Withheld ${retired.length} retired: ${retired.join(', ')}`);
     }
+    if (scopes.size) {
+      console.log(`[COMMANDS] Guild-scoped: ${[...scopes].map(([n, g]) => `/${n} -> ${g.join(', ')}`).join('; ')}`);
+    }
     console.log(`[COMMANDS] Loaded ${commands.length} commands from disk`);
 
     // Store command JSON array for guildCreate event
     client.commandArray = commands;
+    // Read by guildCreate and by the persona's capability line, which promises
+    // the bot the list is exhaustive; both have to filter by the same rule.
+    client.commandScopes = scopes;
 
     const token = process.env.DISCORD_TOKEN ?? process.env.TOKEN;
     if (!token) {
@@ -155,7 +169,6 @@ module.exports = (client) => {
         console.error('[COMMANDS] Capability probe failed; publishing everything as loaded:', error.message);
       }
 
-      const payloadHash = hashCommands(publishable);
       const force = process.env.FORCE_REGISTER === '1';
 
       // 1. Fetch and delete existing global commands
@@ -174,41 +187,48 @@ module.exports = (client) => {
         ));
       }
 
-      // 2. Register per-guild commands, skipping guilds already up to date
+      // 2. Register per-guild commands, skipping guilds already up to date.
+      //
+      // The payload is no longer the same everywhere, so neither is its hash.
+      // A command can name the guilds it belongs to, and hashing the unscoped
+      // list once would mean the guild that gains or loses one sees no change
+      // and never gets the write.
       const guilds = [...client.guilds.cache.values()];
       const targets = [];
       for (const guild of guilds) {
-        if (force) { targets.push(guild); continue; }
+        const body = scopeTo(publishable, scopes, guild.id);
+        const hash = hashCommands(body);
+        if (force) { targets.push({ guild, body, hash }); continue; }
         try {
           const stored = await getSpeakConfigValue(`${HASH_KEY_PREFIX}${guild.id}`, null);
-          if (stored === payloadHash) {
+          if (stored === hash) {
             console.log(`Commands unchanged in ${guild.name}, skipping registration`);
             continue;
           }
         } catch {
           // Unreadable hash means "assume stale", never "assume fresh".
         }
-        targets.push(guild);
+        targets.push({ guild, body, hash });
       }
 
       const results = await Promise.allSettled(
-        targets.map(guild =>
+        targets.map(({ guild, body }) =>
           rest.put(
             Routes.applicationGuildCommands(appId, guild.id),
-            { body: publishable }
-          ).then(() => console.log(`Registered ${publishable.length} commands in ${guild.name}`))
+            { body }
+          ).then(() => console.log(`Registered ${body.length} commands in ${guild.name}`))
         )
       );
 
       // Index into `targets`, not into the filtered failure list: the old code
       // read guilds[i] off the failures array and named the wrong server.
       for (let i = 0; i < results.length; i++) {
-        const guild = targets[i];
+        const { guild, hash } = targets[i];
         if (results[i].status === 'rejected') {
           console.error(`Failed guild-register in ${guild?.name ?? 'unknown guild'}:`, results[i].reason);
           continue;
         }
-        await setSpeakConfigValue(`${HASH_KEY_PREFIX}${guild.id}`, payloadHash)
+        await setSpeakConfigValue(`${HASH_KEY_PREFIX}${guild.id}`, hash)
           .catch(err => console.error('Could not store command hash:', err.message));
       }
     });
