@@ -1,6 +1,6 @@
 // src/utils/media/mediaHelpers.js
 const fs = require('fs');
-const { MessageFlags } = require('discord.js');
+const { MessageFlags, StickerFormatType } = require('discord.js');
 const logger = require('../logger');
 const { downloadToTemp, cleanup, extFromUrl, IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS } = require('./tempFiles');
 const { mediaFilePayload } = require('./formatHelpers');
@@ -154,6 +154,68 @@ async function downloadMediaToTemp(mediaInfo, rest = null) {
 }
 
 // ---------------------------------------------------------------------------
+// Media that is not a file
+// ---------------------------------------------------------------------------
+
+/**
+ * Stickers and jumbo emoji are pictures to everyone reading the channel and to
+ * nobody reading the API: they are neither attachments nor embeds, so the
+ * scanner below walked straight past them and processed whatever older image
+ * it found next. That is worse than finding nothing, because the command
+ * answers confidently with the wrong picture.
+ *
+ * The tokens and the CDN shapes are duplicated from commands/media/steal.js,
+ * which needs the same two facts for a different reason. Three lines each; the
+ * alternative is a command module imported into a util, which is backwards.
+ */
+const EMOJI_TOKEN = /<(a?):(\w{2,32}):(\d{15,25})>/g;
+
+/**
+ * Everything in a string that is emoji rather than words: the pictographs, the
+ * flag halves, the skin tones, and the joiners and variation selectors that
+ * glue sequences together.
+ *
+ * Alternation rather than one character class, because the joiner and the
+ * variation selector combine with whatever precedes them, and a linter reading
+ * them inside a class cannot tell that erasing them one at a time is the point.
+ */
+const UNICODE_EMOJI = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u{1F3FB}-\u{1F3FF}]|\uFE0F|\u200D/gu;
+
+/** Lottie stickers (format 3) are vector JSON; nothing downstream can open one. */
+const STICKER_EXT = {
+    [StickerFormatType.PNG]: 'png',
+    [StickerFormatType.APNG]: 'png',
+    [StickerFormatType.GIF]: 'gif',
+};
+
+function stickerUrl(sticker) {
+    const ext = STICKER_EXT[sticker?.format];
+    if (!sticker?.id || !ext) return null;
+    return `https://cdn.discordapp.com/stickers/${sticker.id}.${ext}`;
+}
+
+/**
+ * The custom emoji in a message that IS the message.
+ *
+ * Discord renders emoji large only when there is nothing else in the message,
+ * and that rule is exactly the one worth copying: a lone emoji is a picture
+ * somebody posted, while an emoji inside a sentence is punctuation. Treating
+ * the second as media would have /deepfry grabbing a shrug from mid-chat
+ * instead of the image two messages up.
+ *
+ * @returns {string|null} the CDN url of the first one, or null
+ */
+function jumboEmojiUrl(content) {
+    const text = String(content ?? '');
+    const tokens = [...text.matchAll(EMOJI_TOKEN)];
+    if (tokens.length === 0) return null;
+    // Unicode emoji beside it are still emoji; anything else makes it a sentence.
+    if (text.replace(EMOJI_TOKEN, '').replace(UNICODE_EMOJI, '').trim() !== '') return null;
+    const [, animated, , id] = tokens[0];
+    return `https://cdn.discordapp.com/emojis/${id}.${animated === 'a' ? 'gif' : 'png'}`;
+}
+
+// ---------------------------------------------------------------------------
 // Recent-message media scanner
 // ---------------------------------------------------------------------------
 
@@ -164,6 +226,10 @@ async function fetchRecentMedia(interaction, {
     allowAudio = false,
     mediaPredicate = null,
 } = {}) {
+    const accepts = info => Boolean(info)
+        && mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo, allowAudio)
+        && (!mediaPredicate || mediaPredicate(info));
+
     try {
         const channel = interaction.channel;
         if (!channel?.messages?.fetch) return null;
@@ -183,10 +249,25 @@ async function fetchRecentMedia(interaction, {
                 // Attachments
                 for (const att of (source.attachments?.values?.() ? source.attachments.values() : [])) {
                     const info = resolveMedia(att.url, att.contentType, att.proxyURL);
-                    if (!info) continue;
-                    const allowedByType = mediaAllowedByType(info, allowImage, allowVideo, allowGifLikeVideo, allowAudio);
-                    const allowedByPredicate = !mediaPredicate || mediaPredicate(info);
-                    if (allowedByType && allowedByPredicate) return info;
+                    if (accepts(info)) return info;
+                }
+
+                // Stickers, and an emoji posted on its own. Both are pictures
+                // on screen and neither is a file, so a command asked to flip
+                // "the last thing posted" used to flip something else entirely
+                // and never say it had. Read before embeds: a sticker message
+                // can carry a link preview, and the sticker is what was sent.
+                for (const sticker of (source.stickers?.values?.() ? source.stickers.values() : [])) {
+                    const url = stickerUrl(sticker);
+                    if (!url) continue;
+                    const info = resolveMedia(url, null);
+                    if (accepts(info)) return info;
+                }
+
+                const emojiUrl = jumboEmojiUrl(source.content);
+                if (emojiUrl) {
+                    const info = resolveMedia(emojiUrl, null);
+                    if (accepts(info)) return info;
                 }
 
                 // Embed media (prefer GIF images first, then video, then static images)
@@ -431,4 +512,6 @@ module.exports = {
     handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp,
     // Exported so the expiry parser and refresh flow can be pinned in tests.
     discordUrlExpiry, refreshDiscordUrls,
+    // Same, for the two kinds of media that are not files.
+    stickerUrl, jumboEmojiUrl,
 };
