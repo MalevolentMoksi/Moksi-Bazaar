@@ -110,7 +110,13 @@ function render(model) {
 
     const warnsCard = card({
         title: 'Warns',
-        hint: model.warns.total ? `${fmtNumber(model.warns.total)} matching` : 'imported from Dyno and kept',
+        // Provenance stated where the data is read: the actions table above
+        // comes from the audit log (fact), this one is scraped from Dyno's
+        // confirmation embeds (best effort), and the two should not be read
+        // with the same confidence.
+        hint: model.warns.total
+            ? `${fmtNumber(model.warns.total)} matching, mirrored from Dyno's confirmations`
+            : 'mirrored from Dyno\'s confirmations and kept',
         body: html`
             ${table({
         columns: [
@@ -123,6 +129,12 @@ function render(model) {
             { key: 'moderator', label: 'By', render: r => r.moderator ?? 'unknown' },
             { key: 'reason', label: 'Reason', render: r => r.reason ?? '' },
             { key: 'case_id', label: 'Case', render: r => r.case_id ? html`<span class="mono">${r.case_id}</span>` : '' },
+            {
+                key: 'state', label: 'State',
+                render: r => r.removed_at_ms
+                    ? html`${pill('off', 'removed')}<span class="sub" title="${fmtDateTime(Number(r.removed_at_ms))}">${r.removed_by ? `by ${r.removed_by}` : ''}</span>`
+                    : pill('on', 'standing'),
+            },
             {
                 key: 'at', label: 'When', numeric: true,
                 render: r => html`<span title="${fmtDateTime(r.created_at_ms)}">${fmtAgo(r.created_at_ms, model.now)}</span>`,

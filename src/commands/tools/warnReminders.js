@@ -23,7 +23,9 @@ function emptyPayload(message) {
 }
 
 async function buildListEmbed(client) {
-    const reminders = await getAllWarnReminders();
+    // Scoped to the guild the command is locked to: the table can hold other
+    // guilds' reminders, and this panel's cancel buttons must not reach them.
+    const reminders = await getAllWarnReminders(WARN_GUILD_ID);
 
     if (reminders.length === 0) {
         return { embed: null, rows: [] };

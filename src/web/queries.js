@@ -13,6 +13,13 @@ const { pool } = require('../utils/db');
 const clampLimit = (n, max = 100) => Math.min(max, Math.max(1, Number(n) || 25));
 const clampOffset = n => Math.max(0, Number(n) || 0);
 
+/**
+ * A search term is text, not a pattern. Without this, the `_` half the
+ * usernames on Discord contain is a single-char wildcard, and searching for
+ * `mal_moksi` quietly matches `malxmoksi` too.
+ */
+const escapeLike = s => String(s).replace(/[\\%_]/g, '\\$&');
+
 /** Most recent moderation actions, whole guild, newest first. */
 async function recentModActions(guildId, { limit = 25, offset = 0, action = null, actorId = null, targetId = null, search = null } = {}) {
     const where = ['guild_id = $1'];
@@ -22,7 +29,7 @@ async function recentModActions(guildId, { limit = 25, offset = 0, action = null
     if (actorId) { values.push(actorId); where.push(`actor_id = $${values.length}`); }
     if (targetId) { values.push(targetId); where.push(`target_id = $${values.length}`); }
     if (search) {
-        values.push(`%${search}%`);
+        values.push(`%${escapeLike(search)}%`);
         const like = `$${values.length}`;
         let clause = `(target_tag ILIKE ${like} OR actor_tag ILIKE ${like} OR reason ILIKE ${like}`;
         if (/^\d{17,20}$/.test(search)) {
@@ -62,7 +69,7 @@ async function recentWarns(guildId, { limit = 25, offset = 0, userId = null, sea
     const where = ['guild_id = $1'];
     if (userId) { values.push(userId); where.push(`user_id = $${values.length}`); }
     if (search) {
-        values.push(`%${search}%`);
+        values.push(`%${escapeLike(search)}%`);
         const like = `$${values.length}`;
         let clause = `(user_label ILIKE ${like} OR moderator ILIKE ${like} OR reason ILIKE ${like}`;
         if (/^\d{17,20}$/.test(search)) {
@@ -74,6 +81,7 @@ async function recentWarns(guildId, { limit = 25, offset = 0, userId = null, sea
     values.push(clampLimit(limit), clampOffset(offset));
     const { rows } = await pool.query(
         `SELECT id, user_id, user_label, case_id, moderator, reason, source, created_at_ms,
+                removed_at_ms, removed_by,
                 COUNT(*) OVER()::int AS total
            FROM warns
           WHERE ${where.join(' AND ')}

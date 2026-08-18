@@ -139,11 +139,14 @@ async function buildDossier(interaction, target) {
         const warns = await getWarns(guild.id, { userId: target.id, label: target.username }, 25)
             .catch(() => []);
         if (warns.length) {
+            // The query's window count, not the page length: the LIMIT is 25
+            // and a longer history deserves its real number.
+            const total = warns[0]?.total ?? warns.length;
             const recent = warns.filter(w => Date.now() - w.createdAtMs < 90 * DAY_MS).length;
             const latest = warns[0];
             embed.addFields({
                 name: 'Warns',
-                value: `**${warns.length}** on file, **${recent}** in the last 90 days\n`
+                value: `**${total}** on file, **${recent}** in the last 90 days\n`
                     + `-# most recent ${stamp(latest.createdAtMs)}`
                     + (latest.reason ? `: ${latest.reason.slice(0, 120)}` : ''),
                 inline: false,
@@ -162,7 +165,7 @@ async function buildDossier(interaction, target) {
                 timeout: '🔇 timed out', timeout_cleared: '🔊 timeout lifted',
             };
             embed.addFields({
-                name: `Moderation history (${actions.length})`,
+                name: `Moderation history (${actions[0]?.total ?? actions.length})`,
                 value: actions.map(a =>
                     `${VERB[a.action] ?? a.action} ${stamp(Number(a.at_ms))}`
                     + (a.actor_tag ? ` by **${a.actor_tag}**${a.actor_is_bot ? ' (bot)' : ''}` : '')

@@ -499,6 +499,15 @@ const init = async () => {
         ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS warn_ids TEXT;
         ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS warn_count INTEGER NOT NULL DEFAULT 1;
     `);
+
+    // Migration: warns become soft-deletable. A ?delwarn in Dyno marks the row
+    // removed rather than erasing it: the record keeps both truths, "this warn
+    // was issued" and "staff later withdrew it", instead of diverging from
+    // Dyno forever or shredding its own paper trail to match it.
+    await pool.query(`
+        ALTER TABLE warns ADD COLUMN IF NOT EXISTS removed_at_ms BIGINT;
+        ALTER TABLE warns ADD COLUMN IF NOT EXISTS removed_by TEXT;
+    `);
 };
 
 // ── ECONOMY FUNCTIONS ───────────────────────────────────────────────────────
@@ -1527,7 +1536,8 @@ async function recordModAction({
 /** One member's moderation history, newest first. */
 async function getModActions(guildId, targetId, limit = 15) {
     const { rows } = await pool.query(
-        `SELECT audit_id, action, target_tag, actor_id, actor_tag, actor_is_bot, reason, at_ms
+        `SELECT audit_id, action, target_tag, actor_id, actor_tag, actor_is_bot, reason, at_ms,
+                COUNT(*) OVER()::int AS total
            FROM mod_actions
           WHERE guild_id = $1 AND target_id = $2
           ORDER BY at_ms DESC
@@ -1641,15 +1651,18 @@ async function getModActionSummary(guildId) {
  * falls back to the label so warns recorded before an id could be worked out
  * are not orphaned.
  */
-async function getWarns(guildId, { userId = null, label = null } = {}, limit = 25) {
+async function getWarns(guildId, { userId = null, label = null, includeRemoved = false } = {}, limit = 25) {
     const { rows } = await pool.query(
-        `SELECT id, user_id, user_label, case_id, moderator, reason, source, created_at_ms
+        `SELECT id, user_id, user_label, case_id, moderator, reason, source, created_at_ms,
+                removed_at_ms, removed_by,
+                COUNT(*) OVER()::int AS total
          FROM warns
          WHERE guild_id = $1
            AND (($2::text IS NOT NULL AND user_id = $2)
-             OR ($3::text IS NOT NULL AND user_label ILIKE $3))
+             OR ($3::text IS NOT NULL AND LOWER(user_label) = LOWER($3)))
+           AND ($5 OR removed_at_ms IS NULL)
          ORDER BY created_at_ms DESC LIMIT $4`,
-        [guildId, userId, label, limit]
+        [guildId, userId, label, limit, includeRemoved]
     );
     return rows.map(r => ({
         id: r.id,
@@ -1660,13 +1673,58 @@ async function getWarns(guildId, { userId = null, label = null } = {}, limit = 2
         reason: r.reason,
         source: r.source,
         createdAtMs: Number(r.created_at_ms),
+        removedAtMs: r.removed_at_ms == null ? null : Number(r.removed_at_ms),
+        removedBy: r.removed_by,
+        // The true row count, not the page size: "25 on file" for a member
+        // with 60 warns was a lie the LIMIT told.
+        total: Number(r.total) || 0,
     }));
 }
 
-/** Backfills the id on rows recorded before the label could be resolved. */
+/**
+ * Marks one warn removed, by its Dyno case number. Soft: the row stays, so
+ * the history keeps both the warn and its withdrawal.
+ * @returns {Promise<{id: number, userLabel: string}|null>} what was removed
+ */
+async function removeWarnByCase(guildId, caseId, removedBy = null) {
+    const { rows } = await pool.query(
+        `UPDATE warns SET removed_at_ms = $3, removed_by = $4
+         WHERE guild_id = $1 AND case_id = $2 AND removed_at_ms IS NULL
+         RETURNING id, user_label`,
+        [guildId, String(caseId), String(Date.now()), removedBy]
+    );
+    return rows[0] ? { id: rows[0].id, userLabel: rows[0].user_label } : null;
+}
+
+/**
+ * Marks every active warn for one member removed (Dyno's ?clearwarns).
+ * Matches the resolved id when there is one, else the label, exactly like
+ * getWarns reads them.
+ * @returns {Promise<number>} rows marked
+ */
+async function removeWarnsForUser(guildId, { userId = null, label = null }, removedBy = null) {
+    const { rowCount } = await pool.query(
+        `UPDATE warns SET removed_at_ms = $4, removed_by = $5
+         WHERE guild_id = $1
+           AND (($2::text IS NOT NULL AND user_id = $2)
+             OR ($3::text IS NOT NULL AND LOWER(user_label) = LOWER($3)))
+           AND removed_at_ms IS NULL`,
+        [guildId, userId, label, String(Date.now()), removedBy]
+    );
+    return rowCount;
+}
+
+/**
+ * Backfills the id on rows recorded before the label could be resolved.
+ *
+ * Case-insensitive EQUALITY, not ILIKE: a username is data, not a pattern.
+ * With ILIKE, the `_` half the usernames on Discord contain was a single-char
+ * wildcard, so `john_doe`'s backfill could quietly claim `johnxdoe`'s rows
+ * and hang another member's history on the wrong person.
+ */
 async function linkWarnsToUser(guildId, label, userId) {
     const { rowCount } = await pool.query(
-        'UPDATE warns SET user_id = $3 WHERE guild_id = $1 AND user_label ILIKE $2 AND user_id IS NULL',
+        'UPDATE warns SET user_id = $3 WHERE guild_id = $1 AND LOWER(user_label) = LOWER($2) AND user_id IS NULL',
         [guildId, label, userId]
     );
     return rowCount;
@@ -2501,4 +2559,6 @@ module.exports = {
     getSuspicionAccuracy,
     getWarns,
     linkWarnsToUser,
+    removeWarnByCase,
+    removeWarnsForUser,
 };
