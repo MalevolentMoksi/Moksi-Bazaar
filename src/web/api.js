@@ -18,8 +18,11 @@
 const express = require('express');
 const { PermissionFlagsBits } = require('discord.js');
 const validate = require('../utils/joinGate/validate');
-const { getSettings, updateSettings, LIMITS, formatDays } = require('../utils/joinGate/config');
+const { getSettings, updateSettings, LIMITS, formatDays, thresholdMs } = require('../utils/joinGate/config');
 const { logConfigChange } = require('../utils/joinGate/logging');
+const { recomputePendingUnbans, scheduleNext } = require('../utils/joinGate/unbanScheduler');
+const { startAutoRefresh: startPhishingRefresh } = require('../utils/joinGate/phishing');
+const { syncGuild: syncInvites, canRead: canReadInvites } = require('../utils/joinGate/invites');
 const logger = require('../utils/logger');
 
 /** Booleans the quick toggles may flip, with the words a human reads back. */
@@ -36,6 +39,7 @@ const TOGGLES = Object.freeze({
     log_previews: 'Log previews',
     log_config: 'Log config changes',
     burst_alert_enabled: 'Join burst alert',
+    burst_count_all_joins: 'Burst window counts clean joins too',
     sweep_enabled: 'Catch-up sweep',
     suspicion_enabled: 'Suspicion scoring',
     suspicion_log_enabled: 'Suspicion logging',
@@ -139,6 +143,24 @@ function createApi(client) {
 
         const settings = await getSettings(req.params.g);
         const requires = requiresForToggle(column, value, settings);
+
+        // The side effects the Discord panel performs on the same switches.
+        // Two writers that share validation but not side effects drift apart
+        // in the worst way: this exact drift once meant a dashboard-enabled
+        // watch scored against an EMPTY phishing list until the next restart,
+        // silently losing its strongest signal.
+        if (column === 'watch_enabled' && value === true) startPhishingRefresh();
+        if (column === 'invite_tracking_enabled' && value === true) {
+            const guild = guildOf(req);
+            if (guild && !canReadInvites(guild)) {
+                return res.status(400).json({
+                    error: 'Invite tracking needs Manage Server, which the bot does not have here. '
+                        + 'Without it, Discord will not show the invite list and joins cannot be attributed.',
+                });
+            }
+            if (guild) await syncInvites(guild).catch(() => {});
+        }
+
         return apply(req, res, {
             ok: true,
             patch: { [column]: value },
@@ -163,7 +185,25 @@ function createApi(client) {
                 ? `Minimum account age set to ${formatDays(patch[key])} day(s)`
                 : verdict.summary);
         }
-        return apply(req, res, { ok: true, patch, summary: parts.join('; '), requires: [] });
+
+        const result = await apply(req, res, { ok: true, patch, summary: parts.join('; '), requires: [] });
+
+        // Pending temp-bans were sold to the user with an end date. Lowering
+        // the bar must release them early; raising it must not silently extend
+        // a ban somebody was already given a date for. The panel has always
+        // done this after a threshold edit; the dashboard writer must too.
+        if (res.statusCode === 200 && 'min_account_age_minutes' in patch) {
+            try {
+                const updated = await getSettings(req.params.g, { fresh: true });
+                const shortened = await recomputePendingUnbans(req.params.g, thresholdMs(updated));
+                if (shortened > 0) await scheduleNext(client);
+            } catch (error) {
+                logger.warn('[DASHBOARD] Pending unban recompute failed', {
+                    guildId: req.params.g, error: error.message,
+                });
+            }
+        }
+        return result;
     }));
 
     // ── Named validators, one endpoint each ─────────────────────────────
