@@ -19,8 +19,14 @@ module.exports = {
   async execute(interaction) {
     const text = interaction.options.getString('message');
 
+    // Ephemeral like every other rejection: an anonymous-speech command whose
+    // refusal publicly names (and insults) the person who tried it was the
+    // one reply in the codebase that shamed someone in front of the channel.
     if (!isOwner(interaction.user.id)) {
-      return interaction.reply({ content: `You don't speak for me <@${interaction.user.id}>, you little worm.` });
+      return interaction.reply({
+        content: `You don't speak for me <@${interaction.user.id}>, you little worm.`,
+        flags: MessageFlags.Ephemeral,
+      });
     }
 
     // Acknowledged before the send, not after. Posting to a channel is a full
