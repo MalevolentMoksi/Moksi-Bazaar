@@ -28,6 +28,7 @@ const phishing = require('./phishing');
 const watchWindow = require('./watch');
 const invites = require('./invites');
 const restore = require('./restore');
+const carryover = require('./carryover');
 
 /**
  * Boots the pieces that need to run independently of any single join:
@@ -51,7 +52,14 @@ async function initJoinGate(client) {
         const settingsPerGuild = await Promise.all(guildIds.map(id => config.getSettings(id)));
 
         if (settingsPerGuild.some(s => s.watch_enabled)) {
-            phishing.startAutoRefresh();
+            // Wait briefly for the first load: the refresh used to be fired
+            // and forgotten, so every join in the first seconds after a boot
+            // was scored against an empty scam list. Five seconds is the
+            // ceiling; a slow feed degrades coverage, never boot time.
+            await Promise.race([
+                phishing.startAutoRefresh(),
+                new Promise(resolve => setTimeout(resolve, 5_000)),
+            ]);
         }
         if (settingsPerGuild.some(s => s.invite_tracking_enabled)) {
             await invites.syncAll(client).catch(e =>
@@ -71,6 +79,17 @@ async function initJoinGate(client) {
         // sense rebuilding a window around someone who is about to be kicked.
         await restore.restoreAll(client, guildIds.map((id, i) => [id, settingsPerGuild[i]]))
             .catch(e => logger.warn('[JOIN-GATE] Memory restore failed', { error: e.message }));
+
+        // Then the parked memory from the previous process, on top: the
+        // restore re-derives who should be watched, the carryover adds what
+        // only the dead process knew (messages, fired signals, burst window).
+        const windowByGuild = new Map(guildIds.map((id, i) => [
+            id,
+            settingsPerGuild[i].watch_enabled
+                ? Number(settingsPerGuild[i].watch_window_minutes) * 60_000
+                : 0,
+        ]));
+        await carryover.load(guildId => windowByGuild.get(guildId) ?? 0);
 
         for (const guildId of guildIds) {
             const settings = await config.getSettings(guildId);
@@ -97,4 +116,5 @@ module.exports = {
     watchWindow,
     invites,
     restore,
+    carryover,
 };

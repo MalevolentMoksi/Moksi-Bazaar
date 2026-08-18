@@ -231,6 +231,17 @@ function initializeBot() {
       logger.warn('Activity flush on shutdown failed', { error: error.message });
     }
 
+    // The join gate's short-term memory: watch-window evidence, fired
+    // signals, the burst window. The boot-time restore re-derives the rest
+    // from Discord, but these only this process knew, and losing them handed
+    // every mid-sweep spammer a clean scoreboard on deploy.
+    try {
+      const parked = await require('./utils/joinGate/carryover').save();
+      if (parked) logger.info('Join-gate short-term memory parked for the next process', parked);
+    } catch (error) {
+      logger.warn('Could not park join-gate memory on shutdown', { error: error.message });
+    }
+
     try {
       await client.destroy();
       logger.info('Gateway connection closed');

@@ -112,6 +112,13 @@ async function runJanitorCycle() {
         // server once and never again would otherwise sit there for the life of
         // the process.
         ['guardCounters', async () => require('./joinGate/guard').prune()],
+        // Watched members who never post are only otherwise evicted by the
+        // 500-entry cap. This sweep used to piggyback on the phishing list's
+        // refresh timer, which never started at all if the watch was enabled
+        // from the dashboard after boot; housekeeping lives with the
+        // housekeeper now. The panel clamps watch_window_minutes to 1440, so
+        // a day is past every guild's window.
+        ['watchWindow', async () => require('./joinGate/watch').pruneAll(24 * 60 * 60 * 1000) ?? 'ok'],
     ];
 
     for (const [name, step] of steps) {

@@ -13,6 +13,7 @@
  */
 
 const logger = require('../logger');
+const health = require('../health');
 
 const SOURCES = [
     'https://raw.githubusercontent.com/Discord-AntiScam/scam-links/main/list.json',
@@ -21,11 +22,6 @@ const SOURCES = [
 
 const REFRESH_MS = 12 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15_000;
-/**
- * The panel clamps watch_window_minutes to 1440, so anything older than a day
- * is stale for every guild. Used by the piggybacked watch-list sweep below.
- */
-const MAX_WATCH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** @type {Set<string>} */
 let domains = new Set();
@@ -87,30 +83,38 @@ async function refresh() {
 
     if (merged.size === 0) {
         logger.warn('[JOIN-GATE] Scam list refresh produced nothing, keeping previous set', { held: domains.size });
+        // The failure that used to be invisible: scam_link is the behaviour
+        // window's strongest signal (weight 100), and it silently sat at zero
+        // coverage for 12 hours at a time. The panel says so now.
+        health.report('phishing', 'degraded', domains.size === 0
+            ? 'scam-domain list is empty: every feed failed'
+            : `feeds unreachable, serving a list from ${new Date(lastLoadedAt).toISOString().slice(0, 16)}`);
         return domains.size;
     }
 
     domains = merged;
     lastLoadedAt = Date.now();
+    health.report('phishing', 'ok');
     logger.info('[JOIN-GATE] Scam domain list loaded', { domains: domains.size });
     return domains.size;
 }
 
+/**
+ * @returns {Promise<number>} the initial load, so a booting caller can wait
+ * (briefly) for the list instead of scoring the first joins against nothing.
+ * Idempotent; a second call returns what is already held.
+ */
 function startAutoRefresh() {
-    if (refreshTimer) return;
-    refresh().catch(e => logger.warn('[JOIN-GATE] Initial scam list load failed', { error: e.message }));
+    if (refreshTimer) return Promise.resolve(domains.size);
+    const first = refresh().catch(e => {
+        logger.warn('[JOIN-GATE] Initial scam list load failed', { error: e.message });
+        return domains.size;
+    });
     refreshTimer = setInterval(() => {
         refresh().catch(e => logger.warn('[JOIN-GATE] Scam list refresh failed', { error: e.message }));
-        // Piggybacked janitor: sweep idle watched members whose window has
-        // long expired. Required lazily because watch.js requires this module
-        // at load; by the first tick both are fully initialised.
-        try {
-            require('./watch').pruneAll(MAX_WATCH_WINDOW_MS);
-        } catch (e) {
-            logger.warn('[JOIN-GATE] Watch-list prune failed', { error: e.message });
-        }
     }, REFRESH_MS);
     refreshTimer.unref?.();
+    return first;
 }
 
 function stopAutoRefresh() {
