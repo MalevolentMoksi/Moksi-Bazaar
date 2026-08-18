@@ -472,15 +472,25 @@ function jumpUrl(guild, evidence, actionOutcome) {
 }
 
 /** Raid alert. Routed to the failure channel; it is a "look at me" event. */
-async function logBurst(guild, settings, { count, windowSeconds }) {
+async function logBurst(guild, settings, { count, gatedCount = count, windowSeconds }) {
+    // With burst_count_all_joins on, the window holds clean arrivals too, and
+    // the difference between "a raid" and "the server got popular for an hour"
+    // has to be visible in the alert itself. A surge of people who all passed
+    // the gate is announced as a surge, never as an attack.
+    const mostlyClean = gatedCount <= Math.floor(count / 2);
+    const title = mostlyClean ? '📈 Join surge' : '🚨 Join burst detected';
+    const description = mostlyClean
+        ? `**${count}** accounts joined within ${windowSeconds}s, and **${gatedCount}** of them were caught `
+            + 'by the join gate. Most of this wave passed every check: it reads as popularity, not a raid, '
+            + 'but it seemed worth telling you the door is busy.'
+        : `**${gatedCount}** of **${count}** accounts arriving within ${windowSeconds}s were caught by the join gate.\n`
+            + 'Removals are being processed one at a time to stay inside Discord\'s rate limits, '
+            + 'so there may be a short delay before the server looks clean again.';
+
     const embed = new EmbedBuilder()
         .setColor(COLORS.burst)
-        .setTitle('🚨 Join burst detected')
-        .setDescription(
-            `**${count}** accounts were caught by the join gate within ${windowSeconds}s.\n` +
-            'Removals are being processed one at a time to stay inside Discord\'s rate limits, ' +
-            'so there may be a short delay before the server looks clean again.'
-        )
+        .setTitle(title)
+        .setDescription(description)
         .setTimestamp();
 
     return send(guild, settings, 'failure', ui(embed, [], { scope: 'mod' }));

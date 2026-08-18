@@ -786,9 +786,12 @@ function renderAdvanced(settings) {
             { name: 'Burst alert', value: onOff(settings.burst_alert_enabled), inline: true },
             {
                 name: 'Burst trigger',
-                value: `${settings.burst_threshold} gated joins / ${settings.burst_window_seconds}s`,
+                value: settings.burst_count_all_joins
+                    ? `${settings.burst_threshold} joins (all of them) / ${settings.burst_window_seconds}s`
+                    : `${settings.burst_threshold} gated joins / ${settings.burst_window_seconds}s`,
                 inline: true,
             },
+            { name: 'Count clean joins', value: onOff(settings.burst_count_all_joins), inline: true },
             { name: 'Catch-up sweep', value: onOff(settings.sweep_enabled), inline: true },
             {
                 name: 'Sweep window',
@@ -804,7 +807,11 @@ function renderAdvanced(settings) {
                 .setCustomId('jg_toggle_burst')
                 .setLabel(settings.burst_alert_enabled ? 'Disable burst alert' : 'Enable burst alert')
                 .setStyle(settings.burst_alert_enabled ? ButtonStyle.Danger : ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('jg_set_burst').setLabel('Set burst trigger').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId('jg_set_burst').setLabel('Set burst trigger').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId('jg_toggle_burst_all')
+                .setLabel(settings.burst_count_all_joins ? 'Count gated joins only' : 'Count clean joins too')
+                .setStyle(settings.burst_count_all_joins ? ButtonStyle.Danger : ButtonStyle.Success)
         ),
         new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -1060,6 +1067,7 @@ module.exports = {
                     jg_toggle_dm_eligible: ['dm_append_eligible', s => `Eligible-time line ${s.dm_append_eligible ? 'removed' : 'appended'}`],
                     jg_toggle_dm_invite: ['dm_append_invite', s => `Invite line ${s.dm_append_invite ? 'removed' : 'appended'}`],
                     jg_toggle_burst: ['burst_alert_enabled', s => `Burst alert ${s.burst_alert_enabled ? 'off' : 'on'}`],
+                    jg_toggle_burst_all: ['burst_count_all_joins', s => `Burst window ${s.burst_count_all_joins ? 'counts gated joins only' : 'counts clean joins too'}`],
                     jg_toggle_sweep: ['sweep_enabled', s => `Catch-up sweep ${s.sweep_enabled ? 'off' : 'on'}`],
                 };
                 if (TOGGLES[id]) {

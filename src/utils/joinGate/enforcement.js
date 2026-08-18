@@ -77,8 +77,16 @@ function displayTag(user) {
  */
 function evaluate(user, settings, { guildOwnerId = null, now = Date.now() } = {}) {
     const threshold = thresholdMs(settings);
-    const ageMs = now - Number(user.createdTimestamp);
-    const eligibleAt = Number(user.createdTimestamp) + threshold;
+    // The snowflake fallback the scorer already has. Without it a missing
+    // createdTimestamp made ageMs NaN, every comparison false, and the final
+    // return said "gate": fail-closed, in the module whose second rule is
+    // FAIL OPEN.
+    let createdTimestamp = Number(user.createdTimestamp);
+    if (!Number.isFinite(createdTimestamp)) {
+        try { createdTimestamp = Number(SnowflakeUtil.timestampFrom(user.id)); } catch { createdTimestamp = NaN; }
+    }
+    const ageMs = now - createdTimestamp;
+    const eligibleAt = createdTimestamp + threshold;
     const base = { ageMs, thresholdMs: threshold, eligibleAt };
 
     if (!settings.enabled) return { action: 'allow', reason: 'gate disabled for this server', ...base };
@@ -88,6 +96,10 @@ function evaluate(user, settings, { guildOwnerId = null, now = Date.now() } = {}
     // Guard, not a feature: the guild owner is above the bot in every hierarchy,
     // so acting on them can only ever produce a guaranteed-failing API call.
     if (guildOwnerId && user.id === guildOwnerId) return { action: 'allow', reason: 'server owner', ...base };
+
+    if (!Number.isFinite(ageMs)) {
+        return { action: 'allow', reason: 'account age unreadable (failing open)', ...base };
+    }
 
     if (ageMs >= threshold) {
         return { action: 'allow', reason: `account is ${(ageMs / DAY_MS).toFixed(1)}d old`, ...base };
@@ -302,13 +314,46 @@ async function attemptRemoval(member, settings, decision, action) {
         try {
             // deleteMessageSeconds: 0 because this is an access gate, not a purge.
             await member.ban({ reason, deleteMessageSeconds: 0 });
-            await insertPendingUnban(member.guild.id, member.id, decision.eligibleAt, decision.unbanKind ?? 'age');
-            await scheduleNext(member.client);
-            return { ok: true, action: 'ban', unbanAt: decision.eligibleAt };
         } catch (error) {
             const c = classifyRemovalError(error);
             return { ok: false, action: 'ban', ...c };
         }
+
+        // The ban has landed; the row that lifts it has not. These are separate
+        // failure domains, and they were one try block for a while, which meant
+        // a database hiccup here produced a PERMANENT ban wearing a log line
+        // that said no ban had happened, minutes after a DM promised the exact
+        // hour it would lift. If the row cannot be written, the ban is walked
+        // back: this gate temp-bans or it does not ban at all.
+        try {
+            await insertPendingUnban(member.guild.id, member.id, decision.eligibleAt, decision.unbanKind ?? 'age');
+        } catch (firstError) {
+            try {
+                await insertPendingUnban(member.guild.id, member.id, decision.eligibleAt, decision.unbanKind ?? 'age');
+            } catch (error) {
+                await member.guild.members.unban(member.id, 'Join gate: walking back a ban whose unban could not be recorded')
+                    .catch(unbanError => logger.error('[JOIN-GATE] Ban walk-back failed too', {
+                        guildId: member.guild.id, userId: member.id, error: unbanError.message,
+                    }));
+                logger.error('[JOIN-GATE] Ban walked back: unban row unwritable', {
+                    guildId: member.guild.id, userId: member.id,
+                    error: error.message, firstError: firstError.message,
+                });
+                return {
+                    ok: false,
+                    action: 'ban',
+                    error: 'ban walked back (the unban could not be recorded, and a ban nobody lifts is not a temp-ban)',
+                    hint: 'Check the database: `join_gate_pending_unbans` rejected two writes in a row.',
+                };
+            }
+        }
+
+        // A scheduling hiccup is not a reason to walk anything back: the row
+        // exists, and the scheduler re-reads pending rows on boot and on every
+        // later insert, so the lift is late in the worst case, never lost.
+        await scheduleNext(member.client).catch(error =>
+            logger.warn('[JOIN-GATE] Unban scheduling deferred', { error: error.message }));
+        return { ok: true, action: 'ban', unbanAt: decision.eligibleAt };
     }
 
     if (!member.kickable) {
@@ -327,6 +372,31 @@ async function attemptRemoval(member, settings, decision, action) {
     } catch (error) {
         const c = classifyRemovalError(error);
         return { ok: false, action: 'kick', ...c };
+    }
+}
+
+/**
+ * Times a member out: the one action here that is not a removal. No DM
+ * template, no pending-unban row, nothing to walk back with an invite; it
+ * expires on its own and a moderator can lift it in one click.
+ *
+ * Shared by the suspicion and behaviour paths. The suspicion tiers accepted
+ * 'timeout' from the panel for a while when only the behaviour branch
+ * implemented it, so a tier configured to time people out silently logged
+ * instead. The config surface and the enforcement surface must speak the
+ * same verbs, and one implementation is how they keep agreeing.
+ *
+ * The duration dial is `watch_timeout_minutes` for both callers: one timeout
+ * length per server, not one per code path.
+ */
+async function applyTimeout(member, settings, reason) {
+    const minutes = Math.max(1, Number(settings.watch_timeout_minutes) || 60);
+    try {
+        await member.timeout(minutes * 60_000, reason);
+        return { ok: true, action: 'timeout', minutes };
+    } catch (error) {
+        // Missing Moderate Members, or the member outranks the bot.
+        return { ok: false, action: 'timeout', error: error.message };
     }
 }
 
@@ -371,26 +441,41 @@ async function purgeEvidence(guild, evidence) {
 
 /**
  * Read-only view of the burst window. Members who pass the age gate never
- * touch noteBurst, but "arrived while a burst was happening" is still a signal
- * worth feeding the scorer.
+ * write to it (unless the owner opted in), but "arrived while a burst was
+ * happening" is still a signal worth feeding the scorer.
  */
 function isInBurst(guildId, settings) {
     const windowMs = Number(settings.burst_window_seconds) * 1000;
     const now = Date.now();
-    const hits = (burstWindows.get(guildId) ?? []).filter(t => now - t < windowMs);
+    const hits = (burstWindows.get(guildId) ?? []).filter(e => now - e.at < windowMs);
     return hits.length >= Number(settings.burst_threshold);
 }
 
-function noteBurst(guild, settings) {
-    if (!settings.burst_alert_enabled) return false;
+/**
+ * Counts a join toward the burst window and maybe raises the alert.
+ *
+ * Recording and alerting are separate concerns, and they were conflated for a
+ * while: turning the alert off also stopped the window being written, which
+ * silently killed the join_burst signal the scorer feeds on. The alert toggle
+ * now silences the announcement and nothing else.
+ *
+ * Gated joins always count. Clean joins count only when the owner switched
+ * `burst_count_all_joins` on: out of the box a burst keeps meaning "gated
+ * joins arriving together", and a popular invite bringing thirty legitimate
+ * people is not a raid. When they do count, the alert reports the mix, so a
+ * clean surge is announced as a surge and never as an attack.
+ */
+function noteJoinForBurst(guild, settings, { gated }) {
+    if (!gated && !settings.burst_count_all_joins) return false;
 
     const windowMs = Number(settings.burst_window_seconds) * 1000;
     const now = Date.now();
-    const hits = (burstWindows.get(guild.id) ?? []).filter(t => now - t < windowMs);
-    hits.push(now);
+    const hits = (burstWindows.get(guild.id) ?? []).filter(e => now - e.at < windowMs);
+    hits.push({ at: now, gated: Boolean(gated) });
     burstWindows.set(guild.id, hits);
 
     if (hits.length < Number(settings.burst_threshold)) return false;
+    if (!settings.burst_alert_enabled) return false;
 
     const lastAlert = burstAlerted.get(guild.id) ?? 0;
     if (now - lastAlert < BURST_ALERT_COOLDOWN_MS) return false;
@@ -398,9 +483,39 @@ function noteBurst(guild, settings) {
     burstAlerted.set(guild.id, now);
     logBurst(guild, settings, {
         count: hits.length,
+        gatedCount: hits.filter(e => e.gated).length,
         windowSeconds: Number(settings.burst_window_seconds),
     }).catch(() => {});
     return true;
+}
+
+/** The burst window as plain data, for carrying across a deploy. */
+function exportBurstState() {
+    const out = {};
+    for (const [guildId, hits] of burstWindows) {
+        if (hits.length) out[guildId] = hits;
+    }
+    return out;
+}
+
+/**
+ * Rebuilds the burst window from a carried state, so a raid that straddles a
+ * deploy is still one raid rather than two half-raids that trip nothing.
+ * Entries older than an hour are noise from a long-parked snapshot and are
+ * dropped; the live filters prune to each guild's real window anyway.
+ */
+function importBurstState(state, now = Date.now()) {
+    let kept = 0;
+    for (const [guildId, hits] of Object.entries(state ?? {})) {
+        const sane = (hits ?? [])
+            .map(e => ({ at: Number(e?.at), gated: Boolean(e?.gated) }))
+            .filter(e => Number.isFinite(e.at) && now - e.at < 3_600_000);
+        if (sane.length) {
+            burstWindows.set(guildId, sane);
+            kept += sane.length;
+        }
+    }
+    return kept;
 }
 
 // ── Queue ───────────────────────────────────────────────────────────────────
@@ -415,8 +530,39 @@ function enqueue(member, origin) {
     const key = `${member.guild.id}:${member.id}`;
     if (queued.has(key)) return; // already pending; a second join adds nothing
     queued.add(key);
-    queue.push({ member, origin });
+    queue.push({ kind: 'age', key, member, origin });
     if (!draining) drain();
+}
+
+/**
+ * Queues a removal whose verdict is already made (a suspicion or behaviour
+ * score), and resolves with the outcome once it has actually run.
+ *
+ * The suspicion and behaviour paths used to DM and remove inline, one call
+ * per triggering event, concurrently. The age path was queued and spaced
+ * precisely because DM creation is rate-limited per bot, so a raid of
+ * accounts old enough to PASS the age gate: the one kind the scorer exists
+ * to catch: was also the one kind allowed to fire unpaced API calls. Every
+ * removal goes through the one queue now, whatever decided it.
+ */
+function enqueueVerdict(member, { decision, action, cause }) {
+    return new Promise(resolve => {
+        if (queue.length >= QUEUE_MAX) {
+            logger.error('[JOIN-GATE] Queue full, dropping verdict removal', {
+                guildId: member.guild.id, userId: member.id, cause,
+            });
+            resolve({ ok: false, action, error: 'removal queue full' });
+            return;
+        }
+        const key = `${member.guild.id}:${member.id}:${cause}`;
+        if (queued.has(key)) {
+            resolve({ ok: false, action, error: 'already queued', benign: true });
+            return;
+        }
+        queued.add(key);
+        queue.push({ kind: 'verdict', key, member, decision, action, cause, resolve });
+        if (!draining) drain();
+    });
 }
 
 async function drain() {
@@ -425,19 +571,41 @@ async function drain() {
     try {
         while (queue.length > 0) {
             const entry = queue.shift();
-            queued.delete(`${entry.member.guild.id}:${entry.member.id}`);
+            queued.delete(entry.key);
             try {
-                await processGated(entry.member, entry.origin);
+                if (entry.kind === 'verdict') await processVerdict(entry);
+                else await processGated(entry.member, entry.origin);
             } catch (error) {
                 logger.error('[JOIN-GATE] Processing failed', {
                     guildId: entry.member.guild.id, userId: entry.member.id, error: error.message,
                 });
+                entry.resolve?.({ ok: false, action: entry.action, error: error.message });
             }
             if (queue.length > 0) await sleep(QUEUE_SPACING_MS);
         }
     } finally {
         draining = false;
     }
+}
+
+/**
+ * Runs one queued verdict removal: DM first (order is not negotiable, see the
+ * header), then the removal, then hand the outcome back to whoever queued it.
+ * Settings are re-read here like the age path does, so disarming the gate
+ * mid-raid also stops everything still waiting in line.
+ */
+async function processVerdict({ member, decision, action, cause, resolve }) {
+    const settings = await getSettings(member.guild.id);
+    if (!settings.enabled || settings.dry_run) {
+        resolve({ ok: false, action, error: 'gate disarmed before processing', benign: true });
+        return;
+    }
+
+    const attempts = await peekAttempt(member.guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
+    const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts, cause);
+    const outcome = await removeMember(member, settings, decision, action);
+    outcome.dm = dm.note;
+    resolve(outcome);
 }
 
 /**
@@ -612,6 +780,21 @@ async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
     const dryRun = Boolean(settings.dry_run);
     let actionOutcome = null;
 
+    if (!dryRun && action === 'timeout') {
+        actionOutcome = await applyTimeout(member, settings,
+            `Join gate: suspicion score ${result.score} (${result.tier})`);
+        if (actionOutcome.ok) {
+            logger.info('[JOIN-GATE] Suspicion timeout applied', {
+                guildId: guild.id, userId: member.id, minutes: actionOutcome.minutes, score: result.score,
+            });
+        } else {
+            logger.error('[JOIN-GATE] Suspicion timeout failed', {
+                guildId: guild.id, userId: member.id, error: actionOutcome.error,
+            });
+            await incrementStat(guild.id, 'total_failures');
+        }
+    }
+
     if (!dryRun && (action === 'kick' || action === 'ban')) {
         const now = Date.now();
         // A suspicion ban is a fixed cooldown measured from NOW. Anyone scored
@@ -628,10 +811,9 @@ async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
             // Fixed cooldown: age-threshold edits must never recompute it.
             unbanKind: 'timed',
         };
-        const attempts = await peekAttempt(guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
-        const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts, 'suspicion');
-        actionOutcome = await removeMember(member, settings, decision, action);
-        actionOutcome.dm = dm.note;
+        // Through the same paced queue as the age gate: a raid of aged
+        // accounts must not become a burst of unthrottled DMs and bans.
+        actionOutcome = await enqueueVerdict(member, { decision, action, cause: 'suspicion' });
 
         if (actionOutcome.ok) {
             await incrementStat(guild.id, action === 'ban' ? 'total_bans' : 'total_kicks');
@@ -695,6 +877,10 @@ async function handleMemberJoin(member) {
             // Someone who got in cleanly has no rejoin history worth keeping.
             clearAttempts(member.guild.id, member.id).catch(() => {});
 
+            // Counted before the scorer reads the window, so members of an
+            // aged-account raid see each other in it.
+            noteJoinForBurst(member.guild, settings, { gated: false });
+
             if (settings.suspicion_enabled && !member.user.bot) {
                 const inBurst = isInBurst(member.guild.id, settings);
                 await runSuspicion(member, settings, { inBurst, inviteInfo }).catch(error =>
@@ -706,7 +892,7 @@ async function handleMemberJoin(member) {
             return;
         }
 
-        noteBurst(member.guild, settings);
+        noteJoinForBurst(member.guild, settings, { gated: true });
         enqueue(member, 'join');
     } catch (error) {
         logger.error('[JOIN-GATE] handleMemberJoin crashed', { error: error.message, stack: error.stack });
@@ -763,6 +949,7 @@ async function handleWatchedMessage(message) {
         const { score, signals, report } = watch.inspectMessage(message.guild.id, message, {
             windowMs,
             threshold,
+            weights: settings.suspicion_weights,
             // Only resolved when there is an invite to judge, and cached for an
             // hour after that, so the common message costs nothing.
             ownInviteCodes: OWN_INVITE_RE.test(message.content ?? '')
@@ -790,6 +977,48 @@ async function handleWatchedMessage(message) {
         });
     } catch (error) {
         logger.error('[JOIN-GATE] handleWatchedMessage crashed', { error: error.message, stack: error.stack });
+    }
+}
+
+/**
+ * Inspects an edit to a message from a recently joined member.
+ *
+ * Without this, the watch window only ever saw a message as it was born,
+ * and the classic evasion walked straight through it: post "hi", wait a
+ * beat, edit the scam link in. The edited content goes through exactly the
+ * same scorer, floor and thresholds as a fresh message; watch.js replaces
+ * the message's own record in place, so editing one message repeatedly can
+ * never masquerade as posting it repeatedly.
+ *
+ * Never throws.
+ */
+async function handleWatchedEdit(oldMessage, newMessage) {
+    try {
+        let message = newMessage;
+        if (!message?.guild) return;
+
+        // Cheapest gate first, same as the create path: when nobody in the
+        // guild is watched, an edit costs one in-memory lookup and nothing
+        // else, including for partials.
+        if (watch.watchedCount(message.guild.id) === 0) return;
+
+        if (message.partial) {
+            message = await message.fetch().catch(() => null);
+            if (!message) return;
+        }
+        if (message.author?.bot || message.system) return;
+
+        // Discord fires an update when an embed unfurls; the text is
+        // untouched and there is nothing new to judge. Only a real content
+        // change is a new fact about the member. An uncached original
+        // (old content unknowable) is inspected anyway: re-inspection is
+        // idempotent, so the worst case is a no-op.
+        const before = oldMessage?.partial ? null : String(oldMessage?.content ?? '');
+        if (before !== null && before === String(message.content ?? '')) return;
+
+        await handleWatchedMessage(message);
+    } catch (error) {
+        logger.error('[JOIN-GATE] handleWatchedEdit crashed', { error: error.message, stack: error.stack });
     }
 }
 
@@ -883,26 +1112,16 @@ async function enforceBehaviour(guild, member, settings, { score, signals, chann
     // them the ability to look up what they posted.
     const evidence = watch.evidenceFor(guild.id, member.id);
 
-    // A timeout is not a removal, so it goes through member.timeout rather
-    // than the kick/ban path: no DM template, no pending unban row, nothing
-    // to walk back with an invite. It expires on its own and a moderator
-    // can lift it in one click.
     if (!dryRun && action === 'timeout') {
-        const minutes = Math.max(1, Number(settings.watch_timeout_minutes) || 60);
-        try {
-            await member.timeout(
-                minutes * 60_000,
-                `Join gate: behaviour score ${score} within the watch window`
-            );
-            actionOutcome = { ok: true, action: 'timeout', minutes };
+        actionOutcome = await applyTimeout(member, settings,
+            `Join gate: behaviour score ${score} within the watch window`);
+        if (actionOutcome.ok) {
             logger.info('[JOIN-GATE] Watch timeout applied', {
-                guildId: guild.id, userId: member.id, minutes, score,
+                guildId: guild.id, userId: member.id, minutes: actionOutcome.minutes, score,
             });
-        } catch (error) {
-            // Missing Moderate Members, or the member outranks the bot.
-            actionOutcome = { ok: false, action: 'timeout', error: error.message };
+        } else {
             logger.error('[JOIN-GATE] Watch timeout failed', {
-                guildId: guild.id, userId: member.id, error: error.message,
+                guildId: guild.id, userId: member.id, error: actionOutcome.error,
             });
             await incrementStat(guild.id, 'total_failures');
         }
@@ -923,10 +1142,8 @@ async function enforceBehaviour(guild, member, settings, { score, signals, chann
             // Fixed cooldown: age-threshold edits must never recompute it.
             unbanKind: 'timed',
         };
-        const attempts = await peekAttempt(guild.id, member.id).catch(() => ({ attempts: 0, last_dm_ms: null }));
-        const dm = await trySendDm(member, settings, decision, action === 'ban' ? 'ban' : 'kick', attempts, 'behaviour');
-        actionOutcome = await removeMember(member, settings, decision, action);
-        actionOutcome.dm = dm.note;
+        // Same paced queue as every other removal; see enqueueVerdict.
+        actionOutcome = await enqueueVerdict(member, { decision, action, cause: 'behaviour' });
 
         if (actionOutcome.ok) {
             await incrementStat(guild.id, action === 'ban' ? 'total_bans' : 'total_kicks');
@@ -1015,12 +1232,26 @@ async function handleAutoModAction(execution) {
         }
         if (!settings.enabled || !settings.watch_enabled || !settings.watch_automod_enabled) return;
 
+        // Same exemption rule as the message path, parent included: a hit in a
+        // thread of an exempt channel is a hit in that channel, and a forum
+        // channel can only ever be hit through its threads.
         const exemptChannels = settings.watch_exempt_channel_ids;
-        if (execution.channelId && exemptChannels?.length && exemptChannels.includes(execution.channelId)) return;
+        if (execution.channelId && exemptChannels?.length) {
+            if (exemptChannels.includes(execution.channelId)) return;
+            const parentId = execution.channel?.parentId
+                ?? guild.channels.cache.get(execution.channelId)?.parentId;
+            if (parentId && exemptChannels.includes(parentId)) return;
+        }
 
         const trigger = AUTOMOD_TRIGGERS[execution.ruleTriggerType];
         if (!trigger) return;
-        const points = Number(watch.BEHAVIOUR_WEIGHTS[trigger.weight] ?? 0);
+        // The override that makes "an owner can raise it deliberately" true:
+        // the same suspicion_weights blob the profile scorer reads may carry
+        // behaviour keys, and this is where automod_keyword stops being 0.
+        const configured = Number(settings.suspicion_weights?.[trigger.weight]);
+        const points = Number.isFinite(configured)
+            ? configured
+            : Number(watch.BEHAVIOUR_WEIGHTS[trigger.weight] ?? 0);
         if (points <= 0) return; // keyword rules, unless deliberately weighted up
 
         const windowMs = Number(settings.watch_window_minutes) * 60_000;
@@ -1033,7 +1264,7 @@ async function handleAutoModAction(execution) {
             label: trigger.label,
             points,
             detail: matched ? `AutoMod matched "${matched}"` : 'blocked by your AutoMod rules',
-        }, { windowMs, threshold });
+        }, { windowMs, threshold, weights: settings.suspicion_weights });
 
         if (score <= 0 || !report) return;
         // The same floor as the message path. Both call enforceBehaviour, and
@@ -1225,6 +1456,7 @@ module.exports = {
     renderDm,
     handleMemberJoin,
     handleWatchedMessage,
+    handleWatchedEdit,
     handleAutoModAction,
     sweepGuild,
     backtestGuild,
@@ -1245,4 +1477,16 @@ module.exports = {
     // Exported so the health signal it raises can be pinned: a gate that has
     // lost the permission to act is the failure that looks like calm.
     removeMember,
+    // Exported so the tests can pin that both scoring paths share one timeout.
+    applyTimeout,
+    // Exported so the tests can pin that recording and alerting are separate
+    // concerns, and that clean joins only count when the owner opted in.
+    isInBurst,
+    noteJoinForBurst,
+    // The burst window's deploy carry, used by carryover.js.
+    exportBurstState,
+    importBurstState,
+    // Exported so the tests can pin that verdict removals share the one
+    // paced queue rather than firing unthrottled.
+    enqueueVerdict,
 };

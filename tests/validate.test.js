@@ -178,6 +178,17 @@ describe('weight overrides', () => {
             expect(v.weights(`${key} = 5`).ok).toBe(true);
         }
     });
+
+    // The promise in the automod_keyword comment: "the weight exists so an
+    // owner can raise it deliberately". The only path to raising it is this
+    // validator, so it has to know the behaviour keys too.
+    test('behaviour and combo signals are accepted', () => {
+        const { BEHAVIOUR_WEIGHTS, COMBO_WEIGHTS } = require('../src/utils/joinGate/watch');
+        for (const key of [...Object.keys(BEHAVIOUR_WEIGHTS), ...Object.keys(COMBO_WEIGHTS)]) {
+            expect(v.weights(`${key} = 15`).ok).toBe(true);
+        }
+        expect(v.weights('automod_keyword = 30').patch.suspicion_weights).toEqual({ automod_keyword: 30 });
+    });
 });
 
 describe('user ID lists', () => {

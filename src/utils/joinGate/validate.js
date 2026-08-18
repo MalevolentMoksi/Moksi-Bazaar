@@ -21,6 +21,16 @@
 
 const { LIMITS, TIER_ACTIONS, clamp, daysToMinutes, DAY_MINUTES } = require('./config');
 const { DEFAULT_WEIGHTS } = require('./suspicion');
+const { BEHAVIOUR_WEIGHTS, COMBO_WEIGHTS } = require('./watch');
+
+/**
+ * Every signal a weight override may name: the profile scorer's, the
+ * behaviour window's, and its combinations. One blob, one validator. The
+ * behaviour keys were missing for a while, which made the automod_keyword
+ * comment ("an owner can raise it deliberately") impossible to act on: the
+ * only path to raising it rejected the key as unrecognised.
+ */
+const KNOWN_WEIGHTS = Object.freeze({ ...DEFAULT_WEIGHTS, ...BEHAVIOUR_WEIGHTS, ...COMBO_WEIGHTS });
 
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 const INVITE_RE = /^https:\/\/(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[A-Za-z0-9-]+$/;
@@ -201,14 +211,18 @@ function weights(text) {
 
     for (const line of String(text ?? '').split('\n').map(l => l.trim()).filter(Boolean)) {
         const [key, value] = line.split('=').map(p => p?.trim());
-        if (!key || !Object.prototype.hasOwnProperty.call(DEFAULT_WEIGHTS, key)) { unknown.push(line); continue; }
+        if (!key || !Object.prototype.hasOwnProperty.call(KNOWN_WEIGHTS, key)) { unknown.push(line); continue; }
         const points = Number(value);
         if (!Number.isFinite(points)) { unknown.push(line); continue; }
         parsed[key] = clamp(points, WEIGHT_BOUNDS);
     }
 
     if (unknown.length) {
-        return bad(`Unrecognised line(s): ${unknown.join(', ')}\nValid signals: ${Object.keys(DEFAULT_WEIGHTS).join(', ')}`);
+        return bad(
+            `Unrecognised line(s): ${unknown.join(', ')}\n`
+            + `Profile signals: ${Object.keys(DEFAULT_WEIGHTS).join(', ')}\n`
+            + `Behaviour signals: ${[...Object.keys(BEHAVIOUR_WEIGHTS), ...Object.keys(COMBO_WEIGHTS)].join(', ')}`
+        );
     }
     return ok(
         { suspicion_weights: parsed },

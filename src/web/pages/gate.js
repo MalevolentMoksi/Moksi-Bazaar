@@ -14,6 +14,7 @@ const { getSettings, TIER_ACTIONS, formatDays, LIMITS,
     DEFAULT_DM_SUSPICION_MESSAGE, DEFAULT_DM_WATCH_MESSAGE } = require('../../utils/joinGate/config');
 const { NUMERIC_FIELDS } = require('../../utils/joinGate/validate');
 const { DEFAULT_WEIGHTS } = require('../../utils/joinGate/suspicion');
+const { BEHAVIOUR_WEIGHTS, COMBO_WEIGHTS } = require('../../utils/joinGate/watch');
 const { html, raw, card, pill } = require('../html');
 
 async function data(client, guildId, query = {}) {
@@ -125,6 +126,7 @@ function renderAlerts(s) {
         title: 'Burst alert & catch-up sweep',
         body: html`
             ${toggle('burst_alert_enabled', 'Join burst alert', s.burst_alert_enabled, 'warn when joins spike, the usual shape of a raid')}
+            ${toggle('burst_count_all_joins', 'Count clean joins too', s.burst_count_all_joins, 'a raid of old-enough accounts is invisible to a window that only counts gated joins; clean surges are announced as surges, not raids')}
             <form data-api="numerics">
                 <div class="field-row">
                     ${numInput('burst_threshold', s.burst_threshold)}
@@ -207,7 +209,10 @@ function renderSuspicion(s, channels) {
             </form>
             <details class="reference">
                 <summary>Every signal and its default weight</summary>
-                <pre class="mono">${Object.entries(DEFAULT_WEIGHTS).map(([k, v]) => `${k} = ${v}`).join('\n')}</pre>
+                <pre class="mono">${Object.entries(DEFAULT_WEIGHTS).map(([k, v]) => `${k} = ${v}`).join('\n')}
+
+# behaviour window
+${Object.entries({ ...BEHAVIOUR_WEIGHTS, ...COMBO_WEIGHTS }).map(([k, v]) => `${k} = ${v}`).join('\n')}</pre>
             </details>
             ${channelForm('suspicion_log_channel_id', 'Suspicion log channel', s.suspicion_log_channel_id, channels)}`,
         footer: html`<a href="/gate/backtest">Backtest these settings</a> against everyone already in the server.`,

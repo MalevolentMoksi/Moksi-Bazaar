@@ -85,6 +85,14 @@ const DEFAULTS = Object.freeze({
     burst_alert_enabled: true,
     burst_threshold: 5,
     burst_window_seconds: 60,
+    /**
+     * Whether joins that pass the age gate still count toward the burst
+     * window. Off by default: out of the box a burst means "gated joins
+     * arriving together", and a popular invite bringing thirty legitimate
+     * people is not a raid. Switched on, an aged-account raid is at least
+     * visible as a surge, and the alert says which kind it saw.
+     */
+    burst_count_all_joins: false,
     sweep_enabled: false,
     sweep_window_hours: 24,
     // Suspicion scoring. Everything off / log-only until deliberately armed.
@@ -179,7 +187,7 @@ const WRITABLE_COLUMNS = new Set([
     'log_channel_id', 'log_kick_channel_id', 'log_failure_channel_id',
     'log_preview_channel_id', 'log_config_channel_id',
     'log_kicks', 'log_failures', 'log_previews', 'log_config',
-    'burst_alert_enabled', 'burst_threshold', 'burst_window_seconds',
+    'burst_alert_enabled', 'burst_threshold', 'burst_window_seconds', 'burst_count_all_joins',
     'sweep_enabled', 'sweep_window_hours',
     'suspicion_enabled', 'suspicion_watch_at', 'suspicion_suspect_at', 'suspicion_malicious_at',
     'suspicion_watch_action', 'suspicion_suspect_action', 'suspicion_malicious_action',
@@ -233,7 +241,8 @@ function ensureColumns() {
             ADD COLUMN IF NOT EXISTS snapshot_dm_owner     BOOLEAN NOT NULL DEFAULT true,
             ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
             ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT,
-            ADD COLUMN IF NOT EXISTS false_positive_role_ids TEXT[]`
+            ADD COLUMN IF NOT EXISTS false_positive_role_ids TEXT[],
+            ADD COLUMN IF NOT EXISTS burst_count_all_joins BOOLEAN NOT NULL DEFAULT false`
     ).catch(error => {
         columnsEnsured = null;
         throw error;

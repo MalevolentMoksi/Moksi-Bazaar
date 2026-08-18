@@ -76,6 +76,22 @@ const MAX_WATCHED = 500;
 const INVITE_RE = /(?:discord\.(?:gg|com\/invite)|discordapp\.com\/invite)\/([A-Za-z0-9-]+)/ig;
 
 /**
+ * A behaviour weight, honouring the guild's overrides.
+ *
+ * Same contract as the profile scorer's weightOf: the per-guild
+ * `suspicion_weights` blob may carry behaviour keys too, and a finite override
+ * wins. This is the mechanism behind the promise the automod_keyword comment
+ * has made all along: "the weight exists so an owner can raise it
+ * deliberately". For a while nothing read the override, and the validator
+ * rejected the key, so the promise was words.
+ */
+function weightOf(weights, id) {
+    const override = Number(weights?.[id]);
+    if (Number.isFinite(override)) return override;
+    return BEHAVIOUR_WEIGHTS[id] ?? COMBO_WEIGHTS[id] ?? 0;
+}
+
+/**
  * guildId -> Map<userId, entry>, where entry is
  * `{joinedAt, messages: [{content, channelId, at}], seen: Map<signalId, signal>,
  *   joinScore, joinTier, reportedScore}`.
@@ -189,7 +205,7 @@ function isWatched(guildId, userId, windowMs, now = Date.now()) {
  * Kept as explicit checks rather than a rule table: there are two of them, and
  * a reader should be able to see exactly what fires without decoding a matcher.
  */
-function combosFor(seen) {
+function combosFor(seen, weights = null) {
     const has = id => seen.has(id);
     const anyLink = has('scam_link') || has('invite_link') || has('link_in_first_message');
     const anyPing = has('everyone_attempt') || has('mass_mention');
@@ -202,7 +218,7 @@ function combosFor(seen) {
         combos.push({
             id: 'advert_broadcast',
             label: 'Advertising broadcast',
-            points: COMBO_WEIGHTS.advert_broadcast,
+            points: weightOf(weights, 'advert_broadcast'),
             detail: 'an invite to another server, pushed with a mass ping',
         });
     }
@@ -213,7 +229,7 @@ function combosFor(seen) {
         combos.push({
             id: 'link_sweep',
             label: 'Link sweep',
-            points: COMBO_WEIGHTS.link_sweep,
+            points: weightOf(weights, 'link_sweep'),
             detail: 'the same link pushed into more than one place',
         });
     }
@@ -238,7 +254,7 @@ function combosFor(seen) {
  *   got materially worse since the last report.
  */
 function inspectMessage(guildId, message, {
-    windowMs, threshold = Infinity, now = Date.now(), ownInviteCodes = null,
+    windowMs, threshold = Infinity, now = Date.now(), ownInviteCodes = null, weights = null,
 } = {}) {
     const empty = { score: 0, signals: [], report: false, fresh: [] };
     // A system message is authored BY the member without the member saying
@@ -264,21 +280,34 @@ function inspectMessage(guildId, message, {
     // `raw` and `messageId` are kept alongside the normalised copy: the
     // normalised one is for comparison, the other two are for showing a human
     // what was said and for cleaning it up afterwards.
-    entry.messages.push({
+    //
+    // An EDIT replaces its own record rather than appending. That one rule is
+    // what lets the caller re-inspect edited messages at all: appending would
+    // let a member trip the duplicate counter by editing one message three
+    // times, and the whole point of re-inspection is the opposite member, the
+    // one who posts something harmless and edits the scam link in afterwards.
+    const existing = message.id == null ? -1
+        : entry.messages.findIndex(m => m.messageId === message.id);
+    const record = {
         content: content.trim().toLowerCase(),
         raw: content.slice(0, 300),
         messageId: message.id,
         channelId: message.channelId,
-        at: now,
-    });
-    if (entry.messages.length > 25) entry.messages.shift();
+        // An edit keeps its original place in time.
+        at: existing >= 0 ? entry.messages[existing].at : now,
+    };
+    if (existing >= 0) entry.messages[existing] = record;
+    else {
+        entry.messages.push(record);
+        if (entry.messages.length > 25) entry.messages.shift();
+    }
 
     // 1. Known-scam domain. The strongest single thing this bot can observe.
     const { urls, hits } = phishing.scanText(content);
     if (hits.length > 0) {
-        add('scam_link', 'Known scam domain', BEHAVIOUR_WEIGHTS.scam_link, hits.slice(0, 3).join(', '));
+        add('scam_link', 'Known scam domain', weightOf(weights, 'scam_link'), hits.slice(0, 3).join(', '));
     } else if (urls.length > 0) {
-        add('link_in_first_message', 'Posted a link immediately', BEHAVIOUR_WEIGHTS.link_in_first_message,
+        add('link_in_first_message', 'Posted a link immediately', weightOf(weights, 'link_in_first_message'),
             `${urls.length} link(s) within the watch window`);
     }
 
@@ -292,18 +321,18 @@ function inspectMessage(guildId, message, {
     const codes = [...content.matchAll(INVITE_RE)].map(m => m[1].toLowerCase());
     const foreign = ownInviteCodes ? codes.filter(code => !ownInviteCodes.has(code)) : codes;
     if (foreign.length) {
-        add('invite_link', 'Server invite', BEHAVIOUR_WEIGHTS.invite_link, 'posted an invite to another server');
+        add('invite_link', 'Server invite', weightOf(weights, 'invite_link'), 'posted an invite to another server');
     }
 
     // 3. Mention spam.
     const mentionCount = (message.mentions?.users?.size ?? 0) + (message.mentions?.roles?.size ?? 0);
     if (mentionCount >= MASS_MENTION_THRESHOLD) {
-        add('mass_mention', 'Mass mention', BEHAVIOUR_WEIGHTS.mass_mention, `${mentionCount} mentions in one message`);
+        add('mass_mention', 'Mass mention', weightOf(weights, 'mass_mention'), `${mentionCount} mentions in one message`);
     }
     // `mentions.everyone` is only true when it actually pinged; the raw text
     // check catches someone trying it without permission, which is just as telling.
     if (message.mentions?.everyone || /@(everyone|here)\b/.test(content)) {
-        add('everyone_attempt', 'Tried @everyone', BEHAVIOUR_WEIGHTS.everyone_attempt, 'used an @everyone/@here ping');
+        add('everyone_attempt', 'Tried @everyone', weightOf(weights, 'everyone_attempt'), 'used an @everyone/@here ping');
     }
 
     // 4. Same text across several channels, the classic advert sweep.
@@ -312,15 +341,15 @@ function inspectMessage(guildId, message, {
         const same = entry.messages.filter(m => m.content === normalized);
         const channels = new Set(same.map(m => m.channelId));
         if (channels.size >= CROSS_CHANNEL_THRESHOLD) {
-            add('cross_channel_spam', 'Cross-channel spam', BEHAVIOUR_WEIGHTS.cross_channel_spam,
+            add('cross_channel_spam', 'Cross-channel spam', weightOf(weights, 'cross_channel_spam'),
                 `same message in ${channels.size} channels`);
         } else if (same.length >= DUPLICATE_THRESHOLD) {
-            add('duplicate_spam', 'Repeated message', BEHAVIOUR_WEIGHTS.duplicate_spam,
+            add('duplicate_spam', 'Repeated message', weightOf(weights, 'duplicate_spam'),
                 `sent ${same.length} times`);
         }
     }
 
-    return fold(entry, signals, { guildId, userId: message.author.id, threshold });
+    return fold(entry, signals, { guildId, userId: message.author.id, threshold, weights });
 }
 
 /**
@@ -332,7 +361,7 @@ function inspectMessage(guildId, message, {
  * and reporting rules as one this bot worked out for itself. Two scoring paths
  * that drift apart would be a worse bug than either of them being wrong.
  */
-function fold(entry, signals, { guildId, userId, threshold = Infinity }) {
+function fold(entry, signals, { guildId, userId, threshold = Infinity, weights = null }) {
     // Highest points win for a repeated signal, so a later mass mention of 40
     // replaces an earlier one of 6 rather than stacking with it.
     const fresh = [];
@@ -364,7 +393,7 @@ function fold(entry, signals, { guildId, userId, threshold = Infinity }) {
     }
 
     const base = [...entry.seen.values()];
-    const combos = combosFor(entry.seen);
+    const combos = combosFor(entry.seen, weights);
     const all = [...base, ...combos];
     const score = all.reduce((sum, s) => sum + s.points, 0);
 
@@ -396,7 +425,7 @@ function fold(entry, signals, { guildId, userId, threshold = Infinity }) {
  * firing on them) would be invisible to the watch window precisely because the
  * platform dealt with it well.
  */
-function noteExternalSignal(guildId, userId, signal, { windowMs, threshold = Infinity, now = Date.now() } = {}) {
+function noteExternalSignal(guildId, userId, signal, { windowMs, threshold = Infinity, now = Date.now(), weights = null } = {}) {
     const empty = { score: 0, signals: [], report: false, fresh: [] };
     const entry = watched.get(guildId)?.get(userId);
     if (!entry) return empty;
@@ -404,11 +433,85 @@ function noteExternalSignal(guildId, userId, signal, { windowMs, threshold = Inf
         forget(guildId, userId);
         return empty;
     }
-    return fold(entry, [signal], { guildId, userId, threshold });
+    return fold(entry, [signal], { guildId, userId, threshold, weights });
 }
 
 function watchedCount(guildId) {
     return watched.get(guildId)?.size ?? 0;
+}
+
+/**
+ * Everything the window knows, as plain data, for carrying across a deploy.
+ *
+ * The boot-time restore can re-derive who should be watched and what their
+ * profile scored, but three things only this process ever knew: what each
+ * member said in the window, which signals already fired, and the score a
+ * report already went out at. Losing those on deploy handed a mid-sweep
+ * spammer a clean scoreboard.
+ */
+function exportState() {
+    const out = {};
+    for (const [guildId, bucket] of watched) {
+        const entries = [];
+        for (const [userId, e] of bucket) {
+            entries.push({
+                userId,
+                joinedAt: e.joinedAt,
+                joinScore: e.joinScore,
+                joinTier: e.joinTier,
+                reportedScore: e.reportedScore ?? null,
+                messages: e.messages,
+                seen: [...e.seen.values()],
+            });
+        }
+        if (entries.length) out[guildId] = entries;
+    }
+    return out;
+}
+
+/**
+ * Merges a carried state back in, on top of whatever the derived restore
+ * already re-armed. Only members still inside their guild's window are
+ * kept; everything else ages out exactly as it would have.
+ *
+ * @param {(guildId: string) => number} windowMsFor the guild's watch window
+ * @returns {number} entries restored
+ */
+function importState(state, windowMsFor, now = Date.now()) {
+    let restored = 0;
+    for (const [guildId, entries] of Object.entries(state ?? {})) {
+        const windowMs = Number(windowMsFor?.(guildId));
+        if (!Number.isFinite(windowMs) || windowMs <= 0) continue;
+
+        for (const data of entries ?? []) {
+            const joinedAt = Number(data?.joinedAt);
+            if (!Number.isFinite(joinedAt) || now - joinedAt > windowMs) continue;
+
+            const bucket = guildBucket(guildId);
+            const userId = String(data.userId);
+            const entry = bucket.get(userId) ?? {
+                joinedAt, messages: [], seen: new Map(),
+                joinScore: 0, joinTier: 'clear', reportedScore: undefined,
+            };
+            entry.joinedAt = joinedAt;
+            // The stored score was computed with live correlation the restore
+            // cannot reconstruct, so it wins over the re-derived one.
+            if (Number.isFinite(Number(data.joinScore)) && Number(data.joinScore) > 0) {
+                entry.joinScore = Number(data.joinScore);
+                entry.joinTier = data.joinTier || entry.joinTier;
+            }
+            if (data.reportedScore != null) entry.reportedScore = Number(data.reportedScore);
+            if (Array.isArray(data.messages) && data.messages.length) {
+                entry.messages = data.messages.slice(-25);
+            }
+            for (const signal of data.seen ?? []) {
+                if (signal?.id && Number(signal.points)) entry.seen.set(signal.id, signal);
+            }
+            bucket.set(userId, entry);
+            restored += 1;
+        }
+    }
+    return restored;
 }
 
 function reset(guildId) {
@@ -433,4 +536,6 @@ module.exports = {
     pruneAll,
     watchedCount,
     reset,
+    exportState,
+    importState,
 };

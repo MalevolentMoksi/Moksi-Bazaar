@@ -188,6 +188,64 @@ describe('reporting', () => {
     });
 });
 
+describe('edits are the same message, re-judged', () => {
+    const withId = (msg, id) => ({ ...msg, id });
+
+    // The classic evasion: be born harmless, edit the payload in.
+    test('a harmless message edited into an advert scores as the advert', () => {
+        const first = inspect(withId(message('hi', 'chan-a'), 'm1'));
+        expect(first.score).toBe(0);
+
+        const edited = inspect(withId(message(ADVERT, 'chan-a'), 'm1'));
+        expect(edited.score).toBe(102);
+        expect(edited.report).toBe(true);
+    });
+
+    test('editing one message repeatedly is not posting it repeatedly', () => {
+        inspect(withId(message('check this out', 'chan-a'), 'm1'));
+        inspect(withId(message('check this out!', 'chan-a'), 'm1'));
+        const result = inspect(withId(message('check this out', 'chan-a'), 'm1'));
+        // One record in the window, so the duplicate counter never trips.
+        const ids = result.signals.map(s => s.id);
+        expect(ids).not.toContain('duplicate_spam');
+        expect(ids).not.toContain('cross_channel_spam');
+    });
+
+    test('an edit cannot fake a cross-channel sweep from one channel', () => {
+        inspect(withId(message(ADVERT, 'chan-a'), 'm1'));
+        // The same text posted in a REAL second channel still counts.
+        const swept = inspect(withId(message(ADVERT, 'chan-b'), 'm2'));
+        expect(swept.signals.map(s => s.id)).toContain('cross_channel_spam');
+    });
+});
+
+describe('a guild\'s overrides reach the behaviour weights', () => {
+    test('an overridden signal scores at the configured points', () => {
+        const result = watch.inspectMessage(GUILD, message('hello https://example.com', 'chan-a'), {
+            windowMs: WINDOW_MS, threshold: 100, weights: { link_in_first_message: 40 },
+        });
+        const link = result.signals.find(s => s.id === 'link_in_first_message');
+        expect(link.points).toBe(40);
+        expect(result.score).toBe(40);
+    });
+
+    test('an override of zero switches a signal off', () => {
+        const result = watch.inspectMessage(GUILD, message('hello https://example.com', 'chan-a'), {
+            windowMs: WINDOW_MS, threshold: 100, weights: { link_in_first_message: 0 },
+        });
+        expect(result.score).toBe(0);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    test('combo weights honour overrides too', () => {
+        const result = watch.inspectMessage(GUILD, message(ADVERT, 'chan-a'), {
+            windowMs: WINDOW_MS, threshold: 100, weights: { advert_broadcast: 50 },
+        });
+        const combo = result.signals.find(s => s.id === 'advert_broadcast');
+        expect(combo.points).toBe(50);
+    });
+});
+
 describe('ordinary newcomers stay quiet', () => {
     test('a plain hello scores nothing', () => {
         expect(inspect(message('hi everyone, glad to be here', 'chan-a')).score).toBe(0);
