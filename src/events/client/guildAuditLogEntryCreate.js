@@ -83,8 +83,19 @@ module.exports = {
         try {
             if (!guild) return;
 
-            // Never react to our own actions. The join gate kicks and bans, and
-            // a guard that alerted on its own work would be pure noise.
+            // Bookkeeping first, before anything can turn back. Discord
+            // discards its audit log after 45 days, so a history only exists
+            // if it was being kept before anyone thought to ask for it, and it
+            // has to include this bot's own work: skipping our own entries
+            // meant every gate kick and temp-ban existed only as an embed in a
+            // channel, and the dashboard called a gate-banned member clean.
+            // Recording obeys no toggle and reads no settings. A disabled gate
+            // is a gate that takes no actions, not one that forgets what
+            // happened.
+            await modlog.record(guild, entry);
+
+            // The guard, though, never reacts to our own actions: alerting on
+            // its own work would be pure noise.
             if (entry.executorId && entry.executorId === client?.user?.id) return;
 
             let settings;
@@ -93,15 +104,7 @@ module.exports = {
             } catch {
                 return; // fail open, same as every other gate path
             }
-            if (!settings.enabled) return;
-
-            // Bookkeeping first, and independent of the guard. Discord discards
-            // its audit log after 45 days, so a history only exists if it was
-            // being kept before anyone thought to ask for it. This records and
-            // returns: it raises nothing and feeds no threshold.
-            await modlog.record(guild, entry);
-
-            if (!settings.guard_enabled) return;
+            if (!settings.enabled || !settings.guard_enabled) return;
 
             const verdict = guard.record(guild.id, entry, settings);
             if (!verdict) return;

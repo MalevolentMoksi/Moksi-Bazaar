@@ -60,8 +60,12 @@ async function record(guild, entry) {
     if (!targetId) return null;
 
     const executor = entry.executor ?? null;
+    // The end time always survives. It used to be a fallback for a missing
+    // reason, so any timeout that CARRIED a reason lost its duration: the one
+    // fact distinguishing a ten-minute mute from a week silently dropped.
+    const trimmedReason = `${entry.reason ?? ''}`.trim();
     const reason = described.until
-        ? `${entry.reason ?? ''}`.trim() || `timed out until ${described.until}`
+        ? (trimmedReason ? `${trimmedReason} (until ${described.until})` : `timed out until ${described.until}`)
         : entry.reason ?? null;
 
     try {
