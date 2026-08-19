@@ -107,6 +107,15 @@ describe('the prompt teaches what a filename is worth', () => {
         expect(speakSource).toMatch(/NEVER name a person, character, game, show or meme on the strength of a filename/);
     });
 
+    // The other half of the same hazard. The tag deliberately withholds the
+    // tenor slug, but the raw URL is in the user's own message and cannot be
+    // stripped, so the slug reaches the model regardless. Structure alone
+    // could not close this one; the rule has to say it.
+    test('a link slug is called a label too, not evidence', () => {
+        expect(speakSource).toMatch(/slug someone else typed/);
+        expect(speakSource).toMatch(/filename or a link slug/);
+    });
+
     test('the older rule against reacting to file types is still there', () => {
         expect(speakSource).toMatch(/do not comment on the file type/);
     });
