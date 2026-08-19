@@ -30,7 +30,7 @@
  * existing members without touching anyone.
  */
 
-const { SnowflakeUtil, UserFlags } = require('discord.js');
+const { SnowflakeUtil, UserFlags, GuildMemberFlags } = require('discord.js');
 
 const DAY_MS = 86_400_000;
 
@@ -410,13 +410,61 @@ function weightOf(weights, id) {
     return Number.isFinite(Number(override)) ? Number(override) : DEFAULT_WEIGHTS[id];
 }
 
+/**
+ * Whether Discord has set a given flag on this account.
+ *
+ * Not `flags.has()`, which cannot answer for half the flags that exist.
+ * discord.js's BitField masks with `&`, a 32-bit operator, so every flag
+ * above bit 31 reads as absent no matter what Discord actually sent:
+ *
+ *     new UserFlagsBitField(UserFlags.Quarantined).has(UserFlags.Quarantined)
+ *     // false
+ *
+ * Quarantined is bit 44, so `discord_quarantined` (85 points, and one of the
+ * two signals that force the malicious tier outright) could never fire. It
+ * was decoration. The comparison is done in BigInt here, which is exact at
+ * any width; Spammer is bit 20 and was never affected.
+ */
 function hasFlag(user, flagName) {
     try {
-        if (!UserFlags[flagName]) return false;
-        return Boolean(user.flags?.has?.(UserFlags[flagName]));
+        const bit = UserFlags[flagName];
+        if (!bit) return false;
+        const raw = user.flags?.bitfield;
+        if (raw !== undefined && raw !== null) {
+            return (BigInt(raw) & BigInt(bit)) === BigInt(bit);
+        }
+        return Boolean(user.flags?.has?.(bit));
     } catch {
         return false;
     }
+}
+
+/**
+ * The member-level flags Discord sets when its AutoMod quarantines someone
+ * over their profile. All comfortably inside 32 bits.
+ *
+ * Quarantine is published on the GUILD MEMBER, not the user: the user-level
+ * Quarantined flag is undocumented and is not part of `public_flags`, so
+ * reading only the user object meant asking the one place the answer is not
+ * kept. Both are consulted now.
+ */
+const QUARANTINE_MEMBER_FLAGS = Object.freeze([
+    'AutomodQuarantinedUsernameOrGuildNickname',
+    'AutomodQuarantinedBio',
+    'AutoModQuarantinedGuildTag',
+]);
+
+function isQuarantined(user, member) {
+    if (hasFlag(user, 'Quarantined')) return true;
+    try {
+        for (const name of QUARANTINE_MEMBER_FLAGS) {
+            const bit = GuildMemberFlags?.[name];
+            if (bit && member?.flags?.has?.(bit)) return true;
+        }
+    } catch {
+        // A member object without flags is simply not evidence either way.
+    }
+    return false;
 }
 
 /**
@@ -463,7 +511,7 @@ function scoreAccount(user, options = {}) {
     if (hasFlag(user, 'Spammer')) {
         addSus('discord_spammer', 'Flagged by Discord', weightOf(weights, 'discord_spammer'), 'account carries the Spammer flag');
     }
-    if (hasFlag(user, 'Quarantined')) {
+    if (isQuarantined(user, member)) {
         addSus('discord_quarantined', 'Quarantined by Discord', weightOf(weights, 'discord_quarantined'), 'account is quarantined');
     }
 
@@ -750,6 +798,8 @@ module.exports = {
     seedJoins,
     JOIN_WINDOW_MS,
     // exported for tests
+    hasFlag,
+    isQuarantined,
     hasInvisibleChars,
     hasMixedScriptToken,
     hasDigitSuffix,
