@@ -267,7 +267,10 @@ describe('the kick and ban report answers in the same order', () => {
     test('and the receipts are lines, not a run-on', async () => {
         const embed = await outcome();
         const named = embed.fields.filter(f => !isAside(f));
-        expect(named.map(f => f.name)).toEqual(['DM', 'Join attempt']);
+        // "DM: suppressed" was read by moderators as the bot restricting the
+        // USER'S DMs, a punishment, rather than the bot declining to send its
+        // own second notice. The label answers the question outright now.
+        expect(named.map(f => f.name)).toEqual(['Told them why', 'Join attempt']);
         expect(named[0].value).toBe('sent');
         expect(named[1].value).toBe('#2');
     });
@@ -390,5 +393,42 @@ describe('no report strings its facts together', () => {
                 expect(field.name.length).toBeLessThanOrEqual(14);
             }
         }
+    });
+});
+
+// ── "DM suppressed" ─────────────────────────────────────────────────────────
+//
+// A moderator read "DM suppressed (cooldown, 60m left)" as the bot muting the
+// joiner's ability to send DMs, i.e. a punishment applied to them, and banned
+// the account manually on the strength of it. It never meant that. It meant
+// the bot declined to tell them a second time inside an hour.
+//
+// The rule these pin: every value of this field answers "did we tell them
+// why", and none of them can be read as something done TO the member.
+describe('the notification field cannot be read as a punishment', () => {
+    const { renderDm } = require('../src/utils/joinGate/enforcement');
+
+    // Pulled from the source so a new branch cannot dodge the check.
+    const source = require('fs').readFileSync(
+        require('path').join(__dirname, '..', 'src', 'utils', 'joinGate', 'enforcement.js'), 'utf8');
+    const notes = [...source.matchAll(/note: (`[^`]*`|'[^']*')/g)].map(m => m[1].slice(1, -1));
+
+    test('there are notes to check, and none of them says "suppressed"', () => {
+        expect(notes.length).toBeGreaterThanOrEqual(4);
+        for (const note of notes) {
+            expect(note.toLowerCase()).not.toContain('suppress');
+            // "disabled" alone reads as the member being disabled somehow.
+            expect(note).not.toBe('disabled');
+        }
+    });
+
+    test('every note answers the question yes or no', () => {
+        for (const note of notes) {
+            expect(note.toLowerCase()).toMatch(/^(yes|no)\b/);
+        }
+    });
+
+    test('renderDm is untouched by any of this', () => {
+        expect(typeof renderDm).toBe('function');
     });
 });

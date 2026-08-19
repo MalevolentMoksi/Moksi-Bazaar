@@ -500,6 +500,22 @@ const init = async () => {
         ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS warn_count INTEGER NOT NULL DEFAULT 1;
     `);
 
+    // Migration: what a removed account actually looked like.
+    //
+    // The attempts table kept a counter and nothing else, so the moment the
+    // gate kicked someone every fact about them was gone: two obvious
+    // throwaways arrived minutes apart on 2026-08-19 and there was no way to
+    // notice afterwards that they were a pair, because neither existed in any
+    // record. These columns change no decision and gate no action; they are
+    // the difference between having evidence and not. Pruned with the row.
+    await pool.query(`
+        ALTER TABLE join_gate_attempts ADD COLUMN IF NOT EXISTS username    TEXT;
+        ALTER TABLE join_gate_attempts ADD COLUMN IF NOT EXISTS global_name TEXT;
+        ALTER TABLE join_gate_attempts ADD COLUMN IF NOT EXISTS avatar      TEXT;
+        ALTER TABLE join_gate_attempts ADD COLUMN IF NOT EXISTS created_ms  BIGINT;
+        ALTER TABLE join_gate_attempts ADD COLUMN IF NOT EXISTS invite_code TEXT;
+    `);
+
     // Migration: warns become soft-deletable. A ?delwarn in Dyno marks the row
     // removed rather than erasing it: the record keeps both truths, "this warn
     // was issued" and "staff later withdrew it", instead of diverging from
@@ -1639,7 +1655,7 @@ async function getSuspicionAccuracy(guildId, { limit = 8 } = {}) {
             `SELECT COUNT(*)::int AS filed,
                     COUNT(*) FILTER (WHERE false_positive)::int AS wrong,
                     MIN(at_ms) AS oldest_ms
-               FROM suspicion_reports WHERE guild_id = $1`,
+               FROM suspicion_reports WHERE guild_id = $1 AND source <> 'gated'`,
             [guildId]
         ),
         pool.query(
@@ -1651,7 +1667,7 @@ async function getSuspicionAccuracy(guildId, { limit = 8 } = {}) {
                     jsonb_array_elements(
                         CASE WHEN jsonb_typeof(signals) = 'array' THEN signals ELSE '[]'::jsonb END
                     ) AS signal
-              WHERE guild_id = $1 AND false_positive
+              WHERE guild_id = $1 AND false_positive AND source <> 'gated'
               GROUP BY 1 ORDER BY wrong DESC LIMIT $2`,
             [guildId, limit]
         ),

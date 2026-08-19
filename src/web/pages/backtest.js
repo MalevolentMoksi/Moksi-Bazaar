@@ -19,6 +19,7 @@
 const { getSettings } = require('../../utils/joinGate/config');
 const { backtestGuild } = require('../../utils/joinGate/enforcement');
 const { describeShape } = require('../../utils/joinGate/cohorts');
+const { findRemovalCohorts } = require('../../utils/joinGate/removalCohorts');
 const { getSuspicionAccuracy } = require('../../utils/db');
 const { html, raw, card, pill, table, fmtNumber, fmtAgo, fmtDateTime } = require('../html');
 
@@ -44,13 +45,18 @@ async function data(client, guildId, query = {}) {
     // Two indexed counts, so the record is on the page whether or not anybody
     // pays for a run.
     const accuracy = await getSuspicionAccuracy(guildId).catch(() => null);
+    // One indexed read over the removal log, so the batches the gate already
+    // caught are on the page whether or not anybody pays for a full run. This
+    // is the view the roster backtest structurally cannot give: everything it
+    // groups has already been removed and is gone from the member list.
+    const removals = await findRemovalCohorts(guildId).catch(() => null);
 
-    if (!run) return { ran: false, limit, applyTenure, accuracy, now: Date.now() };
+    if (!run) return { ran: false, limit, applyTenure, accuracy, removals, now: Date.now() };
 
     const guild = client.guilds.cache.get(guildId);
     const settings = await getSettings(guildId);
     const report = await backtestGuild(guild, settings, { limit, applyTenure });
-    return { ran: true, limit, applyTenure, accuracy, report, now: Date.now() };
+    return { ran: true, limit, applyTenure, accuracy, removals, report, now: Date.now() };
 }
 
 /**
@@ -102,6 +108,58 @@ function renderAccuracy(model) {
             <a href="/gate?s=suspicion">suspicion weights</a>, then run the backtest to see what
             the change would do to the roster.</p>` : ''}`,
     });
+}
+
+/**
+ * Batches among the accounts the gate has already turned away.
+ *
+ * A pair is enough here, and only here. Over the live roster a wrong grouping
+ * is an accusation against somebody still in the server, so `cohorts.js`
+ * insists on three; over accounts that are already gone it costs a glance.
+ *
+ * Nothing on this card is an instruction. These accounts were removed when
+ * they arrived; the report exists so a pattern across removals is visible at
+ * all, which it was not when the only record of a kick was a counter.
+ */
+function renderRemovalCohorts(model) {
+    const r = model.removals;
+    if (!r) return '';
+
+    const days = Math.round(r.windowMs / 86_400_000);
+    if (!r.cohorts.length) {
+        return card({
+            title: 'Batches among removals',
+            hint: `${fmtNumber(r.scanned)} removed in the last ${days} days`,
+            body: html`<p class="empty">No batches among the accounts the gate turned away.</p>
+                ${r.scanned === 0 ? html`<p class="hint">Nothing recorded yet. Accounts removed before
+                the gate started keeping fingerprints are not in this view, and never can be.</p>` : ''}`,
+        });
+    }
+
+    const cards = r.cohorts.slice(0, 10).map((cohort, index) => card({
+        title: `Removed batch ${index + 1}: ${cohort.size} accounts, ${describeShape(cohort.shape)}`,
+        hint: cohort.basis === 'creation'
+            ? `registered within ${fmtSpan(cohort.creationSpanMs)} of each other`
+            : `turned away within ${fmtSpan(cohort.joinSpanMs)} of each other`,
+        body: html`
+            <p class="hint">${fmtNumber(cohort.defaultAvatars)} of ${cohort.size} had no avatar.
+            All of these were already removed by the gate; this is the pattern, not a to-do list.</p>
+            ${table({
+        columns: [
+            { key: 'username', label: 'Username', render: m => html`${m.username}${m.defaultAvatar ? raw(' <span class="hint">(no avatar)</span>') : ''}` },
+            { key: 'id', label: 'ID', render: m => html`<span class="mono">${m.id}</span>` },
+            { key: 'created', label: 'Created', numeric: true, render: m => html`<span title="${fmtDateTime(m.createdTimestamp)}">${fmtAgo(m.createdTimestamp, model.now)}</span>` },
+            { key: 'joined', label: 'Last turned away', numeric: true, render: m => html`<span title="${fmtDateTime(m.joinedTimestamp)}">${fmtAgo(m.joinedTimestamp, model.now)}</span>` },
+            { key: 'attempts', label: 'Tries', numeric: true, render: m => fmtNumber(m.attempts ?? 1) },
+        ],
+        rows: cohort.members,
+    })}`,
+    }));
+
+    return html`<h2 class="section-title">Batches among removals</h2>
+        <p class="hint">Grouped from what the gate recorded as it removed them, over the last
+        ${days} days. Pairs count here because everyone listed is already gone.</p>
+        ${cards}`;
 }
 
 function renderLanding(model) {
@@ -212,7 +270,7 @@ function statHtml(label, value, tone) {
 function render(model) {
     // The record sits under the simulation either way: a prediction is worth
     // more next to its own scorecard.
-    return html`${model.ran ? renderReport(model) : renderLanding(model)}
+    return html`${model.ran ? renderReport(model) : renderLanding(model)}${renderRemovalCohorts(model)}
         <div class="spacer"></div>
         ${renderAccuracy(model)}`;
 }

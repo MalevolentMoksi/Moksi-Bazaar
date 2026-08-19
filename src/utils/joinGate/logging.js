@@ -256,7 +256,11 @@ function outcomeEmbed(settings, entry) {
     embed.addFields([
         // Whether they were told why. The one thing that decides how the
         // conversation goes when they turn up in modmail asking.
-        fact('DM', result.dm ?? 'n/a'),
+        // "DM: suppressed" read to moderators as the bot restricting the
+        // user's DMs rather than declining to send its own, which is the
+        // opposite of what it meant. The label now names the question the
+        // field actually answers, and every value answers it as yes or no.
+        fact('Told them why', result.dm ?? 'unknown'),
         // At #1 this is noise on every single report. Past that it is somebody
         // working out how to get in, which is worth a line of its own.
         repeat ? fact('Join attempt', `#${attempt}`) : null,

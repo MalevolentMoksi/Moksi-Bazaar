@@ -75,6 +75,42 @@ async function sweepTempFiles() {
 }
 
 /**
+ * How long an unreviewed suspicion report is kept.
+ *
+ * Generous on purpose: this table is the only record of what the scorer has
+ * ever decided, and it is what any future tuning argues against. Six months
+ * is long enough to span a seasonal pattern and short enough to be an honest
+ * answer to "how long do you keep this".
+ *
+ * A report a human MARKED is exempt and kept forever. That mark is ground
+ * truth, it cost somebody a decision, and it is the single most valuable row
+ * in the database; pruning it to save bytes would be the worst trade here.
+ * Same rule the telemetry pruner already follows for rated traces.
+ *
+ * `warns` and `mod_actions` are deliberately absent from all of this. Those
+ * are deliberate human acts, they are the durable history the whole modlog
+ * exists to keep, and the answer to "how long" for them is "until you say
+ * otherwise".
+ */
+const SUSPICION_REPORT_RETENTION_MS = 180 * 86_400_000;
+
+/**
+ * Drops suspicion reports nobody reviewed and nobody will.
+ * @returns {Promise<number>} rows deleted
+ */
+async function pruneSuspicionReports() {
+    const cutoff = String(Date.now() - SUSPICION_REPORT_RETENTION_MS);
+    const { rowCount } = await pool.query(
+        `DELETE FROM suspicion_reports
+          WHERE at_ms < $1
+            AND NOT false_positive
+            AND marked_by IS NULL`,
+        [cutoff]
+    );
+    return rowCount ?? 0;
+}
+
+/**
  * Drops duel rows nobody can act on any more. Both the accept and the decline
  * path filter on `expires_at > NOW()`, so anything past its deadline is dead
  * weight; the extra day of grace is only there so a row is never deleted out
@@ -119,6 +155,9 @@ async function runJanitorCycle() {
         // housekeeper now. The panel clamps watch_window_minutes to 1440, so
         // a day is past every guild's window.
         ['watchWindow', async () => require('./joinGate/watch').pruneAll(24 * 60 * 60 * 1000) ?? 'ok'],
+        // Six months of unreviewed scoring history is plenty; anything a
+        // human actually judged is kept indefinitely.
+        ['suspicionReports', async () => pruneSuspicionReports()],
     ];
 
     for (const [name, step] of steps) {
@@ -164,6 +203,8 @@ module.exports = {
     runJanitorCycle,
     sweepTempFiles,
     purgeDeadDuels,
+    pruneSuspicionReports,
+    SUSPICION_REPORT_RETENTION_MS,
     TEMP_PREFIX,
     TEMP_FILE_MAX_AGE_MS,
 };

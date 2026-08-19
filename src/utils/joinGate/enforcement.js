@@ -19,7 +19,7 @@
  */
 
 const { PermissionFlagsBits, SnowflakeUtil } = require('discord.js');
-const { pool } = require('../db');
+const { pool, recordSuspicionReport } = require('../db');
 const logger = require('../logger');
 const health = require('../health');
 const {
@@ -120,18 +120,68 @@ function evaluateUserId(userId, settings, context = {}) {
 
 // ── Attempt tracking ────────────────────────────────────────────────────────
 
-async function recordAttempt(guildId, userId) {
+/**
+ * Counts an attempt, and records what the account looked like at the time.
+ *
+ * The fingerprint half is new and deliberately inert: nothing reads these
+ * columns to make a decision, and no signal is derived from them on the join
+ * path. They exist because the counter alone made removed accounts
+ * unexaminable. Two throwaways arrived minutes apart, were both correctly
+ * kicked, and left behind nothing that could later be recognised as a pair,
+ * which is a reporting failure rather than an enforcement one.
+ *
+ * The row is pruned on the existing attempt retention, so the fingerprint
+ * expires with the counter it belongs to.
+ */
+async function recordAttempt(guildId, userId, profile = {}) {
     const now = String(Date.now());
     const { rows } = await pool.query(
-        `INSERT INTO join_gate_attempts (guild_id, user_id, attempts, first_seen_ms, last_seen_ms)
-         VALUES ($1, $2, 1, $3, $3)
+        `INSERT INTO join_gate_attempts
+            (guild_id, user_id, attempts, first_seen_ms, last_seen_ms,
+             username, global_name, avatar, created_ms, invite_code)
+         VALUES ($1, $2, 1, $3, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (guild_id, user_id) DO UPDATE SET
             attempts     = join_gate_attempts.attempts + 1,
-            last_seen_ms = EXCLUDED.last_seen_ms
+            last_seen_ms = EXCLUDED.last_seen_ms,
+            -- Refreshed on every attempt: a rejoiner who renames or changes
+            -- avatar between tries is exactly the thing worth seeing, and the
+            -- newest look is the one that matches what a moderator sees now.
+            username     = COALESCE(EXCLUDED.username, join_gate_attempts.username),
+            global_name  = COALESCE(EXCLUDED.global_name, join_gate_attempts.global_name),
+            avatar       = COALESCE(EXCLUDED.avatar, join_gate_attempts.avatar),
+            created_ms   = COALESCE(EXCLUDED.created_ms, join_gate_attempts.created_ms),
+            invite_code  = COALESCE(EXCLUDED.invite_code, join_gate_attempts.invite_code)
          RETURNING attempts, last_dm_ms`,
-        [guildId, userId, now]
+        [
+            guildId, userId, now,
+            profile.username ?? null,
+            profile.globalName ?? null,
+            profile.avatar ?? null,
+            profile.createdTimestamp != null ? String(Math.round(profile.createdTimestamp)) : null,
+            profile.inviteCode ?? null,
+        ]
     );
     return rows[0];
+}
+
+/**
+ * Everything the gate has removed recently, for the cohort report.
+ *
+ * Read-only, and read by a human-facing report only. Rows with no recorded
+ * username predate the fingerprint columns and are skipped rather than
+ * grouped on nulls.
+ */
+async function getRemovalLog(guildId, { sinceMs = 0, limit = 500 } = {}) {
+    const { rows } = await pool.query(
+        `SELECT user_id, username, global_name, avatar, created_ms, invite_code,
+                attempts, first_seen_ms, last_seen_ms
+           FROM join_gate_attempts
+          WHERE guild_id = $1 AND username IS NOT NULL AND last_seen_ms >= $2
+          ORDER BY last_seen_ms DESC
+          LIMIT $3`,
+        [guildId, String(Math.round(sinceMs)), limit]
+    );
+    return rows;
 }
 
 async function peekAttempt(guildId, userId) {
@@ -220,10 +270,10 @@ function renderDm(settings, { guildName, user, eligibleAt, ageMs, kind = 'kick',
  * @returns {Promise<{sent: boolean, note: string}>} never throws
  */
 async function trySendDm(member, settings, decision, kind, attempts, cause = 'age') {
-    if (!settings.dm_enabled) return { sent: false, note: 'disabled' };
+    if (!settings.dm_enabled) return { sent: false, note: 'no, removal DMs are switched off' };
 
     if (queue.length > DM_SKIP_BACKLOG) {
-        return { sent: false, note: 'skipped (burst backlog)' };
+        return { sent: false, note: 'no, skipped to clear a burst faster' };
     }
 
     // Cooldown keeps a rejoin loop from turning into a DM flood, which is the
@@ -237,7 +287,16 @@ async function trySendDm(member, settings, decision, kind, attempts, cause = 'ag
     if (cooldownMs > 0 && attempts.last_dm_ms) {
         const since = Date.now() - Number(attempts.last_dm_ms);
         if (since < cooldownMs) {
-            return { sent: false, note: `suppressed (cooldown, ${Math.ceil((cooldownMs - since) / 60_000)}m left)` };
+            // Wording matters more here than anywhere else in the module.
+            // "DM suppressed (cooldown, 60m left)" was read by moderators as
+            // the bot muting the USER'S ability to send DMs, i.e. a
+            // punishment, and it took a chat argument and a wrongly-issued
+            // manual ban to unpick. It never meant that. It means the bot
+            // declined to tell them a second time.
+            return {
+                sent: false,
+                note: `no, already told them ${Math.ceil(since / 60_000)}m ago (not repeating for another ${Math.ceil((cooldownMs - since) / 60_000)}m)`,
+            };
         }
     }
 
@@ -252,10 +311,12 @@ async function trySendDm(member, settings, decision, kind, attempts, cause = 'ag
         });
         await member.send({ content });
         await markDmSent(member.guild.id, member.id).catch(() => {});
-        return { sent: true, note: 'delivered' };
+        return { sent: true, note: 'yes, DM delivered' };
     } catch (error) {
         // 50007 Cannot send messages to this user: DMs closed or bot blocked.
-        const note = error?.code === 50007 ? 'not delivered (DMs closed)' : `not delivered (${error.message})`;
+        const note = error?.code === 50007
+            ? 'no, their DMs are closed to this server'
+            : `no, the DM failed (${error.message})`;
         return { sent: false, note };
     }
 }
@@ -520,7 +581,7 @@ function importBurstState(state, now = Date.now()) {
 
 // ── Queue ───────────────────────────────────────────────────────────────────
 
-function enqueue(member, origin) {
+function enqueue(member, origin, inviteCode = null) {
     if (queue.length >= QUEUE_MAX) {
         logger.error('[JOIN-GATE] Queue full, dropping member', {
             guildId: member.guild.id, userId: member.id,
@@ -530,7 +591,7 @@ function enqueue(member, origin) {
     const key = `${member.guild.id}:${member.id}`;
     if (queued.has(key)) return; // already pending; a second join adds nothing
     queued.add(key);
-    queue.push({ kind: 'age', key, member, origin });
+    queue.push({ kind: 'age', key, member, origin, inviteCode });
     if (!draining) drain();
 }
 
@@ -574,7 +635,7 @@ async function drain() {
             queued.delete(entry.key);
             try {
                 if (entry.kind === 'verdict') await processVerdict(entry);
-                else await processGated(entry.member, entry.origin);
+                else await processGated(entry.member, entry.origin, entry.inviteCode);
             } catch (error) {
                 logger.error('[JOIN-GATE] Processing failed', {
                     guildId: entry.member.guild.id, userId: entry.member.id, error: error.message,
@@ -613,7 +674,7 @@ async function processVerdict({ member, decision, action, cause, resolve }) {
  * Settings are re-read here rather than captured at enqueue time, so turning
  * the gate off mid-raid takes effect on everyone still in the queue.
  */
-async function processGated(member, origin) {
+async function processGated(member, origin, inviteCode = null) {
     const guild = member.guild;
     const settings = await getSettings(guild.id);
 
@@ -631,7 +692,13 @@ async function processGated(member, origin) {
     // would instantly ban people who "used up" their attempts during a preview.
     const attempts = dryRun
         ? await peekAttempt(guild.id, member.id)
-        : await recordAttempt(guild.id, member.id);
+        : await recordAttempt(guild.id, member.id, {
+            username: member.user?.username,
+            globalName: member.user?.globalName,
+            avatar: member.user?.avatar,
+            createdTimestamp: member.user?.createdTimestamp,
+            inviteCode,
+        });
     const attemptNumber = dryRun ? Number(attempts.attempts) + 1 : Number(attempts.attempts);
 
     const wantsBan = Boolean(settings.escalate_enabled)
@@ -642,7 +709,11 @@ async function processGated(member, origin) {
         await logOutcome(guild, settings, {
             user: member.user,
             decision,
-            result: { ok: true, action, dm: settings.dm_enabled ? 'would send' : 'disabled', unbanAt: wantsBan ? decision.eligibleAt : null },
+            result: {
+                ok: true, action,
+                dm: settings.dm_enabled ? 'would tell them why' : 'no, removal DMs are switched off',
+                unbanAt: wantsBan ? decision.eligibleAt : null,
+            },
             origin,
             attempt: attemptNumber,
             dryRun: true,
@@ -749,6 +820,44 @@ function scoreProfile(member, settings, {
             malicious: Number(settings.suspicion_malicious_at),
         },
     });
+}
+
+/**
+ * Scores a member the AGE GATE is removing, purely for the record.
+ *
+ * Deliberately toothless. It posts nothing, actions nothing, touches no
+ * counter and returns nothing anybody waits on. `runSuspicion` is the path
+ * that can act, and it runs only for members the gate ALLOWED; this is its
+ * silent twin for the members it did not, which until now were scored by
+ * nobody and remembered by nothing.
+ *
+ * Filed under source 'gated' so the accuracy report can exclude it: those
+ * rows were never shown to a human, so counting them as "filed" would make
+ * the false-positive rate meaningless.
+ */
+async function recordGatedScore(member, settings) {
+    if (!settings.suspicion_enabled || member.user?.bot) return;
+    try {
+        const result = scoreProfile(member, settings, {
+            correlation: suspicion.correlateJoin(member.guild.id, member.user),
+            inBurst: isInBurst(member.guild.id, settings),
+        });
+        await recordSuspicionReport({
+            guildId: member.guild.id,
+            userId: member.id,
+            score: result.score,
+            tier: result.tier,
+            source: 'gated',
+            action: 'none',
+            signals: result.signals,
+            channelId: null,
+        });
+    } catch (error) {
+        // A bookkeeping failure must never disturb a removal.
+        logger.debug('[JOIN-GATE] Could not record gated score', {
+            guildId: member.guild.id, userId: member.id, error: error.message,
+        });
+    }
 }
 
 async function runSuspicion(member, settings, { inBurst, inviteInfo = null }) {
@@ -893,7 +1002,14 @@ async function handleMemberJoin(member) {
         }
 
         noteJoinForBurst(member.guild, settings, { gated: true });
-        enqueue(member, 'join');
+        // Score them for the record, and act on absolutely nothing. They are
+        // already being removed on age, so this cannot double-punish: the
+        // whole point is that the scorer has never seen this population, which
+        // is the one population every removal comes from. Without it there is
+        // no way to ask afterwards whether the weights would have caught an
+        // account the age gate happened to catch first.
+        recordGatedScore(member, settings).catch(() => {});
+        enqueue(member, 'join', inviteInfo?.code ?? null);
     } catch (error) {
         logger.error('[JOIN-GATE] handleMemberJoin crashed', { error: error.message, stack: error.stack });
     }
@@ -1464,6 +1580,7 @@ module.exports = {
     // Exported for /lookup, which reads the counter without touching it.
     peekAttempt,
     getAttemptLeaderboard,
+    getRemovalLog,
     clearAttempts,
     displayTag,
     queueDepth: () => queue.length,

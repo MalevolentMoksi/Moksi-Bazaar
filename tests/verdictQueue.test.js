@@ -81,7 +81,9 @@ test('a queued verdict kick runs and reports its outcome', async () => {
     const outcome = await enqueueVerdict(member, { decision: decision('kick', 'u-kick'), action: 'kick', cause: 'suspicion' });
     expect(outcome.ok).toBe(true);
     expect(outcome.action).toBe('kick');
-    expect(outcome.dm).toBe('disabled');
+    // Phrased as an answer to "did we tell them why", never as something
+    // done to the member: "DM suppressed" was read as a punishment once.
+    expect(outcome.dm).toBe('no, removal DMs are switched off');
     expect(member.kick).toHaveBeenCalledTimes(1);
 });
 
