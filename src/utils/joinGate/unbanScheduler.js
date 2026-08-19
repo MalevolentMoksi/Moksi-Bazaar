@@ -66,11 +66,13 @@ async function refetchPendingUnban(guildId, userId) {
     return rows[0] || null;
 }
 
+/** @returns {Promise<boolean>} whether a pending row actually existed */
 async function deletePendingUnban(guildId, userId) {
-    await pool.query(
+    const { rowCount } = await pool.query(
         'DELETE FROM join_gate_pending_unbans WHERE guild_id = $1 AND user_id = $2',
         [guildId, userId]
     );
+    return rowCount > 0;
 }
 
 async function getPendingUnbans(guildId) {

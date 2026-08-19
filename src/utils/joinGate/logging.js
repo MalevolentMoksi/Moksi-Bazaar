@@ -556,6 +556,32 @@ async function logUnban(guild, settings, { userId, bannedAtMs, ok, error }) {
     return send(guild, settings, ok ? 'kick' : 'failure', ui(embed, [], { scope: 'mod' }));
 }
 
+/**
+ * A pending automatic lift was cancelled because a human outranked it.
+ *
+ * The scenario is real and was watched happening: the gate temp-bans a
+ * throwaway, a moderator decides it deserves better and bans it outright
+ * through their own tools, and ten days later the scheduler would have
+ * quietly lifted the moderator's ban with a log line saying the account is
+ * now old enough. A human's verdict outranks the gate's cooldown, and the
+ * cancellation is said out loud so nobody has to reverse-engineer it.
+ */
+async function logSupersededUnban(guild, settings, { userId, cause }) {
+    const banned = cause === 'ban';
+    const embed = new EmbedBuilder()
+        .setColor(COLORS.config)
+        .setTitle('⚖️ Scheduled lift cancelled')
+        .setDescription(banned
+            ? `<@${userId}> (${userId}) was banned by a moderator while under a gate temp-ban. `
+                + 'That ban outranks the gate: the automatic lift is cancelled, and the ban now '
+                + 'stands until a human lifts it.'
+            : `<@${userId}> (${userId}) was unbanned by a moderator before the gate's own lift. `
+                + 'Nothing left to schedule.')
+        .setTimestamp();
+
+    return send(guild, settings, 'kick', ui(embed, [], { scope: 'mod' }));
+}
+
 module.exports = {
     CATEGORIES,
     resolveChannel,
@@ -570,6 +596,7 @@ module.exports = {
     logBurst,
     logConfigChange,
     logUnban,
+    logSupersededUnban,
     logTest,
     logSuspicion,
 };

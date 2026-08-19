@@ -9,11 +9,13 @@
  * like an attack it says so.
  */
 
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, AuditLogEvent } = require('discord.js');
 const logger = require('../../utils/logger');
 const guard = require('../../utils/joinGate/guard');
 const modlog = require('../../utils/joinGate/modlog');
 const { getSettings } = require('../../utils/joinGate/config');
+const { deletePendingUnban } = require('../../utils/joinGate/unbanScheduler');
+const { logSupersededUnban } = require('../../utils/joinGate/logging');
 const { ui, quiet } = require('../../utils/ui/panel');
 
 const ALERT_COLOR = 0xd64545;
@@ -97,6 +99,33 @@ module.exports = {
             // The guard, though, never reacts to our own actions: alerting on
             // its own work would be pure noise.
             if (entry.executorId && entry.executorId === client?.user?.id) return;
+
+            // A human's ban outranks the gate's cooldown. Watched happening:
+            // the gate temp-bans a throwaway, a moderator bans it outright
+            // through Dyno, and ten days later the scheduler would lift the
+            // moderator's ban with a line saying the account is old enough.
+            // A ban placed by anyone else cancels the pending lift; so does a
+            // manual unban, which leaves nothing to lift. Unconditional, like
+            // the scheduler itself: this must work with the gate switched off.
+            if ((entry.action === AuditLogEvent.MemberBanAdd || entry.action === AuditLogEvent.MemberBanRemove)) {
+                const targetId = entry.targetId ?? entry.target?.id;
+                if (targetId) {
+                    const existed = await deletePendingUnban(guild.id, targetId).catch(() => false);
+                    if (existed) {
+                        const cause = entry.action === AuditLogEvent.MemberBanAdd ? 'ban' : 'unban';
+                        logger.info('[JOIN-GATE] Pending unban superseded by a moderator', {
+                            guildId: guild.id, userId: targetId, cause, executorId: entry.executorId ?? null,
+                        });
+                        try {
+                            const settings = await getSettings(guild.id);
+                            await logSupersededUnban(guild, settings, { userId: targetId, cause });
+                        } catch {
+                            // The cancellation itself already happened; the
+                            // note is a courtesy.
+                        }
+                    }
+                }
+            }
 
             let settings;
             try {
