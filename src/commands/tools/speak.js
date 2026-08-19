@@ -1,5 +1,6 @@
 // ENHANCED SPEAK.JS - DeepSeek V3 + Relationship-Aware Context
-const { SlashCommandBuilder, ComponentType } = require('discord.js');
+const { SlashCommandBuilder, ComponentType, PermissionFlagsBits } = require('discord.js');
+const { describeOwnModeration, wantsExplanation } = require('../../utils/joinGate/explain');
 
 const {
   isUserBlacklisted,
@@ -991,7 +992,30 @@ ${memoryText}`;
           : sharedMedia
             ? `(${askerName} sent you media with no words. their message is the last line of the chat log above: react to what they shared. if its tag says the contents were not seen, do not pretend otherwise and do not guess from the filename)`
             : `(${askerName} pinged you without saying anything; react to the chat log above)`;
-      const finalUserPrompt = `${readBlock(roomRead)}${userPrompt}`;
+      // What it actually knows about its own moderation, and only when
+      // somebody asked. It once explained a log line by inventing a DM mute
+      // it has never been able to apply, because the prompt gave it nothing
+      // true to say and no instruction to admit that.
+      //
+      // In the USER message and never the system prompt, for the same reason
+      // the room read is: the cacheable prefix has to stay byte-stable, and a
+      // conditional block up there would fork it into two variants. Fetched
+      // only when the trigger fires, so an ordinary reply pays nothing.
+      let selfBlock = '';
+      if (interaction.guildId && wantsExplanation(userRequest, roomRead)) {
+        // Exact thresholds are a specification for getting past the gate, so
+        // they go only to people who can already read the mod channels.
+        const staff = Boolean(
+          userIsOwner
+          || interaction.member?.permissions?.has?.(PermissionFlagsBits.ModerateMembers)
+        );
+        const facts = await describeOwnModeration(interaction.guildId, { staff }).catch(() => '');
+        if (facts) selfBlock = `${facts}
+
+`;
+      }
+
+      const finalUserPrompt = `${selfBlock}${readBlock(roomRead)}${userPrompt}`;
 
       // 6. GENERATION. Pipeline off: one call to the historical writer,
       //    byte-identical behaviour. Pipeline on: every writer drafts in
