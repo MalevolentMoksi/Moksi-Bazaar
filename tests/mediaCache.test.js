@@ -115,7 +115,13 @@ describe('the media stage respects the reply deadline', () => {
     test('speak.js actually passes the budget down', () => {
         const speak = read('src/commands/tools/speak.js');
         expect(speak).toContain('MEDIA_STAGE_BUDGET_MS');
-        expect(speak).toContain('deadlineAt: mediaDeadlineAt');
+        expect(speak).toContain('deadlineAt:');
+        expect(speak).toContain('mediaDeadlineAt');
+        // The summoning message gets a longer leash, and the two deadlines are
+        // combined with Math.max so that path can only ever EXTEND the budget.
+        // A priority slot that could shorten it would be a way to make the one
+        // clip that matters most the first one given up on.
+        expect(speak).toContain('Math.max(priorityDeadlineAt, mediaDeadlineAt)');
     });
 });
 

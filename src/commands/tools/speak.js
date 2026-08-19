@@ -76,6 +76,11 @@ const MEDIA_STAGE_BUDGET_MS = 12_000;
  *  the target is an answer in ~6 seconds, and a cold video cannot be allowed
  *  to spend twice that before a single word is generated. */
 const REPLY_MEDIA_BUDGET_MS = 6_000;
+/** Extra runway for the media on the message that actually summoned the reply.
+ *  Everything else on screen shares the budget above; the clip someone just
+ *  replied to the bot with is the one thing worth being a little late for,
+ *  since being early about it means answering as though they sent nothing. */
+const PRIORITY_MEDIA_GRACE_MS = 4_000;
 /** Memory v2 shows this many raw exchange pairs; profiles carry the rest. */
 const MEMORY_V2_RAW_PAIRS = 2;
 
@@ -385,7 +390,9 @@ function mediaBudget(recent, botId, limit = FRESH_MEDIA_PER_REPLY) {
   return allowed;
 }
 
-async function buildConversationContext(messages, botId, pinnedIds = new Set(), { mediaDeadlineAt = 0 } = {}) {
+async function buildConversationContext(messages, botId, pinnedIds = new Set(), {
+  mediaDeadlineAt = 0, priorityMessageId = null, priorityDeadlineAt = 0,
+} = {}) {
   const sorted = Array.from(messages.values())
     .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
@@ -434,7 +441,15 @@ async function buildConversationContext(messages, botId, pinnedIds = new Set(), 
         // reached the model as an "unseen" tag forever, and it answered a
         // picture it had never been shown. Descriptions are cached
         // permanently, so the recurring cost is only genuinely new media.
-        const descriptions = await processMediaInMessage(msg, freshMediaAllowed.has(msg.id), { deadlineAt: mediaDeadlineAt });
+        const isPriority = priorityMessageId && msg.id === priorityMessageId;
+        const descriptions = await processMediaInMessage(
+          msg,
+          // The summoning message always gets to pay for a fresh look. It is
+          // newest, so the budget already reached it in every ordinary case;
+          // this makes it true even when the scroll-back is full of media.
+          isPriority || freshMediaAllowed.has(msg.id),
+          { deadlineAt: isPriority ? Math.max(priorityDeadlineAt, mediaDeadlineAt) : mediaDeadlineAt },
+        );
         if (descriptions.length > 0) mediaContent = ` ${descriptions.join(' ')}`;
       } catch (e) {
         logger.warn('Media processing failed in context builder', { error: e.message, messageId: msg.id });
@@ -766,6 +781,14 @@ module.exports = {
       const { text: conversationContext, participants, oldestTimestamp } =
         await buildConversationContext(messages, botId, pinnedIds, {
           mediaDeadlineAt: startedAt + (isInterjection ? MEDIA_STAGE_BUDGET_MS : REPLY_MEDIA_BUDGET_MS),
+          // The message that summoned this reply gets a longer leash than the
+          // scroll-back does. A cold video costs a download, an ffmpeg frame
+          // and a vision call, which does not reliably fit in the six seconds
+          // shared by everything on screen, and the one clip nobody wants
+          // tagged "not seen" is the one somebody just replied to the bot
+          // with. Bounded, not exempt: it buys one extra window and no more.
+          priorityMessageId: interaction._sourceMessage?.id ?? null,
+          priorityDeadlineAt: startedAt + (isInterjection ? MEDIA_STAGE_BUDGET_MS : REPLY_MEDIA_BUDGET_MS + PRIORITY_MEDIA_GRACE_MS),
         });
 
       const otherIds = [...participants.keys()].filter(id => id !== userId);
@@ -942,7 +965,7 @@ ${speakProfile.profile}
 OTHERS IN THE CONVERSATION (people from the chat log you already know):
 ${othersText}
 ` : ''}
-CHAT LOG (most recent last). Each line is "speaker: exactly what that speaker said". Lines beginning "${BOT_IDENTITY.ownLineLabel}" are your own prior replies. A trailing "(in reply to X: ...)" quotes what SOMEONE ELSE said earlier and is never the speaker's own words, so never attribute a quoted line to the person quoting it. [media] tags describe what was shared, treat them as if you saw it. A tag reading "contents not seen" means exactly that and is NOT a description: do not invent what was in it and do not comment on the file type:
+CHAT LOG (most recent last). Each line is "speaker: exactly what that speaker said". Lines beginning "${BOT_IDENTITY.ownLineLabel}" are your own prior replies. A trailing "(in reply to X: ...)" quotes what SOMEONE ELSE said earlier and is never the speaker's own words, so never attribute a quoted line to the person quoting it. [media] tags describe what was shared, treat them as if you saw it. A tag reading "contents not seen" means exactly that and is NOT a description: do not invent what was in it and do not comment on the file type. Such a tag may carry a filename and dimensions; those are metadata, never a description. A filename is a label chosen by whoever saved the file, and it is routinely auto-generated, generic or plain wrong. You may acknowledge that someone shared a clip or a picture you could not see, and you may say you could not see it. You may NEVER name a person, character, game, show or meme on the strength of a filename, and never narrate what happens in something you did not see:
 ${conversationContext}
 
 STORED MEMORY (past exchanges with this user, oldest first, each dated):
@@ -953,11 +976,21 @@ ${memoryText}`;
       // The room read, when there is one, rides in front as guidance: it goes
       // in the USER message, not the system prompt, so the cacheable prefix
       // stays byte-stable across calls.
+      // "Pinged you without saying anything" was a lie whenever the message
+      // carried media, and it is the last thing the writer reads before it
+      // generates. Someone replied with a video and no text; the clip was in
+      // the chat log above, and this line still told the model they had sent
+      // nothing, so it answered "the ping with no follow-up, waiting on the
+      // words". Sending a clip IS saying something. The two cases are told
+      // apart now, and the media case points at the thing they shared.
+      const sharedMedia = !userRequest && hasVisibleMedia(interaction._sourceMessage);
       const userPrompt = interaction._interjection
         ? `(nobody asked you anything. you overheard the conversation above, and the last message caught your attention. interject with ONE short remark, the way someone butts into a conversation. if you have nothing worth saying, just say something minimal and dry)${interaction._interjectionAngle ? ` (your owner nudged you: react to ${flatten(interaction._interjectionAngle)})` : ''}`
         : userRequest
           ? `${askerName}: ${userRequest}`
-          : `(${askerName} pinged you without saying anything; react to the chat log above)`;
+          : sharedMedia
+            ? `(${askerName} sent you media with no words. their message is the last line of the chat log above: react to what they shared. if its tag says the contents were not seen, do not pretend otherwise and do not guess from the filename)`
+            : `(${askerName} pinged you without saying anything; react to the chat log above)`;
       const finalUserPrompt = `${readBlock(roomRead)}${userPrompt}`;
 
       // 6. GENERATION. Pipeline off: one call to the historical writer,

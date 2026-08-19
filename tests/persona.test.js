@@ -195,7 +195,13 @@ describe('media tags never describe a file instead of a picture', () => {
     test('every message in the window gets described, not only the newest', () => {
         const source = read('src/commands/tools/speak.js');
         expect(source).toMatch(/recent\.map\(async \(msg\) => \{/);
-        expect(source).toContain('processMediaInMessage(msg, freshMediaAllowed.has(msg.id)');
+        // Every message in the window is offered to the media stage, and the
+        // budget is what decides who pays for a fresh look. The summoning
+        // message may jump that queue, which is an addition to the rule and
+        // must never become a replacement for it: if `freshMediaAllowed`
+        // stops being consulted, the window has gone back to newest-only.
+        expect(source).toContain('freshMediaAllowed.has(msg.id)');
+        expect(source).toMatch(/isPriority \|\| freshMediaAllowed\.has\(msg\.id\)/);
         expect(source).not.toContain('newestUserMsgId');
     });
 

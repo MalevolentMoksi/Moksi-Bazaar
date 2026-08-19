@@ -261,6 +261,17 @@ function outcomeEmbed(settings, entry) {
         // working out how to get in, which is worth a line of its own.
         repeat ? fact('Join attempt', `#${attempt}`) : null,
         result.hint ? fact('How to fix', result.hint.slice(0, 1024)) : null,
+        // What a moderator reading this should DO, which the report used to
+        // leave them to guess. Seeing "Temporarily banned" on an obvious
+        // throwaway, the natural instinct is to reach for a permanent ban,
+        // and that is exactly what happened: the gate's lift was still
+        // scheduled underneath it. A manual ban now cancels the lift, and
+        // saying so here is what stops the next person having to find out.
+        // A fact, not an aside: this is the one line that asks for a decision.
+        !dryRun && result.ok && result.action === 'ban'
+            ? fact('What to do', 'Nothing. This lifts by itself. Ban them yourself only if you want it '
+                + 'permanent, which cancels the automatic lift.')
+            : null,
         aside(
             `account made <t:${toUnix(user.createdTimestamp)}:D>`,
             origin === 'sweep' ? 'caught by the catch-up sweep' : 'caught on join',

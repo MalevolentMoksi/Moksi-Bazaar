@@ -1148,7 +1148,30 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
     // a tag that names a file type instead of contents is worse than useless:
     // it reacts to "mp4" with total confidence. When there is nothing to
     // describe, say that in words the model cannot mistake for a description.
-    const unseen = what => `[${what} shared, contents not seen]`;
+    //
+    // The metadata that rides along is deliberately fenced. Twice now a
+    // filename has been mistaken for a description here: a tenor slug reading
+    // "shinada-yakuza-5-knife-gif" produced an invented scene, and
+    // "joe-bart-joe-bartolozzi.mp4" produced six wrong celebrity names in six
+    // attempts. Both were the model reading a LABEL as CONTENT. So the label
+    // is given its own keyword, `filename`, never sits inside the descriptive
+    // `[Video: ...]` shape that means "you saw this", and the system prompt
+    // states in as many words that a filename is not a description and may
+    // never be used to name anyone or anything.
+    //
+    // It is still worth passing. "They sent a 2-second screen recording" is a
+    // true and useful thing to know about a message, and knowing nothing at
+    // all was how the bot ended up telling someone they had said nothing when
+    // they had in fact sent a video.
+    const unseen = (what, meta = null) => {
+        const bits = [`${what} shared, contents not seen`];
+        if (meta?.name) bits.push(`filename "${String(meta.name).slice(0, 80)}"`);
+        if (meta?.dims) bits.push(meta.dims);
+        return `[${bits.join(', ')}]`;
+    };
+
+    /** Pixel dimensions, when Discord bothered to report them. */
+    const dimsOf = att => (att?.width && att?.height ? `${att.width}x${att.height}` : null);
 
     // A reply is waiting on all of this. Cached lookups always go through;
     // fresh analysis is skipped once the caller's media budget is spent, so a
@@ -1195,7 +1218,7 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         if (!forceReanalyze && cached) return `[${type}: ${cached.description}]`;
         if (!shouldAnalyze || outOfTime()) {
             if (outOfTime()) telemetry.logCall({ kind: 'media_skip', outcome: 'deadline', extra: { type } });
-            return unseen(type);
+            return unseen(type, mediaMeta.unseenMeta);
         }
 
         const desc = await describeOnce(mediaId, async () => {
@@ -1206,7 +1229,7 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
             return fresh;
         });
 
-        if (!desc) return unseen(type);
+        if (!desc) return unseen(type, mediaMeta.unseenMeta);
         return `[${type}: ${desc}]`;
     };
 
@@ -1219,10 +1242,11 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         const mediaId = generateMediaId(att.url, null, att.name);
         const cached = await getCachedMediaDescription(mediaId);
 
+        const meta = { name: att.name, dims: dimsOf(att) };
         if (!forceReanalyze && cached) return `[Video: ${cached.description}]`;
         if (!shouldAnalyze || outOfTime()) {
             if (outOfTime()) telemetry.logCall({ kind: 'media_skip', outcome: 'deadline', extra: { type: 'Video' } });
-            return unseen('Video');
+            return unseen('Video', meta);
         }
 
         const desc = await describeOnce(mediaId, async () => {
@@ -1235,7 +1259,7 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
             return fresh;
         });
 
-        if (!desc) return unseen('Video');
+        if (!desc) return unseen('Video', meta);
         return `[Video: ${desc}]`;
     };
 
@@ -1249,7 +1273,8 @@ async function processMediaInMessage(message, shouldAnalyze = true, options = {}
         const attachmentTags = await Promise.all([...message.attachments.values()].map(async (att) => {
             if (att.contentType?.startsWith('image/')) {
                 const gifLike = isGifMedia(att.url, att.name, att.contentType);
-                return describeUrl(att.url, gifLike ? "GIF Attachment" : "Image Attachment", att.name, { isGif: gifLike });
+                return describeUrl(att.url, gifLike ? "GIF Attachment" : "Image Attachment", att.name,
+                    { isGif: gifLike, unseenMeta: { name: att.name, dims: dimsOf(att) } });
             }
             if (att.contentType?.startsWith('video/')) {
                 return describeVideo(att);
