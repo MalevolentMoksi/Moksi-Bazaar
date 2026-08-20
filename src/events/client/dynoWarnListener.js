@@ -188,11 +188,16 @@ function reportNearMiss(kind, embed) {
 async function handleWarn(message, client, embed, info) {
     const { warnedUser, warnId } = info;
 
+    // Resolved once and shared. The reminder needs it too: at fire time it
+    // decides whether the person is still in the server, and a reminder keyed
+    // only on a printed display name could never answer that.
+    let userId = null;
+
     // The durable record first, and on its own error boundary: the
     // reminder is the nice-to-have, the history is the thing that has
     // to survive.
     try {
-        const userId = await resolveWarnedUserId(message, embed, warnedUser);
+        userId = await resolveWarnedUserId(message, embed, warnedUser);
         const fresh = await recordWarn({
             guildId: message.guildId,
             userId,
@@ -219,14 +224,14 @@ async function handleWarn(message, client, embed, info) {
         const existing = await findRecentWarnReminderForUser(warnedUser, message.guild.id);
 
         if (existing) {
-            await appendWarnToReminder(existing.id, warnId);
+            await appendWarnToReminder(existing.id, warnId, userId);
             const newCount = existing.warn_count + 1;
             await message.channel.send(
                 `Added to existing reminder: **${warnedUser}** now has ${newCount} recorded warns. Staff will be reminded in ${WARN_REMINDER_DAYS} days.`
             );
         } else {
             const dueAt = Date.now() + WARN_MS;
-            await insertWarnReminder(message.channel.id, message.guild.id, warnedUser, dueAt, warnId);
+            await insertWarnReminder(message.channel.id, message.guild.id, warnedUser, dueAt, warnId, userId);
             await scheduleNext(client);
 
             const epoch = Math.floor(dueAt / 1000);

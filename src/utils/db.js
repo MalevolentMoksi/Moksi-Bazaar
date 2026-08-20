@@ -498,6 +498,12 @@ const init = async () => {
     await pool.query(`
         ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS warn_ids TEXT;
         ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS warn_count INTEGER NOT NULL DEFAULT 1;
+        -- Who the reminder is about, as an account rather than a display name.
+        -- Reminders keyed only on the printed label could not answer the one
+        -- question that decides whether the reminder is worth sending at all:
+        -- is this person still in the server. Nullable, because it is only
+        -- knowable when the warn embed gave enough to resolve it.
+        ALTER TABLE warn_reminders ADD COLUMN IF NOT EXISTS user_id TEXT;
     `);
 
     // Migration: what a removed account actually looked like.

@@ -29,12 +29,12 @@ let clientRef = null;
 
 // ---- DB helpers ----------------------------------------------------------------
 
-async function insertWarnReminder(channelId, guildId, warnedUser, dueAtMs, warnId = null) {
+async function insertWarnReminder(channelId, guildId, warnedUser, dueAtMs, warnId = null, userId = null) {
     const id = randomUUID();
     await pool.query(
-        `INSERT INTO warn_reminders (id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, created_at_utc_ms)
-         VALUES ($1,$2,$3,$4,$5,1,$6,$7)`,
-        [id, channelId, guildId, warnedUser, warnId || null, String(dueAtMs), String(Date.now())]
+        `INSERT INTO warn_reminders (id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, created_at_utc_ms, user_id)
+         VALUES ($1,$2,$3,$4,$5,1,$6,$7,$8)`,
+        [id, channelId, guildId, warnedUser, warnId || null, String(dueAtMs), String(Date.now()), userId || null]
     );
     return id;
 }
@@ -57,7 +57,7 @@ async function findRecentWarnReminderForUser(warnedUser, guildId, windowMs = 60_
     return rows[0] || null;
 }
 
-async function appendWarnToReminder(id, warnId) {
+async function appendWarnToReminder(id, warnId, userId = null) {
     await pool.query(
         `UPDATE warn_reminders
          SET warn_count = warn_count + 1,
@@ -65,15 +65,17 @@ async function appendWarnToReminder(id, warnId) {
                 WHEN $2::TEXT IS NULL THEN warn_ids
                 WHEN warn_ids IS NULL THEN $2
                 ELSE warn_ids || ',' || $2
-             END
+             END,
+             -- A later warn may resolve an account the first one could not.
+             user_id = COALESCE(warn_reminders.user_id, $3)
          WHERE id = $1`,
-        [id, warnId || null]
+        [id, warnId || null, userId || null]
     );
 }
 
 async function fetchNextWarnReminder() {
     const { rows } = await pool.query(`
-        SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms
+        SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, user_id
         FROM warn_reminders ORDER BY due_at_utc_ms ASC LIMIT 1
     `);
     return rows[0] || null;
@@ -81,7 +83,7 @@ async function fetchNextWarnReminder() {
 
 async function refetchWarnReminderById(id) {
     const { rows } = await pool.query(
-        `SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms
+        `SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, user_id
          FROM warn_reminders WHERE id = $1 LIMIT 1`, [id]
     );
     return rows[0] || null;
@@ -93,7 +95,7 @@ async function deleteWarnReminder(id) {
 
 async function getAllWarnReminders(guildId = null) {
     const { rows } = await pool.query(
-        `SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, created_at_utc_ms
+        `SELECT id, channel_id, guild_id, warned_user, warn_ids, warn_count, due_at_utc_ms, created_at_utc_ms, user_id
          FROM warn_reminders
          WHERE ($1::text IS NULL OR guild_id = $1)
          ORDER BY due_at_utc_ms ASC`,
@@ -141,10 +143,62 @@ async function deferWarnReminder(id, delayMs) {
 }
 
 /**
- * One due reminder: delivered and deleted, or deferred with backoff, or
- * (after enough failures) dropped with a log line naming what was lost.
+ * Whether the person a reminder is about is still in the server.
+ *
+ * Answered at FIRE time, never at warn time, because the whole point is that
+ * membership moves: somebody can be warned, leave, and come back inside the
+ * thirty days, and only the state at the moment of reminding matters.
+ *
+ * Three-valued on purpose. `null` means unknowable, and unknowable is not the
+ * same as absent: a reminder from before ids were recorded, an intent
+ * problem, or a network blip must never be read as "they left". The caller
+ * sends on null, because a reminder about somebody who has gone is a minor
+ * annoyance and a dropped reminder about somebody still here is the failure
+ * this whole feature exists to prevent.
+ *
+ * @returns {Promise<boolean|null>} true present, false gone, null unknowable
+ */
+async function isStillPresent(client, reminder) {
+    // No resolved account, no answer. Guessing from the display name is how a
+    // rename or a lookup miss would silently bin somebody's reminder.
+    if (!reminder.user_id) return null;
+
+    const guild = await client.guilds?.fetch?.(reminder.guild_id).catch(() => null);
+    if (!guild) return null;
+
+    try {
+        const member = await guild.members.fetch({ user: reminder.user_id, force: false });
+        return Boolean(member);
+    } catch (error) {
+        // 10007 Unknown Member: they are not in this guild. 10013 Unknown
+        // User: the account is gone entirely. Both mean nobody to remind.
+        if (error?.code === 10007 || error?.code === 10013) return false;
+        console.warn(`[WARN-REMINDER] Could not check membership for ${reminder.user_id}: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * One due reminder: delivered and deleted, or dropped because the person it
+ * is about has left, or deferred with backoff, or (after enough failures)
+ * dropped with a log line naming what was lost.
  */
 async function deliverDueReminder(client, reminder) {
+    // Before anything is sent. A reminder to consider clearing somebody's
+    // warning is pointless once they are not in the server to have one, and
+    // staff answering it with "he left, its okay" is the reminder doing work
+    // for nobody.
+    const present = await isStillPresent(client, reminder);
+    if (present === false) {
+        console.log(
+            `[WARN-REMINDER] Dropping ${reminder.warned_user}'s reminder: `
+            + `they are no longer in ${reminder.guild_id}`
+        );
+        deliveryFailures.delete(reminder.id);
+        await deleteWarnReminder(reminder.id);
+        return;
+    }
+
     const delivered = await sendWarnReminderMessage(client, reminder);
     if (delivered) {
         deliveryFailures.delete(reminder.id);
@@ -231,4 +285,6 @@ module.exports = {
     // Exported so the tests can pin the backoff: a reminder that cannot be
     // sent must never become a full-speed retry loop again.
     deliverDueReminder,
+    // And so they can pin that "unknowable" is never treated as "left".
+    isStillPresent,
 };
