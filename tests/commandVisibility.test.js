@@ -45,11 +45,17 @@ function readCommands() {
 const commands = readCommands();
 
 /**
- * The one exception, deliberately. /casino is a public command with a single
- * owner-only subcommand, and default_member_permissions is per command: hiding
- * it would take the tables away from everybody.
+ * The exceptions, deliberately. Both are public commands with a single
+ * owner-only subcommand, and default_member_permissions is per command, not
+ * per subcommand: hiding either would take the whole thing away from
+ * everybody to gate one branch of it.
+ *
+ * /casino: hiding it would take the tables away from the server.
+ * /sleepy: add and remove are open to everyone on purpose, because a communal
+ *   in-joke that only the owner can touch is not one. Only `set`, which
+ *   writes an arbitrary number rather than nudging by one, is owner-gated.
  */
-const PARTIALLY_GATED = ['casino'];
+const PARTIALLY_GATED = ['casino', 'sleepy'];
 
 describe('what the picker offers', () => {
     test('there are commands to check', () => {
