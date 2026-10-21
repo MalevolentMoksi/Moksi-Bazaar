@@ -71,7 +71,7 @@ describe('an unseen tag carries metadata, fenced', () => {
     const { unseen, dims } = (() => {
         // The helper is a closure inside processMediaInMessage; rebuild it
         // from the source so the shape stays pinned to the real one.
-        const body = dbSource.match(/const unseen = \(what, meta = null\) => \{[\s\S]*?\n    \};/)[0];
+        const body = dbSource.match(/const unseen = \(what, meta = null\) => \{[\s\S]*?\n {4}\};/)[0];
         const make = new Function(`${body} return unseen;`);
         return { unseen: make(), dims: '1280x720' };
     })();
