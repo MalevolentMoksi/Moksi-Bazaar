@@ -128,9 +128,6 @@ const SENTIMENT_DECAY = {
 // ── GAME CONFIGURATION ──────────────────────────────────────────────────────
 const GAME_CONFIG = {
     BLACKJACK: {
-        COLOR_BLACKJACK: '#800080', // Purple
-        COLOR_WIN: '#00a86b',       // Green
-        COLOR_LOSS: '#dc143c',      // Red
         COLLECTOR_TIMEOUT: 120000   // 2 minutes per action
     },
     GACHA: {
@@ -271,24 +268,50 @@ const COOLDOWNS = {
 };
 
 // ── EMBED COLORS ────────────────────────────────────────────────────────────
+/**
+ * Night Bazaar, the dashboard's palette, carried into Discord.
+ *
+ * The embeds had grown about thirty colours of their own: pure 0x00FF00 and
+ * 0xFF0000, Discord's blurple, its named 'Gold' and 'DarkRed', three reds. The
+ * dashboard already had a considered set and the same rules for using it:
+ * lantern is the voice, jade and ember speak only when a state needs them,
+ * dust is anything idle or switched off. These are its exact values.
+ *
+ * Heat and sage are not on the dashboard. They are blends of its neighbours,
+ * there so that a scale with more than one step between calm and alarm (the
+ * five attitudes; watch, suspect, malicious) does not collapse two steps into
+ * one colour.
+ *
+ * Colours that mean something outside the bot's look stay their own: the
+ * gacha and shop rarity ladders, roulette's actual pocket colours, X's blue.
+ */
+const PALETTE = Object.freeze({
+    LANTERN: 0xF0A43C,
+    HEAT: 0xE88A45,
+    EMBER: 0xE0704F,
+    JADE: 0x8DB580,
+    SAGE: 0x98A27D,
+    DUST: 0xA3907A,
+});
+
 const EMBED_COLORS = {
-    // Attitude-based colors
-    HOSTILE: 0xFF0000,      // Red
-    CAUTIOUS: 0xFFA500,     // Orange
-    NEUTRAL: 0x808080,      // Gray
-    FAMILIAR: 0x00FFFF,     // Cyan
-    FRIENDLY: 0x00FF00,     // Green
-    
-    // Status colors
-    SUCCESS: 0x00FF00,      // Green
-    ERROR: 0xFF0000,        // Red
-    WARNING: 0xFFA500,      // Orange
-    INFO: 0x00AAFF,         // Blue
-    
-    // Special game states
-    BLACKJACK: 0x800080,    // Purple
-    WIN: 0x00FF00,          // Green
-    LOSE: 0xFF0000          // Red
+    // Attitude, cold to warm
+    HOSTILE: PALETTE.EMBER,
+    CAUTIOUS: PALETTE.HEAT,
+    NEUTRAL: PALETTE.DUST,
+    FAMILIAR: PALETTE.SAGE,
+    FRIENDLY: PALETTE.JADE,
+
+    // Status
+    SUCCESS: PALETTE.JADE,
+    ERROR: PALETTE.EMBER,
+    WARNING: PALETTE.LANTERN,
+    INFO: PALETTE.LANTERN,
+
+    // Game results
+    BLACKJACK: PALETTE.LANTERN,
+    WIN: PALETTE.JADE,
+    LOSE: PALETTE.EMBER
 };
 
 // ── EMOJIS ──────────────────────────────────────────────────────────────────
@@ -449,6 +472,7 @@ module.exports = {
     
     // Visual
     EMBED_COLORS,
+    PALETTE,
     REACTION_EMOJI,
     REACTION_FALLBACK,
     ATTITUDE_INSTRUCTIONS,

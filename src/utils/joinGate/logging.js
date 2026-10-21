@@ -18,6 +18,7 @@ const { recordSuspicionReport } = require('../db');
 const { reportRows } = require('./reportActions');
 const logger = require('../logger');
 const { formatDays, DAY_MS } = require('./config');
+const { PALETTE } = require('../constants');
 
 const CATEGORIES = {
     kick: { channelKey: 'log_kick_channel_id', toggleKey: 'log_kicks', label: 'Kicks & bans' },
@@ -31,12 +32,12 @@ const CATEGORIES = {
 };
 
 const COLORS = {
-    kick: 0xe8a33d,
-    ban: 0xd64545,
-    failure: 0xd64545,
-    preview: 0x8a8a8a,
-    config: 0x5865f2,
-    burst: 0xff4d4d,
+    kick: PALETTE.LANTERN,
+    ban: PALETTE.EMBER,
+    failure: PALETTE.EMBER,
+    preview: PALETTE.DUST,
+    config: PALETTE.LANTERN,
+    burst: PALETTE.EMBER,
 };
 
 const REQUIRED_PERMS = [
@@ -292,9 +293,9 @@ async function logOutcome(guild, settings, entry) {
 }
 
 const TIER_STYLE = {
-    watch: { color: 0xf0c419, icon: '👁️', word: 'Worth a look' },
-    suspect: { color: 0xe8732d, icon: '⚠️', word: 'Suspicious' },
-    malicious: { color: 0xd64545, icon: '🚨', word: 'Highly suspicious' },
+    watch: { color: PALETTE.LANTERN, icon: '👁️', word: 'Worth a look' },
+    suspect: { color: PALETTE.HEAT, icon: '⚠️', word: 'Suspicious' },
+    malicious: { color: PALETTE.EMBER, icon: '🚨', word: 'Highly suspicious' },
 };
 
 /**
@@ -558,7 +559,7 @@ async function logTest(guild, settings, category, actor) {
 /** Reports an automatic unban after a temp-ban expires. */
 async function logUnban(guild, settings, { userId, bannedAtMs, ok, error }) {
     const embed = new EmbedBuilder()
-        .setColor(ok ? 0x3ba55d : COLORS.failure)
+        .setColor(ok ? PALETTE.JADE : COLORS.failure)
         .setTitle(ok ? '🔓 Temp-ban lifted' : '⚠️ Failed to lift temp-ban')
         .setDescription(
             ok

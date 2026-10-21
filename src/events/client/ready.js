@@ -47,7 +47,7 @@ async function reportBootFailures(client, results) {
   if (!ownerId) return;
 
   const embed = new EmbedBuilder()
-    .setColor(EMBED_COLORS?.ERROR ?? 0xED4245)
+    .setColor(EMBED_COLORS.ERROR)
     .setTitle('Boot report: something did not start')
     .setDescription(
       `${failed.length} of ${results.length} subsystems failed to start. `

@@ -9,7 +9,7 @@ const {
     SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
     ButtonStyle, MessageFlags,
 } = require('discord.js');
-const { isOwner, OWNER_REJECTION_JOKES } = require('../../utils/constants');
+const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
 const { SCOPES, SCOPE_NAMES, allModes, setMode, setAllModes } = require('../../utils/ui/mode');
 const { ui } = require('../../utils/ui/panel');
 
@@ -23,7 +23,7 @@ function sample(scope) {
         return {
             embed: new EmbedBuilder()
                 .setTitle('🎲 Blackjack')
-                .setColor(0xc0392b)
+                .setColor(EMBED_COLORS.LOSE)
                 .addFields(
                     { name: 'Dealer (showing K)', value: 'K♠ 🂠' },
                     { name: 'Your hand (18)', value: 'Q♥ 8♣ · 500 ⛁' },
@@ -44,7 +44,7 @@ function sample(scope) {
         return {
             embed: new EmbedBuilder()
                 .setTitle('😐 Opinion on moksi')
-                .setColor(0xf0b232)
+                .setColor(EMBED_COLORS.WARNING)
                 .setDescription('*"he\'s around constantly. i\'ve stopped noticing, which is probably the nicest thing i can say."*')
                 .addFields(
                     { name: 'Attitude', value: 'FAMILIAR', inline: true },
@@ -62,7 +62,7 @@ function sample(scope) {
         return {
             embed: new EmbedBuilder()
                 .setTitle('🚪 Join gate')
-                .setColor(0x5865f2)
+                .setColor(EMBED_COLORS.INFO)
                 .addFields(
                     { name: 'Minimum age', value: '**30** days', inline: true },
                     { name: 'Dry run', value: '🔴 Off', inline: true },
@@ -81,7 +81,7 @@ function sample(scope) {
         return {
             embed: new EmbedBuilder()
                 .setTitle('🎞️ Media info')
-                .setColor(0x1abc9c)
+                .setColor(EMBED_COLORS.SUCCESS)
                 .addFields(
                     { name: 'Format', value: 'mp4', inline: true },
                     { name: 'Duration', value: '00:14', inline: true },
@@ -98,7 +98,7 @@ function sample(scope) {
     return {
         embed: new EmbedBuilder()
             .setTitle('⏰ Reminder set')
-            .setColor(0x9b59b6)
+            .setColor(EMBED_COLORS.INFO)
             .setDescription('You will be reminded about **the deploy** in 2 hours.')
             .addFields(
                 { name: 'When', value: '<t:1786000000:R>', inline: true },

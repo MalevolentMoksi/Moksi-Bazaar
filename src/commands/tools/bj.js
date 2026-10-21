@@ -18,7 +18,7 @@ const { deductBet, resolveBet, notYourTable } = require('../../utils/gameHelpers
 const { considerHeckle } = require('../../utils/casinoHeckle');
 const { replyPrivate } = require('../../utils/interactionAck');
 const logger = require('../../utils/logger');
-const { GAME_CONFIG } = require('../../utils/constants');
+const { GAME_CONFIG, EMBED_COLORS } = require('../../utils/constants');
 const { ui, retireControls } = require('../../utils/ui/panel');
 const { money, signedMoney, parseAmount, AMOUNT_HINT } = require('../../utils/money');
 const BJ = require('../../utils/blackjack');
@@ -139,11 +139,11 @@ module.exports = {
         const anyWin = hands.some(h => ['natural', 'even_money', 'win'].includes(h.outcome));
         const anyLoss = hands.some(h => ['lose', 'bust', 'dealer_natural'].includes(h.outcome));
         if (hands.some(h => h.outcome === 'natural')) {
-          embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_BLACKJACK);
+          embed.setColor(EMBED_COLORS.BLACKJACK);
         } else if (anyWin && !anyLoss) {
-          embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_WIN);
+          embed.setColor(EMBED_COLORS.WIN);
         } else if (anyLoss && !anyWin) {
-          embed.setColor(GAME_CONFIG.BLACKJACK.COLOR_LOSS);
+          embed.setColor(EMBED_COLORS.LOSE);
         }
       }
       return embed;

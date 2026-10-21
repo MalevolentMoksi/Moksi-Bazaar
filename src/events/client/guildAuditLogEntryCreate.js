@@ -17,8 +17,9 @@ const { getSettings } = require('../../utils/joinGate/config');
 const { deletePendingUnban } = require('../../utils/joinGate/unbanScheduler');
 const { logSupersededUnban } = require('../../utils/joinGate/logging');
 const { ui, quiet } = require('../../utils/ui/panel');
+const { EMBED_COLORS } = require('../../utils/constants');
 
-const ALERT_COLOR = 0xd64545;
+const ALERT_COLOR = EMBED_COLORS.ERROR;
 
 async function alert(guild, settings, verdict, client) {
     const actor = await client.users.fetch(verdict.actorId).catch(() => null);

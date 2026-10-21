@@ -4,7 +4,7 @@ const {
     deleteWarnReminder,
     scheduleNext,
 } = require('../../utils/warnReminderScheduler');
-const { isOwner } = require('../../utils/constants');
+const { isOwner, EMBED_COLORS } = require('../../utils/constants');
 const { ui, retireControls, isV2Message } = require('../../utils/ui/panel');
 
 const WARN_GUILD_ID = '1271818662839451699';
@@ -33,7 +33,7 @@ async function buildListEmbed(client) {
 
     const embed = new EmbedBuilder()
         .setTitle('Pending Warn Reminders')
-        .setColor(0x5865F2)
+        .setColor(EMBED_COLORS.INFO)
         .setTimestamp()
         .setFooter({ text: 'Click a button to cancel a reminder' });
 

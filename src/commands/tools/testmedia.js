@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const { processMediaInMessage, getMediaAnalysisProvider } = require('../../utils/db.js');
 const { ui } = require('../../utils/ui/panel');
+const { EMBED_COLORS } = require('../../utils/constants');
 
 const TRUNC = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
@@ -25,7 +26,7 @@ module.exports = {
         // This was the line causing the crash before:
         const provider = await getMediaAnalysisProvider(); 
         
-        const color = provider === 'gemini' ? 0x4285F4 : provider === 'groq' ? 0xF55036 : 0x99AAB5;
+        const color = provider === 'gemini' ? 0x4285F4 : provider === 'groq' ? 0xF55036 : EMBED_COLORS.NEUTRAL;
 
         const messages = await interaction.channel.messages.fetch({ limit });
         let total = 0, withMedia = 0, items = 0, ok = 0, fail = 0;
@@ -159,14 +160,14 @@ module.exports = {
             new EmbedBuilder()
               .setTitle('ℹ️ No Media Found')
               .setDescription('No media detected in the scanned messages.')
-              .setColor(0xFEE75C)
+              .setColor(EMBED_COLORS.WARNING)
           );
         } else {
           for (let i = 0; i < results.length; i += 5) {
             embeds.push(
               new EmbedBuilder()
                 .setTitle(i ? '🔍 Details (cont.)' : '🔍 Detailed Media Analysis')
-                .setColor(0x5865F2)
+                .setColor(EMBED_COLORS.INFO)
                 .addFields(results.slice(i, i + 5))
             );
           }

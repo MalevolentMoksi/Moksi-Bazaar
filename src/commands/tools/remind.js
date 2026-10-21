@@ -4,6 +4,7 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const { pool } = require('../../utils/db');
 const { ui } = require('../../utils/ui/panel');
+const { EMBED_COLORS } = require('../../utils/constants');
 const { randomUUID } = require('crypto');
 
 let schedulerTimer = null;
@@ -166,7 +167,7 @@ async function createRemindersEmbed(userId, client) {
             embed: new EmbedBuilder()
                 .setTitle('📅 Your Reminders')
                 .setDescription('You have no active reminders.')
-                .setColor(0x888888)
+                .setColor(EMBED_COLORS.NEUTRAL)
                 .setTimestamp(),
             components: []
         };
@@ -174,7 +175,7 @@ async function createRemindersEmbed(userId, client) {
 
     const embed = new EmbedBuilder()
         .setTitle('📅 Your Reminders')
-        .setColor(0x5865F2)
+        .setColor(EMBED_COLORS.INFO)
         .setTimestamp()
         .setFooter({ text: 'Click a button to delete a reminder' });
 

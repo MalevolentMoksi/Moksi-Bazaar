@@ -27,6 +27,7 @@ const {
 const engine = require('../../utils/tetris');
 const logger = require('../../utils/logger');
 const { ui, retireControls } = require('../../utils/ui/panel');
+const { EMBED_COLORS } = require('../../utils/constants');
 
 /**
  * Tetris is the one game here that costs nothing to play, so it had nothing to
@@ -134,7 +135,7 @@ function gameEmbed(entry, { note = null } = {}) {
     const embed = new EmbedBuilder()
         .setTitle(game.over ? '🎮 Tetris: topped out' : '🎮 Tetris')
         .setDescription(drawBoard(game))
-        .setColor(game.over ? 0xE74C3C : 0x5865F2)
+        .setColor(game.over ? EMBED_COLORS.LOSE : EMBED_COLORS.INFO)
         .addFields(
             { name: 'Score', value: game.score.toLocaleString(), inline: true },
             { name: 'Lines', value: String(game.lines), inline: true },
@@ -175,7 +176,7 @@ function controls(game) {
 
 const HELP = new EmbedBuilder()
     .setTitle('🎮 Tetris')
-    .setColor(0x5865F2)
+    .setColor(EMBED_COLORS.INFO)
     .setDescription(
         'Turn-based, because a piece falling on a timer cannot be steered through a chat client: '
         + 'by the time you see it and press a button, it has moved. **Every move you make drops the '
@@ -284,7 +285,7 @@ module.exports = {
                     collector.stop('quit');
                     const farewell = gameEmbed(entry, { note: 'Game ended.' })
                         .setTitle('🎮 Tetris: ended')
-                        .setColor(0x99AAB5);
+                        .setColor(EMBED_COLORS.NEUTRAL);
                     return press.editReply(ui(farewell, [], { like: press.message })).catch(() => {});
                 }
 

@@ -4,6 +4,7 @@ const { getBalance, adjustBalance, getTopBalances } = require('../../utils/db');
 const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const { ui } = require('../../utils/ui/panel');
 const { money } = require('../../utils/money');
+const { EMBED_COLORS } = require('../../utils/constants');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -88,7 +89,7 @@ module.exports = {
             })
             .join('\n')
         )
-        .setColor('Gold');
+        .setColor(EMBED_COLORS.INFO);
 
       return interaction.editReply(ui(embed, [], { scope: 'casino' }));
     }

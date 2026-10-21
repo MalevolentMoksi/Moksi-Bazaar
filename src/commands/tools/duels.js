@@ -17,7 +17,7 @@ const {
 const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const { money, parseAmount, resolveAmount, AMOUNT_HINT } = require('../../utils/money');
 const logger = require('../../utils/logger');
-const { GAME_CONFIG } = require('../../utils/constants');
+const { GAME_CONFIG, EMBED_COLORS } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
 
 module.exports = {
@@ -90,7 +90,7 @@ module.exports = {
         .setTitle('⚔️ Duel Challenge!')
         .setDescription(`${me} has challenged ${target} to a duel for **${money(amount)}**!\n\n` +
                         `Type \`/duel accept\` or \`/duel decline\` within ${duelTimeout / 1000} seconds.`)
-        .setColor('Blue');
+        .setColor(EMBED_COLORS.INFO);
 
       return replyPublic(interaction, ui(challenge, [], { scope: 'casino' }));
     }
@@ -150,7 +150,7 @@ module.exports = {
           `• ${winner.user.username}: ${money(winBal)}\n` +
           `• ${loser.user.username}: ${money(loseBal)}`
         )
-        .setColor('Green');
+        .setColor(EMBED_COLORS.WIN);
 
       return replyPublic(interaction, ui(result, [], { scope: 'casino' }));
     }
@@ -168,7 +168,7 @@ module.exports = {
       const declined = new EmbedBuilder()
         .setTitle('❌ Duel Declined')
         .setDescription(`${me} declined the duel request from ${challenger}.`)
-        .setColor('DarkRed');
+        .setColor(EMBED_COLORS.NEUTRAL);
 
       return replyPublic(interaction, ui(declined, [], { scope: 'casino' }));
     }
