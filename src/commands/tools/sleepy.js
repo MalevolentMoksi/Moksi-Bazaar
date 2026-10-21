@@ -14,6 +14,7 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js'
 const { pool } = require('../../utils/db.js');
 const { SLEEPY_GUILDS, isOwner, OWNER_REJECTION_JOKES } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
+const { GENERIC_FAILURE } = require('../../utils/errorHandler');
 
 /**
  * The largest tally the set command will store.
@@ -204,9 +205,12 @@ module.exports = {
       }
     } catch (err) {
       console.error('Sleepy command error:', err);
-      return interaction.reply({
-        content: '⚠️ Something went wrong handling your sleepy command.', flags: MessageFlags.Ephemeral
-      });
+      // Several branches defer first, and reply() on a deferred interaction
+      // throws, so the answer has to follow whichever state it is in.
+      const payload = { content: GENERIC_FAILURE, flags: MessageFlags.Ephemeral };
+      return (interaction.deferred || interaction.replied
+        ? interaction.followUp(payload)
+        : interaction.reply(payload)).catch(() => null);
     }
   },
 };

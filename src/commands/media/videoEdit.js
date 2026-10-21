@@ -4,6 +4,7 @@ const { handleMediaCommand, fetchRecentMedia, resolveMedia, downloadMediaToTemp 
 const { runFFmpeg, hasAudio, atempoChain, loopVideo, mp4OutputOptions, ensureMediaSize } = require('../../utils/media/ffmpegUtils');
 const { createTempPath } = require('../../utils/media/tempFiles');
 const { isGifInput, mediaFilePayload } = require('../../utils/media/formatHelpers');
+const { describeMediaFailure } = require('../../utils/media/mediaErrors');
 
 function isVideoOrGif(mediaInfo) {
     return mediaInfo.isVideo || mediaInfo.ext === 'gif' || mediaInfo.isGifLike;
@@ -293,7 +294,7 @@ const addaudio = {
             }
             await interaction.editReply({ files: [mediaFilePayload(sendPath, interaction.commandName)] });
         } catch (err) {
-            try { await interaction.editReply(`❌ Processing failed: ${err.message}`); } catch {}
+            try { await interaction.editReply(describeMediaFailure(err)); } catch {}
             throw err;
         } finally {
             await cleanup(videoPath, audioPath, outputPath, sendPath !== outputPath ? sendPath : null);

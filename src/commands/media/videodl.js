@@ -6,6 +6,7 @@ const { ytdlpAvailable, download } = require('../../utils/media/ytdlpUtils');
 const { ensureMediaSize } = require('../../utils/media/ffmpegUtils');
 const { mediaFilePayload } = require('../../utils/media/formatHelpers');
 const { cleanup } = require('../../utils/media/tempFiles');
+const { describeMediaFailure } = require('../../utils/media/mediaErrors');
 const { mediaSemaphore } = require('../../utils/media/concurrency');
 
 const MAX_FILE_SIZE = 24 * 1024 * 1024;
@@ -102,7 +103,9 @@ const videodl = {
             const msg = String(err.message || '');
             const friendly = msg.toLowerCase().includes('too large') || msg.toLowerCase().includes('max-filesize')
                 ? '⚠️ That video is larger than Discord allows (25 MB). Try the audio-only format or a shorter video.'
-                : `❌ Could not download that: ${msg.slice(0, 300)}`;
+                : describeMediaFailure(err, {
+                    fallback: "Couldn't download that. The site may not be supported, or it is turning me away.",
+                });
             try { await interaction.editReply(friendly); } catch {}
         } finally {
             await cleanup(downloadedPath, sendPath !== downloadedPath ? sendPath : null);

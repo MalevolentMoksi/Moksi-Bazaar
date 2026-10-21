@@ -154,7 +154,7 @@ async function renderOverview(state) {
         .setTitle('🛠️ Cooler Moksi: Overview')
         .setColor(activeSpeak ? EMBED_COLORS.SUCCESS : EMBED_COLORS.ERROR)
         .setDescription(activeSpeak
-            ? 'The goat is awake. All systems below act only while this stays on.'
+            ? 'Moksi is awake. All systems below act only while this stays on.'
             : '🔴 **Maintenance mode.** The bot answers nobody but you.')
         .addFields(
             { name: '🗣️ Speak', value: onOff(activeSpeak), inline: true },
@@ -174,7 +174,7 @@ async function renderOverview(state) {
         new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId('ss_toggle_speak')
-                .setLabel(activeSpeak ? 'Silence the goat' : 'Wake the goat')
+                .setLabel(activeSpeak ? 'Silence Moksi' : 'Wake Moksi')
                 .setStyle(activeSpeak ? ButtonStyle.Danger : ButtonStyle.Success),
             new ButtonBuilder()
                 .setCustomId('ss_toggle_vision')
@@ -688,7 +688,7 @@ module.exports = {
                             label: 'Comma separated (empty = react to anything)',
                             paragraph: true,
                             value: cfg.keywords.join(', '),
-                            placeholder: 'moksi, goat',
+                            placeholder: 'moksi, cooler moksi',
                             maxLength: 500,
                         }],
                     });

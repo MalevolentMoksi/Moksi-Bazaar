@@ -20,6 +20,7 @@ jest.mock('../src/utils/health', () => ({
     snapshot: jest.fn(() => ({ state: 'ok', worst: null, problems: [] })),
 }));
 
+const { ActivityType } = require('discord.js');
 const health = require('../src/utils/health');
 const { initPresence, presenceLine, formatDuration, MAX_ACTIVITY } = require('../src/utils/presence');
 
@@ -52,9 +53,9 @@ afterEach(() => {
 });
 
 describe('what the line says', () => {
-    test('healthy is the uptime, unchanged from before', () => {
+    test('healthy is the uptime', () => {
         expect(presenceLine(3 * 86_400_000 + 4 * 3_600_000, HEALTHY))
-            .toEqual({ text: 'Uptime: 3d 4h', status: 'online' });
+            .toEqual({ text: 'Up 3d 4h', status: 'online' });
     });
 
     test('a broken subsystem takes the line, and the dot', () => {
@@ -114,7 +115,10 @@ describe('the loop', () => {
         const client = start(fakeClient());
         await flush();
         expect(client.user.setPresence).toHaveBeenCalledTimes(1);
-        expect(client.user.setPresence.mock.calls[0][0].activities[0].name).toBe('Uptime: 1m 0s');
+        const [activity] = client.user.setPresence.mock.calls[0][0].activities;
+        // A custom status: the text is the state, with no "Watching" in front.
+        expect(activity.state).toBe('Up 1m 0s');
+        expect(activity.type).toBe(ActivityType.Custom);
         expect(health.refresh).toHaveBeenCalled();
     });
 

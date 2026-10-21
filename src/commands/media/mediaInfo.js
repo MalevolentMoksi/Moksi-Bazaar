@@ -8,6 +8,7 @@ const { cleanup } = require('../../utils/media/tempFiles');
 const { uncaption } = require('../../utils/media/uncaptionUtils');
 const { ui } = require('../../utils/ui/panel');
 const { EMBED_COLORS } = require('../../utils/constants');
+const { describeMediaFailure } = require('../../utils/media/mediaErrors');
 
 const uncaptionCmd = {
     data: new SlashCommandBuilder()
@@ -110,7 +111,7 @@ const info = {
                 .setColor(EMBED_COLORS.INFO);
             await interaction.editReply(ui(embed, [], { scope: 'media' }));
         } catch (err) {
-            try { await interaction.editReply(`❌ Could not read that media: ${err.message}`); } catch {}
+            try { await interaction.editReply(describeMediaFailure(err)); } catch {}
         } finally {
             await cleanup(inputPath);
         }

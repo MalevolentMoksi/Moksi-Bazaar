@@ -5,6 +5,14 @@ const { MessageFlags } = require('discord.js');
 /**
  * Error types with user-friendly messages
  */
+/**
+ * What anyone sees when a command throws and nothing more specific applies.
+ * One line, in the bot's own voice, everywhere: it used to be "There was an
+ * error while executing this command!" in one place, "Something broke" in
+ * another, and a per-command variant in a few more.
+ */
+const GENERIC_FAILURE = 'That broke on my end, not yours. Try it once more.';
+
 const ERROR_MESSAGES = {
     API_TIMEOUT: 'My brain timed out. The AI servers might be slow right now. Try again?',
     RATE_LIMIT: 'I\'m talking too much today. Try again in a bit.',
@@ -15,7 +23,7 @@ const ERROR_MESSAGES = {
     INVALID_INPUT: 'That input doesn\'t look right. Check your command and try again.',
     PERMISSION_DENIED: 'You don\'t have permission to do that.',
     MEDIA_ANALYSIS_FAILED: 'Couldn\'t analyze that image. It might be too large or in an unsupported format.',
-    UNKNOWN_ERROR: 'Something broke. This has been logged.'
+    UNKNOWN_ERROR: GENERIC_FAILURE
 };
 
 /**
@@ -152,5 +160,6 @@ module.exports = {
     getErrorMessage,
     logWarning,
     sendError,
-    ERROR_MESSAGES
+    ERROR_MESSAGES,
+    GENERIC_FAILURE
 };

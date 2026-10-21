@@ -50,6 +50,23 @@ describe('no prompt tells the model it is an animal', () => {
         }
     });
 
+    test('no command says "goat" where anyone can read it', () => {
+        // /speak_settings kept "Silence the goat" and "The goat is awake" for
+        // weeks after the prompts were cleaned, because nobody swept the
+        // labels. Comments may remember the history; copy may not.
+        const commandsDir = path.join(__dirname, '..', 'src', 'commands');
+        const files = fs.readdirSync(commandsDir, { recursive: true })
+            .filter(f => String(f).endsWith('.js'))
+            .map(f => path.join('src', 'commands', String(f)));
+        expect(files.length).toBeGreaterThan(20);
+        for (const file of files) {
+            const code = read(file)
+                .replace(/\/\*[\s\S]*?\*\//g, '')
+                .replace(/\/\/.*$/gm, '');
+            expect({ file, goat: /\bgoat\b/i.test(code) }).toEqual({ file, goat: false });
+        }
+    });
+
     test('the last of the goat is gone from the emoji table too', () => {
         const constants = read('src/utils/constants.js');
         expect(constants).toContain('REACTION_EMOJI');

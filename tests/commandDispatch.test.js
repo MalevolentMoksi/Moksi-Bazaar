@@ -8,6 +8,8 @@
 const interactionCreate = require('../src/events/client/interactionCreate');
 const overview = require('../src/web/pages/overview');
 const { DEFAULTS } = require('../src/utils/joinGate/config');
+const { GENERIC_FAILURE } = require('../src/utils/errorHandler');
+const { MessageFlags } = require('discord.js');
 
 function fakeInteraction(overrides = {}) {
     return {
@@ -55,7 +57,24 @@ describe('dispatching a command the bot does not have', () => {
         });
 
         expect(interaction.reply).toHaveBeenCalledTimes(1);
-        expect(interaction.reply.mock.calls[0][0].content).toContain('error');
+        expect(interaction.reply.mock.calls[0][0].content).toBe(GENERIC_FAILURE);
+        expect(interaction.reply.mock.calls[0][0].flags).toBe(MessageFlags.Ephemeral);
+    });
+
+    test('a command that deferred publicly and then threw does not leave "thinking" behind', async () => {
+        const interaction = fakeInteraction({
+            commandName: 'boom',
+            deferred: true,
+            deleteReply: jest.fn(async () => {}),
+        });
+        await interactionCreate.execute(interaction, {
+            commands: new Map([['boom', { execute: async () => { throw new Error('nope'); } }]]),
+        });
+
+        expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+        expect(interaction.followUp).toHaveBeenCalledWith({
+            content: GENERIC_FAILURE, flags: MessageFlags.Ephemeral,
+        });
     });
 
     test('a dead interaction token does not take the process with it', async () => {

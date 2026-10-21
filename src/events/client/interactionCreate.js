@@ -6,6 +6,8 @@
 const { MessageFlags, InteractionType } = require('discord.js');
 const logger = require('../../utils/logger');
 const reportActions = require('../../utils/joinGate/reportActions');
+const { replyPrivate } = require('../../utils/interactionAck');
+const { GENERIC_FAILURE } = require('../../utils/errorHandler');
 
 /** Enums arrive as numbers; a log line saying "2" helps nobody. */
 const TYPE_NAME = Object.fromEntries(
@@ -67,19 +69,12 @@ module.exports = {
                     stack: error.stack,
                 });
 
-                // Try to reply with error message
+                // Privately, whatever state the command left things in. A
+                // command that deferred publicly and then threw used to leave
+                // its "is thinking..." placeholder in the channel; replyPrivate
+                // takes that down and answers in its place.
                 try {
-                    if (interaction.replied || interaction.deferred) {
-                        await interaction.followUp({
-                            content: 'There was an error while executing this command!',
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    } else {
-                        await interaction.reply({
-                            content: 'There was an error while executing this command!',
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
+                    await replyPrivate(interaction, GENERIC_FAILURE);
                 } catch (replyError) {
                     logger.error('Failed to send error reply', {
                         commandName,

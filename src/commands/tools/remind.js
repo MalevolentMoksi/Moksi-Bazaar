@@ -5,6 +5,7 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const { pool } = require('../../utils/db');
 const { ui } = require('../../utils/ui/panel');
 const { EMBED_COLORS } = require('../../utils/constants');
+const { GENERIC_FAILURE } = require('../../utils/errorHandler');
 const { randomUUID } = require('crypto');
 
 let schedulerTimer = null;
@@ -485,7 +486,7 @@ module.exports = {
             return interaction.editReply('Unknown subcommand.');
         } catch (err) {
             console.error('remind command error:', err);
-            try { return interaction.editReply('There was an error processing your reminder command.'); }
+            try { return interaction.editReply(GENERIC_FAILURE); }
             catch {}
         }
     },

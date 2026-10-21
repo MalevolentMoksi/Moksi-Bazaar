@@ -52,7 +52,7 @@ function formatDuration(ms) {
  */
 function presenceLine(uptimeMs, snap, now = Date.now()) {
   if (!snap || snap.state === 'ok' || !snap.worst) {
-    return { text: `Uptime: ${formatDuration(uptimeMs)}`, status: 'online' };
+    return { text: `Up ${formatDuration(uptimeMs)}`, status: 'online' };
   }
 
   const { label, detail, sinceMs } = snap.worst;
@@ -88,7 +88,9 @@ function initPresence(client) {
       if (rendered === last) return;
 
       client.user.setPresence({
-        activities: [{ name: text, type: ActivityType.Watching }],
+        // A custom status, so the line is the line. As an activity of type
+        // Watching it rendered as "Watching Uptime: 3h 12m".
+        activities: [{ name: 'Custom Status', state: text, type: ActivityType.Custom }],
         status,
       });
       // Only once it has actually gone out. Recording it first would mean a

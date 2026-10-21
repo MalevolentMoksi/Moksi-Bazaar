@@ -8,6 +8,7 @@ const { ensureMediaSize } = require('./ffmpegUtils');
 const { mediaSemaphore } = require('./concurrency');
 const { normalizeInput } = require('./inputGuards');
 const { ackPublic } = require('../interactionAck');
+const { describeMediaFailure } = require('./mediaErrors');
 
 const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24 MB. Discord bot upload limit is 25 MB
 
@@ -499,8 +500,8 @@ async function handleMediaCommand(interaction, {
             || (lowered.includes('max file size') && lowered.includes('mb'));
 
         const reply = isDiscordSizeError
-            ? '⚠️ The output file is too large for Discord (max 25 MB). Try a smaller/shorter input.'
-            : `❌ Processing failed: ${err.message || 'Unknown error'}`;
+            ? 'The result is too big for Discord (25 MB). A smaller or shorter input will fit.'
+            : describeMediaFailure(err);
 
         try { await interaction.editReply(reply); } catch {}
     } finally {
