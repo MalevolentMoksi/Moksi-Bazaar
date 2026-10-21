@@ -12,8 +12,7 @@ const { transferBalance, getBalance } = require('../../utils/db');
 const { EMBED_COLORS } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
 const logger = require('../../utils/logger');
-
-const money = n => `$${Number(n).toLocaleString()}`;
+const { money, parseAmount, PAY_HINT } = require('../../utils/money');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -21,13 +20,19 @@ module.exports = {
         .setDescription('Give some of your money to someone else')
         .addUserOption(opt => opt
             .setName('user').setDescription('who gets it').setRequired(true))
-        .addIntegerOption(opt => opt
-            .setName('amount').setDescription('how much').setRequired(true).setMinValue(1)),
+        // Commas and k, but never all or half: here "all" is one typo away
+        // from giving everything to someone.
+        .addStringOption(opt => opt
+            .setName('amount').setDescription('how much: 500, 10,000 or 10k').setRequired(true)),
 
     async execute(interaction) {
         const from = interaction.user;
         const to = interaction.options.getUser('user');
-        const amount = interaction.options.getInteger('amount');
+        const spec = parseAmount(interaction.options.getString('amount'), { relative: false });
+        const amount = spec?.value ?? 0;
+        if (amount < 1) {
+            return interaction.reply({ content: PAY_HINT, flags: MessageFlags.Ephemeral });
+        }
 
         if (to.id === from.id) {
             return interaction.reply({
@@ -60,7 +65,7 @@ module.exports = {
         const receipt = new EmbedBuilder()
             .setColor(EMBED_COLORS.SUCCESS)
             .setDescription(`${from} handed ${to} **${money(amount)}**.`)
-            .setFooter({ text: `${from.username} now has $${transfer.fromBalance.toLocaleString()}` });
+            .setFooter({ text: `${from.username} now has ${money(transfer.fromBalance)}` });
 
         return interaction.editReply(ui(receipt, [], { scope: 'casino' }));
     },

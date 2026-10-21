@@ -9,7 +9,7 @@
 
 const {
     SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder,
-    ComponentType, MessageFlags,
+    ButtonBuilder, ButtonStyle, ComponentType, MessageFlags,
 } = require('discord.js');
 const { getBalance, getInventory, purchaseItem } = require('../../utils/db');
 const { ui, retireControls } = require('../../utils/ui/panel');
@@ -18,9 +18,12 @@ const {
 } = require('../../utils/shopCatalogue');
 const { EMBED_COLORS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
+const { money } = require('../../utils/money');
+const { NOT_YOUR_PANEL } = require('../../utils/gameHelpers');
 
 const BROWSE_TIMEOUT_MS = 180_000;
-const money = n => `$${Number(n).toLocaleString()}`;
+/** How long a "buy this?" waits before it counts as a no. */
+const CONFIRM_TIMEOUT_MS = 60_000;
 
 // ── Shop ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +80,46 @@ function shopRows(balance, ownedIds) {
     )];
 }
 
+/**
+ * Asks, privately, whether to go through with a purchase.
+ *
+ * @param {import('discord.js').StringSelectMenuInteraction} selection the pick
+ * @returns {Promise<{choice: 'buy'|'cancel'|'timeout', answer: (text: string) => Promise<unknown>}>}
+ *   `answer` replaces the question, buttons and all, so a stale Buy can never
+ *   be pressed twice.
+ */
+async function askToBuy(selection, item, price, balance) {
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('shop_confirm')
+            .setLabel(`Buy for ${money(price)}`).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('shop_cancel')
+            .setLabel('Leave it').setStyle(ButtonStyle.Secondary),
+    );
+    const response = await selection.reply({
+        content: `${item.emoji} **${item.name}** for **${money(price)}**?\n`
+            + `-# ${item.blurb}\n-# You would have ${money(balance - price)} left.`,
+        components: [row],
+        flags: MessageFlags.Ephemeral,
+        withResponse: true,
+    });
+    const prompt = response?.resource?.message ?? await selection.fetchReply();
+
+    let button = null;
+    try {
+        button = await prompt.awaitMessageComponent({
+            componentType: ComponentType.Button,
+            time: CONFIRM_TIMEOUT_MS,
+        });
+        await button.deferUpdate();
+    } catch {
+        // Nobody answered. Walking away is a no.
+    }
+
+    const choice = !button ? 'timeout' : button.customId === 'shop_confirm' ? 'buy' : 'cancel';
+    const answer = text => selection.editReply({ content: text, components: [] }).catch(() => null);
+    return { choice, answer };
+}
+
 async function runShop(interaction) {
     const userId = interaction.user.id;
     let balance = await getBalance(userId);
@@ -91,33 +134,63 @@ async function runShop(interaction) {
         time: BROWSE_TIMEOUT_MS,
     });
 
+    /**
+     * Redraws the panel from fresh numbers. Also what puts the menu back to
+     * its placeholder: Discord leaves the last pick showing in the picker's
+     * own client until the message changes.
+     */
+    const redraw = async () => {
+        balance = await getBalance(userId);
+        ownedIds = new Set((await getInventory(userId)).map(inv => inv.itemId));
+        await message.edit(
+            ui(shopEmbed(balance, ownedIds), shopRows(balance, ownedIds), { like: message }),
+        );
+    };
+
     collector.on('collect', async i => {
         try {
             if (i.user.id !== userId) {
-                return i.reply({ content: 'Browse your own.', flags: MessageFlags.Ephemeral });
+                return i.reply({ content: NOT_YOUR_PANEL, flags: MessageFlags.Ephemeral });
             }
-            await i.deferUpdate();
 
             const item = getItem(i.values[0]);
-            if (!item) return;
+            if (!item) return i.deferUpdate();
+            const price = priceOf(item);
 
-            const result = await purchaseItem(userId, item.id, priceOf(item), { unique: item.unique });
-            if (!result.ok) {
-                return i.followUp({ content: `${item.emoji} ${result.error}`, flags: MessageFlags.Ephemeral });
+            // The two answers that need no question. Asking "buy this?" about
+            // something that cannot be bought would only add a click to a no.
+            if (item.unique && ownedIds.has(item.id)) {
+                await i.reply({ content: `${item.emoji} **${item.name}** is already yours. There is only one.`, flags: MessageFlags.Ephemeral });
+                return redraw();
+            }
+            if (balance < price) {
+                await i.reply({
+                    content: `${item.emoji} **${item.name}** is ${money(price)}. You have ${money(balance)}.`,
+                    flags: MessageFlags.Ephemeral,
+                });
+                return redraw();
             }
 
-            balance = result.balance;
-            ownedIds = new Set((await getInventory(userId)).map(inv => inv.itemId));
-            logger.info('Shop purchase', { userId, itemId: item.id, price: priceOf(item) });
+            // A select menu buys on a single pick, which made one slip of the
+            // wheel a $1,000,000 purchase. Everything asks first now.
+            const prompt = await askToBuy(i, item, price, balance);
+            if (prompt.choice !== 'buy') {
+                await prompt.answer(`${item.emoji} Left it on the shelf.`);
+                return redraw();
+            }
 
-            await message.edit(
-                ui(shopEmbed(balance, ownedIds), shopRows(balance, ownedIds), { like: message }),
-            );
-            return i.followUp({
-                content: `${item.emoji} **${item.name}** is yours. ${money(balance)} left.`
+            const result = await purchaseItem(userId, item.id, price, { unique: item.unique });
+            if (!result.ok) {
+                await prompt.answer(`${item.emoji} ${result.error}`);
+                return redraw();
+            }
+
+            logger.info('Shop purchase', { userId, itemId: item.id, price });
+            await prompt.answer(
+                `${item.emoji} **${item.name}** is yours. ${money(result.balance)} left.`
                     + (item.title ? `\n-# You may now be addressed as **${item.title}**.` : ''),
-                flags: MessageFlags.Ephemeral,
-            });
+            );
+            return redraw();
         } catch (error) {
             logger.error('Shop error', { error: error.message, stack: error.stack });
         }

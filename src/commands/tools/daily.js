@@ -13,8 +13,7 @@ const { getSetting } = require('../../utils/casinoConfig');
 const { ui } = require('../../utils/ui/panel');
 const { EMBED_COLORS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
-
-const money = n => `$${Number(n).toLocaleString()}`;
+const { money } = require('../../utils/money');
 
 /** Payout grows with the streak and then stops, so day 400 is not absurd. */
 async function payoutFor(streak) {

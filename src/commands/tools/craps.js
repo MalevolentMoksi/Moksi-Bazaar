@@ -12,12 +12,13 @@ const {
   MessageFlags
 } = require('discord.js');
 const { adjustBalance, recordGameResult } = require('../../utils/db');
-const { ui } = require('../../utils/ui/panel');
+const { ui, retireControls } = require('../../utils/ui/panel');
 const { considerHeckle } = require('../../utils/casinoHeckle');
-const { deductBet } = require('../../utils/gameHelpers');
+const { deductBet, resolveBet, notYourTable } = require('../../utils/gameHelpers');
 const { ackPublic, replyPrivate } = require('../../utils/interactionAck');
+const { money, parseAmount, AMOUNT_HINT } = require('../../utils/money');
 const logger = require('../../utils/logger');
-const { GAME_CONFIG } = require('../../utils/constants');
+const { GAME_CONFIG, EMBED_COLORS } = require('../../utils/constants');
 
 function rollDie() {
   return Math.floor(Math.random() * 6) + 1;
@@ -61,26 +62,31 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('craps')
     .setDescription('Roll the dice in a game of Craps')
-    .addIntegerOption(o =>
+    .addStringOption(o =>
       o.setName('bet')
-        .setDescription('Amount to wager')
+        .setDescription('How much: 500, 10k, half or all')
         .setRequired(true)
-        .setMinValue(1)
     ),
 
   async execute(interaction) {
     const userId = interaction.user.id;
-    let bet = interaction.options.getInteger('bet');
-    const originalBet = bet;
+
+    // Shape first, while a private rejection costs nothing.
+    const spec = parseAmount(interaction.options.getString('bet'));
+    if (!spec) {
+      return interaction.reply({ content: AMOUNT_HINT, flags: MessageFlags.Ephemeral });
+    }
 
     // Acknowledged before the money moves. The deduction used to come first,
     // so a slow query could take the bet and then miss Discord's three-second
     // window, leaving the player charged for a game they never saw.
     await ackPublic(interaction);
 
+    let bet = await resolveBet(userId, spec);
+    const originalBet = bet;
     const deductResult = await deductBet(userId, bet, { game: 'craps' });
     if (!deductResult.success) {
-      return replyPrivate(interaction, `❌ ${deductResult.error}`);
+      return replyPrivate(interaction, deductResult.error);
     }
 
     let balance = deductResult.newBalance;
@@ -118,23 +124,23 @@ module.exports = {
 
       const embed = new EmbedBuilder()
         .setTitle('🎲 Craps')
-        .setColor(game.win ? 0x2ecc71 : 0xe74c3c)
+        .setColor(game.win ? EMBED_COLORS.WIN : EMBED_COLORS.LOSE)
         .setDescription(desc)
         .addFields(
           { name: 'Result', value: game.result, inline: false },
-          { name: 'Bet', value: `$${bet}`, inline: true },
-          { name: 'Balance', value: `$${balance}`, inline: true }
+          { name: 'Bet', value: money(bet), inline: true },
+          { name: 'Balance', value: money(balance), inline: true }
         );
 
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId('craps_play_again')
-          .setLabel('Play Again')
+          .setLabel(`Roll again (${money(originalBet)})`)
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
           .setCustomId('craps_exit')
-          .setLabel('Exit Game')
-          .setStyle(ButtonStyle.Danger)
+          .setLabel('Leave the table')
+          .setStyle(ButtonStyle.Secondary)
       );
 
       const payload = board
@@ -156,7 +162,7 @@ module.exports = {
       collector.on('collect', async (btnInt) => {
         if (btnInt.user.id !== userId) {
           return btnInt.reply({
-            content: 'This is not your game!',
+            content: notYourTable('craps'),
             flags: MessageFlags.Ephemeral,
           });
         }
@@ -166,7 +172,7 @@ module.exports = {
           const deductAgain = await deductBet(userId, originalBet, { game: 'craps' });
           if (!deductAgain.success) {
             return await btnInt.followUp({
-              content: `Could not deduct bet: ${deductAgain.error}`,
+              content: deductAgain.error,
               flags: MessageFlags.Ephemeral,
             });
           }
@@ -180,12 +186,17 @@ module.exports = {
           await runRound();
         } else if (btnInt.customId === 'craps_exit') {
           logger.info('Craps: Player exited game', { userId, finalBalance: balance });
-          collector.stop();
+          collector.stop('left');
         }
       });
 
-      collector.on('end', () => {
-        logger.debug('Craps collector ended', { userId });
+      // The buttons used to outlive the game: after Leave or a minute of
+      // nothing, Roll again stayed on screen and answered with "that one's
+      // dead". A new round replaces them itself, so only these two endings
+      // take them away.
+      collector.on('end', async (_c, reason) => {
+        if (reason !== 'time' && reason !== 'left') return;
+        try { await message.edit(retireControls(message)); } catch { /* message may be gone */ }
       });
     }
   }

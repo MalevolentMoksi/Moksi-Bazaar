@@ -3,7 +3,7 @@
  * Challenge other users to wagered duels with persistent DB-backed state
  */
 
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const {
   getBalance,
   transferBalance,
@@ -15,6 +15,7 @@ const {
   recordGameResult,
 } = require('../../utils/db');
 const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
+const { money, parseAmount, resolveAmount, AMOUNT_HINT } = require('../../utils/money');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
@@ -28,7 +29,7 @@ module.exports = {
         .setName('challenge')
         .setDescription('Invite someone to duel for currency')
         .addUserOption(o => o.setName('user').setDescription('Who to challenge').setRequired(true))
-        .addIntegerOption(o => o.setName('amount').setDescription('Amount to wager').setRequired(true).setMinValue(1))
+        .addStringOption(o => o.setName('bet').setDescription('How much: 500, 10k, half or all').setRequired(true))
     )
     .addSubcommand(sub =>
       sub.setName('accept').setDescription('Accept a pending duel'))
@@ -40,6 +41,12 @@ module.exports = {
     const me = interaction.user;
     const guild = interaction.guild;
 
+    // Shape first, while a private rejection costs nothing.
+    const spec = sub === 'challenge' ? parseAmount(interaction.options.getString('bet')) : null;
+    if (sub === 'challenge' && !spec) {
+      return interaction.reply({ content: AMOUNT_HINT, flags: MessageFlags.Ephemeral });
+    }
+
     // Every branch below opens with database work, and accept goes on to fetch
     // a member from the API and move money. Any of that can outlast Discord's
     // three-second window, which used to leave the wager transferred and both
@@ -49,7 +56,6 @@ module.exports = {
     // ─── CHALLENGE ─────────────────────────────────────────────────────────
     if (sub === 'challenge') {
       const target = interaction.options.getUser('user');
-      const amount = interaction.options.getInteger('amount');
 
       if (target.id === me.id) {
         return replyPrivate(interaction, '❌ You can\'t duel yourself!');
@@ -68,8 +74,12 @@ module.exports = {
       }
 
       const myBal = await getBalance(me.id);
+      const amount = resolveAmount(spec, myBal);
+      if (amount < 1) {
+        return replyPrivate(interaction, 'That comes to nothing. Wager something you have.');
+      }
       if (myBal < amount) {
-        return replyPrivate(interaction, `❌ You only have $${myBal}, cannot wager $${amount}.`);
+        return replyPrivate(interaction, `You have ${money(myBal)}. That does not cover ${money(amount)}.`);
       }
 
       // Record the pending duel in DB (auto-expires via expires_at column)
@@ -78,7 +88,7 @@ module.exports = {
 
       const challenge = new EmbedBuilder()
         .setTitle('⚔️ Duel Challenge!')
-        .setDescription(`${me} has challenged ${target} to a duel for **$${amount.toLocaleString()}**!\n\n` +
+        .setDescription(`${me} has challenged ${target} to a duel for **${money(amount)}**!\n\n` +
                         `Type \`/duel accept\` or \`/duel decline\` within ${duelTimeout / 1000} seconds.`)
         .setColor('Blue');
 
@@ -136,9 +146,9 @@ module.exports = {
       const result = new EmbedBuilder()
         .setTitle('🏆 Duel Result')
         .setDescription(
-          `${winner} won **$${amount.toLocaleString()}** from ${loser}!\n\n` +
-          `• ${winner.user.username}: $${winBal.toLocaleString()}\n` +
-          `• ${loser.user.username}: $${loseBal.toLocaleString()}`
+          `${winner} won **${money(amount)}** from ${loser}!\n\n` +
+          `• ${winner.user.username}: ${money(winBal)}\n` +
+          `• ${loser.user.username}: ${money(loseBal)}`
         )
         .setColor('Green');
 

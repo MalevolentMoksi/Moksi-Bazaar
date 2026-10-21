@@ -187,7 +187,7 @@ module.exports = {
 
         collector.on('collect', async i => {
           if (i.user.id !== interaction.user.id) {
-            return i.reply({ content: 'This is not your menu!', flags: MessageFlags.Ephemeral });
+            return i.reply({ content: 'Not your panel.', flags: MessageFlags.Ephemeral });
           }
 
           if (i.customId === 'next_page') currentPage++;

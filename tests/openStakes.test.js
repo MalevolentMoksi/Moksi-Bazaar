@@ -178,10 +178,12 @@ describe('the games actually hold and release their stakes', () => {
             ['src/commands/tools/craps.js', 'craps'],
             ['src/commands/tools/highlow.js', 'highlow'],
             ['src/commands/tools/roulette.js', 'roulette'],
+            // Slots placed its stake directly once, and was the one game the
+            // house limits never reached. It goes through deductBet now.
+            ['src/commands/tools/slots.js', 'slots'],
         ]) {
             expect(read(file)).toContain(`game: '${label}'`);
         }
-        expect(read('src/commands/tools/slots.js')).toContain("createStake(userId, 'slots')");
     });
 
     test('and settles it once the hand has paid out', () => {

@@ -5,9 +5,10 @@
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const { adjustBalance, recordGameResult } = require('../../utils/db');
 const { considerHeckle } = require('../../utils/casinoHeckle');
-const { deductBet } = require('../../utils/gameHelpers');
+const { deductBet, resolveBet } = require('../../utils/gameHelpers');
 const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const { ui } = require('../../utils/ui/panel');
+const { money, signedMoney, parseAmount, AMOUNT_HINT } = require('../../utils/money');
 const logger = require('../../utils/logger');
 
 // Numbers colored red in European roulette
@@ -24,11 +25,10 @@ module.exports = {
            opt.setName('numbers')
               .setDescription('Comma-separated numbers to bet on (e.g., 3,7,25)')
               .setRequired(true))
-         .addIntegerOption(opt =>
-           opt.setName('amount')
-              .setDescription('Total amount of currency to bet')
-              .setRequired(true)
-              .setMinValue(1)))
+         .addStringOption(opt =>
+           opt.setName('bet')
+              .setDescription('Total, split evenly across the numbers: 500, 10k, half or all')
+              .setRequired(true)))
     .addSubcommand(sub =>
       sub.setName('color')
          .setDescription('Bet on a color (red, black, or green)')
@@ -41,18 +41,21 @@ module.exports = {
                 { name: 'Black', value: 'black' },
                 { name: 'Green (0)', value: 'green' }
               ))
-         .addIntegerOption(opt =>
-           opt.setName('amount')
-              .setDescription('Amount of currency to bet')
-              .setRequired(true)
-              .setMinValue(1))),
+         .addStringOption(opt =>
+           opt.setName('bet')
+              .setDescription('How much: 500, 10k, half or all')
+              .setRequired(true))),
 
   async execute(interaction) {
     const userId = interaction.user.id;
     const sub = interaction.options.getSubcommand();
-    const betAmount = interaction.options.getInteger('amount');
 
-    // Parse number bets before any money moves so bad input costs nothing
+    // Shapes first, while a private rejection costs nothing.
+    const spec = parseAmount(interaction.options.getString('bet'));
+    if (!spec) {
+      return interaction.reply({ content: AMOUNT_HINT, flags: MessageFlags.Ephemeral });
+    }
+
     let uniqueNumbers = null;
     let betPerNumber = 0;
     if (sub === 'number') {
@@ -64,15 +67,8 @@ module.exports = {
 
       if (uniqueNumbers.length === 0) {
         return interaction.reply({
-          content: '❌ Please provide at least one valid number between 0 and 36.', flags: MessageFlags.Ephemeral
-        });
-      }
-
-      // Integer stake per number; the indivisible remainder is refunded below
-      betPerNumber = Math.floor(betAmount / uniqueNumbers.length);
-      if (betPerNumber === 0) {
-        return interaction.reply({
-          content: `❌ A bet of $${betAmount} cannot be split across ${uniqueNumbers.length} numbers.`, flags: MessageFlags.Ephemeral
+          content: 'Name at least one number from 0 to 36, separated by commas: `7` or `3, 17, 25`.',
+          flags: MessageFlags.Ephemeral,
         });
       }
     }
@@ -81,9 +77,20 @@ module.exports = {
     // three-second window. The money below can, so claim the interaction here.
     await ackPublic(interaction);
 
+    // "all" and "half" need the balance, so the split is checked only now.
+    const betAmount = await resolveBet(userId, spec);
+    if (sub === 'number') {
+      // Integer stake per number; the indivisible remainder is refunded below
+      betPerNumber = Math.floor(betAmount / uniqueNumbers.length);
+      if (betPerNumber === 0) {
+        return replyPrivate(interaction,
+          `${money(betAmount)} cannot be split across ${uniqueNumbers.length} numbers.`);
+      }
+    }
+
     const deductResult = await deductBet(userId, betAmount, { game: 'roulette' });
     if (!deductResult.success) {
-      return replyPrivate(interaction, `❌ ${deductResult.error}`);
+      return replyPrivate(interaction, deductResult.error);
     }
 
     let finalBalance = deductResult.newBalance;
@@ -113,9 +120,9 @@ module.exports = {
         // Straight-up number pays 35:1, so total return = bet * 36
         payout = betPerNumber * 36;
       }
-      betDescription = `Numbers: ${uniqueNumbers.join(', ')} ($${betPerNumber} each)`;
+      betDescription = `${uniqueNumbers.join(', ')} at ${money(betPerNumber)} each`;
       if (remainder > 0) {
-        betDescription += `\nIndivisible $${remainder} returned`;
+        betDescription += `\n-# ${money(remainder)} did not divide evenly and went back to you`;
       }
 
     } else {
@@ -127,7 +134,7 @@ module.exports = {
         // Red/Black pays 1:1 -> total return = bet * 2
         payout = betAmount * 2;
       }
-      betDescription = `Color: ${guessColor}`;
+      betDescription = `${guessColor[0].toUpperCase()}${guessColor.slice(1)}`;
     }
 
     // Credit winnings atomically
@@ -176,12 +183,12 @@ module.exports = {
       )
       .addFields(
         { name: 'Result', value: `${colorEmoji} **${outcome}** (${outcomeColor})`, inline: true },
-        { name: 'Your Bet', value: `You wagered $${betAmount} on ${sub}\n${betDescription}`, inline: true },
+        { name: `Bet ${money(staked)}`, value: betDescription, inline: true },
         {
-          name: payout > 0 ? '🏆 You Won!' : '💸 You Lost',
+          name: payout > 0 ? `🏆 ${signedMoney(payout - staked)}` : `💸 ${signedMoney(-staked)}`,
           value: payout > 0
-            ? `You won $${(payout - staked).toLocaleString()} profit!\nTotal return: $${payout.toLocaleString()}\nNew balance: $${finalBalance.toLocaleString()}`
-            : `You lost $${staked.toLocaleString()}.\nNew balance: $${finalBalance.toLocaleString()}`,
+            ? `Paid **${money(payout)}**. Balance ${money(finalBalance)}.`
+            : `Balance ${money(finalBalance)}.`,
           inline: false
         }
       );

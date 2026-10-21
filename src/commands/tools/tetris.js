@@ -254,7 +254,7 @@ module.exports = {
         collector.on('collect', async (press) => {
             if (press.user.id !== userId) {
                 return press.reply({
-                    content: 'Not your game. `/tetris` starts your own.',
+                    content: 'Not your board. `/tetris` gets you your own.',
                     flags: MessageFlags.Ephemeral,
                 }).catch(() => {});
             }

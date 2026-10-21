@@ -13,74 +13,48 @@ const {
   SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder,
   ButtonStyle, ComponentType, MessageFlags,
 } = require('discord.js');
-const { getBalance, adjustBalance, recordGameResult } = require('../../utils/db');
-const { deductBet } = require('../../utils/gameHelpers');
+const { adjustBalance, recordGameResult } = require('../../utils/db');
+const { deductBet, resolveBet, notYourTable } = require('../../utils/gameHelpers');
 const { considerHeckle } = require('../../utils/casinoHeckle');
+const { replyPrivate } = require('../../utils/interactionAck');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
 const { ui, retireControls } = require('../../utils/ui/panel');
+const { money, signedMoney, parseAmount, AMOUNT_HINT } = require('../../utils/money');
 const BJ = require('../../utils/blackjack');
 
 const TIMEOUT = GAME_CONFIG.BLACKJACK.COLLECTOR_TIMEOUT;
-
-/** Accepts a plain number, or `all`/`max`/`half` measured against the balance. */
-function parseBet(raw, balance) {
-  const text = String(raw ?? '').trim().toLowerCase();
-  if (text === 'all' || text === 'max') return balance;
-  if (text === 'half') return Math.floor(balance / 2);
-  const n = Number(text.replace(/[,_\s]/g, ''));
-  if (!Number.isFinite(n)) return null;
-  return Math.floor(n);
-}
-
-const money = n => `$${Number(n).toLocaleString()}`;
-
-/** Signed, so a losing session reads as a loss rather than as a small number. */
-function signedMoney(n) {
-  const v = Number(n);
-  return `${v > 0 ? '+' : v < 0 ? '-' : ''}${money(Math.abs(v))}`;
-}
+const NOT_YOURS = notYourTable('bj');
 
 module.exports = {
+  // No subcommand: `start` was the only one, so it was a word to type and
+  // nothing else. Every game now takes its stake the same way.
   data: new SlashCommandBuilder()
     .setName('bj')
     .setDescription('Play a round of Blackjack')
-    .addSubcommand(sub => sub
-      .setName('start')
-      .setDescription('Start a new game')
-      .addStringOption(opt => opt
-        .setName('bet')
-        .setDescription('Amount to bet, or all / half / max')
-        .setRequired(true)
-      )
+    .addStringOption(opt => opt
+      .setName('bet')
+      .setDescription('How much: 500, 10k, half or all')
+      .setRequired(true)
     ),
 
   async execute(interaction) {
-    if (interaction.options.getSubcommand() !== 'start') return;
     const userId = interaction.user.id;
 
     // Shape check first, while a private rejection is still possible.
-    const rawBet = interaction.options.getString('bet');
-    if (parseBet(rawBet, 0) === null) {
-      return interaction.reply({
-        content: '💰 Bet a whole number of dollars, or `all`, `half`, or `max`.',
-        flags: MessageFlags.Ephemeral,
-      });
+    const spec = parseAmount(interaction.options.getString('bet'));
+    if (!spec) {
+      return interaction.reply({ content: AMOUNT_HINT, flags: MessageFlags.Ephemeral });
     }
 
     // Deferred before any money moves. If the interaction is going to fail,
     // it fails while the balance is still untouched.
     await interaction.deferReply();
 
-    const startingBalance = await getBalance(userId);
-    const openingBet = parseBet(rawBet, startingBalance);
-    if (openingBet < 1) {
-      return interaction.editReply('💰 That comes to nothing. Bet something you have.');
-    }
-
+    const openingBet = await resolveBet(userId, spec);
     const opening = await deductBet(userId, openingBet, { game: 'blackjack' });
     if (!opening.success) {
-      return interaction.editReply(`💰 ${opening.error}`);
+      return replyPrivate(interaction, opening.error);
     }
 
     let balance = opening.newBalance;
@@ -277,7 +251,7 @@ module.exports = {
 
       collector.on('collect', safe(async btn => {
         if (btn.user.id !== userId) {
-          return btn.reply({ content: 'This is not your game.', flags: MessageFlags.Ephemeral });
+          return btn.reply({ content: NOT_YOURS, flags: MessageFlags.Ephemeral });
         }
         await btn.deferUpdate();
         if (btn.customId === 'bj_even_yes') state.hands[0].evenMoney = true;
@@ -312,7 +286,7 @@ module.exports = {
 
       collector.on('collect', safe(async btn => {
         if (btn.user.id !== userId) {
-          return btn.reply({ content: 'This is not your game.', flags: MessageFlags.Ephemeral });
+          return btn.reply({ content: NOT_YOURS, flags: MessageFlags.Ephemeral });
         }
         await btn.deferUpdate();
         collector.stop('acted');
@@ -448,7 +422,7 @@ module.exports = {
 
       collector.on('collect', safe(async btn => {
         if (btn.user.id !== userId) {
-          return btn.reply({ content: 'This is not your game.', flags: MessageFlags.Ephemeral });
+          return btn.reply({ content: NOT_YOURS, flags: MessageFlags.Ephemeral });
         }
         await btn.deferUpdate();
 
@@ -469,7 +443,7 @@ module.exports = {
 
         const deducted = await deductBet(userId, next, { game: 'blackjack' });
         if (!deducted.success) {
-          return btn.followUp({ content: `💰 ${deducted.error}`, flags: MessageFlags.Ephemeral });
+          return btn.followUp({ content: deducted.error, flags: MessageFlags.Ephemeral });
         }
         balance = deducted.newBalance;
         roundStake = deducted.stake;

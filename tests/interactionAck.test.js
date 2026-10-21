@@ -108,7 +108,7 @@ describe('the private answer', () => {
 // Ordering is the whole point, and only the source can show it.
 describe('the money-moving commands acknowledge first', () => {
     const cases = [
-        ['src/commands/tools/slots.js', 'stake.place(bet)'],
+        ['src/commands/tools/slots.js', 'deductBet(userId, bet'],
         ['src/commands/tools/craps.js', 'deductBet(userId, bet'],
         ['src/commands/tools/roulette.js', 'deductBet(userId, betAmount'],
         ['src/commands/tools/gacha.js', 'getUserCooldownRemaining'],

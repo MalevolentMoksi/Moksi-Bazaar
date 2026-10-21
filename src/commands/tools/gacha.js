@@ -10,10 +10,16 @@ const {
   getUserCooldownRemaining,
   setUserCooldown,
 } = require('../../utils/db');
-const { ackPublic, replyPublic } = require('../../utils/interactionAck');
+const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
+const { money } = require('../../utils/money');
 const logger = require('../../utils/logger');
 const { GAME_CONFIG } = require('../../utils/constants');
 const { ui } = require('../../utils/ui/panel');
+
+/** A Discord timestamp `ms` from now, which every reader sees counting down. */
+function relativeStamp(ms) {
+  return `<t:${Math.ceil((Date.now() + ms) / 1000)}:R>`;
+}
 
 function getTierRewardBounds(tier) {
   if (Array.isArray(tier?.range) && tier.range.length >= 2) {
@@ -43,11 +49,9 @@ module.exports = {
     // Check if user is on cooldown (from database)
     const remaining = await getUserCooldownRemaining(userId, 'gacha');
     if (remaining > 0) {
-      const mins = Math.floor(remaining / 1000 / 60);
-      const secs = Math.floor((remaining / 1000) % 60);
-      return replyPublic(interaction, {
-        content: `⏳ Please wait **${mins}m ${secs}s** before opening another loot box.`,
-      });
+      // Private, like every other refusal, and a live countdown rather than
+      // a figure that is wrong a second after it is read.
+      return replyPrivate(interaction, `⏳ The next box opens ${relativeStamp(remaining)}.`);
     }
 
     // Define rarities with weights, embed colors, reward ranges
@@ -96,8 +100,6 @@ module.exports = {
     // Save cooldown to database (persistent across bot restarts)
     await setUserCooldown(userId, 'gacha', cooldownMs);
 
-    const nextMins = Math.floor(cooldownMs / 1000 / 60);
-    const nextSecs = Math.floor((cooldownMs / 1000) % 60);
 
     logger.info('Gacha loot box opened', {
       userId,
@@ -123,10 +125,10 @@ module.exports = {
     const embed = new EmbedBuilder()
       .setTitle(`${emoji} ${chosen.name} Loot Box`)
       .setColor(chosen.color)
-      .setDescription(`You won **$${reward}**!\nYour new balance is **$${updated}**.`)
+      .setDescription(`**${money(reward)}** inside. Balance ${money(updated)}.`)
       .addFields({
-        name: 'Next Loot Box',
-        value: `Available in **${nextMins}m ${nextSecs}s**`,
+        name: 'Next box',
+        value: relativeStamp(cooldownMs),
         inline: false
       });
 

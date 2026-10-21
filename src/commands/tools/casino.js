@@ -22,14 +22,10 @@ const { ui, retireControls } = require('../../utils/ui/panel');
 const { promptModal } = require('../../utils/panelHelpers');
 const { isOwner, OWNER_REJECTION_JOKES, EMBED_COLORS } = require('../../utils/constants');
 const logger = require('../../utils/logger');
+const { money, signedMoney: signed } = require('../../utils/money');
+const { NOT_YOUR_PANEL } = require('../../utils/gameHelpers');
 
 const PANEL_TIMEOUT_MS = 300_000;
-
-const money = n => `$${Number(n).toLocaleString()}`;
-function signed(n) {
-    const v = Number(n);
-    return `${v > 0 ? '+' : v < 0 ? '-' : ''}$${Math.abs(v).toLocaleString()}`;
-}
 
 const GAME_LABELS = Object.freeze({
     blackjack: '🃏 Blackjack',
@@ -226,7 +222,7 @@ async function renderConfig(interaction) {
     collector.on('collect', async i => {
         try {
             if (i.user.id !== interaction.user.id) {
-                return i.reply({ content: 'Not your panel.', flags: MessageFlags.Ephemeral });
+                return i.reply({ content: NOT_YOUR_PANEL, flags: MessageFlags.Ephemeral });
             }
 
             if (i.customId === 'cas_heckle_toggle') {

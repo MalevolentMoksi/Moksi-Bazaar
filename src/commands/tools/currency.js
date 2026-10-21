@@ -3,6 +3,7 @@ const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getBalance, adjustBalance, getTopBalances } = require('../../utils/db');
 const { ackPublic, replyPublic, replyPrivate } = require('../../utils/interactionAck');
 const { ui } = require('../../utils/ui/panel');
+const { money } = require('../../utils/money');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -31,19 +32,19 @@ module.exports = {
     if (sub === 'beg') {
       const bal = await getBalance(userId);
       if (bal > 0) {
-        return replyPrivate(interaction, `${mention}, nice try, but you still have $${bal}! You can only beg when you’re flat broke.`);
+        return replyPrivate(interaction, `${mention}, nice try, but you still have ${money(bal)}. You can only beg when you’re flat broke.`);
       }
       const amount = Math.floor(Math.random() * 10000) + 1;
       // Added, not assigned. Writing an absolute figure computed from a read
       // taken moments earlier discards anything that landed in between: a
       // daily claim, a payout, a gift.
       const balance = await adjustBalance(userId, amount);
-      return replyPublic(interaction, `${mention}, a benevolent stranger dropped $${amount} in your lap. Your new balance is $${(balance ?? amount).toLocaleString()}.`);
+      return replyPublic(interaction, `${mention}, a benevolent stranger dropped ${money(amount)} in your lap. Your new balance is ${money(balance ?? amount)}.`);
     }
 
     if (sub === 'balance') {
       const bal = await getBalance(userId);
-      return replyPublic(interaction, `${mention}, your current balance is $${bal}.`);
+      return replyPublic(interaction, `${mention}, your current balance is ${money(bal)}.`);
     }
 
     if (sub === 'leaderboard') {
@@ -83,7 +84,7 @@ module.exports = {
           board
             .map(({ id, balance }, i) => {
               const rank = rankEmojis[i] || `**${i + 1}.**`;
-              return `${rank} <@${id}>: $${balance.toLocaleString()}`;
+              return `${rank} <@${id}>: ${money(balance)}`;
             })
             .join('\n')
         )

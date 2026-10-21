@@ -8,6 +8,38 @@ const logger = require('./logger');
 const { getBalance, placeStake, settleStakes } = require('./db');
 const { getBetLimits } = require('./casinoConfig');
 const { GAME_CONFIG } = require('./constants');
+const { money, resolveAmount, isRelative } = require('./money');
+
+/**
+ * What someone sees when they press the buttons on somebody else's game.
+ * There were eight wordings of this; the useful part, which only /tetris
+ * said, is where to get your own.
+ * @param {string} command the slash command that starts one, without the slash
+ */
+function notYourTable(command) {
+    return `Not your table. \`/${command}\` gets you your own.`;
+}
+
+/** The same, for a panel or a menu, where there is nothing of your own to start. */
+const NOT_YOUR_PANEL = 'Not your panel.';
+
+/**
+ * Dollars for a parsed bet. Fixed amounts pass straight through; all, half
+ * and max need the balance, and max also needs the house ceiling. Read after
+ * the interaction is acknowledged, never before.
+ *
+ * @param {string} userId
+ * @param {{kind: string, value?: number}} spec from money.parseAmount
+ * @returns {Promise<number>}
+ */
+async function resolveBet(userId, spec) {
+    if (!isRelative(spec)) return spec?.value ?? 0;
+    const [balance, house] = await Promise.all([
+        getBalance(userId),
+        getBetLimits().catch(() => ({ min: 1, max: Infinity })),
+    ]);
+    return resolveAmount(spec, balance, { maxBet: Number.isFinite(house.max) ? house.max : 0 });
+}
 
 /**
  * A game's running debt to a player: money already taken, not yet resolved.
@@ -76,20 +108,24 @@ async function deductBet(userId, betAmount, options = {}) {
     const maxBet = options.maxBet ?? house.max;
 
     if (!Number.isFinite(betAmount) || Math.floor(betAmount) !== betAmount) {
-      return { success: false, error: 'Bets have to be whole dollars' };
+      return { success: false, error: 'Bets have to be whole dollars.' };
+    }
+
+    if (betAmount < 1) {
+      return { success: false, error: 'That comes to nothing. Bet something you have.' };
     }
 
     if (betAmount < minBet) {
       return {
         success: false,
-        error: `Minimum bet is $${minBet.toLocaleString()}`,
+        error: `The minimum bet is ${money(minBet)}.`,
       };
     }
 
     if (betAmount > maxBet) {
       return {
         success: false,
-        error: `Maximum bet is $${maxBet.toLocaleString()}`,
+        error: `The maximum bet is ${money(maxBet)}.`,
       };
     }
 
@@ -101,7 +137,7 @@ async function deductBet(userId, betAmount, options = {}) {
       const balance = await getBalance(userId);
       return {
         success: false,
-        error: `Insufficient funds. You have $${balance}, but bet is $${betAmount}`,
+        error: `You have ${money(balance)}. That does not cover ${money(betAmount)}.`,
       };
     }
 
@@ -120,7 +156,7 @@ async function deductBet(userId, betAmount, options = {}) {
     logger.error('Error deducting bet', { userId, betAmount, error: error.message });
     return {
       success: false,
-      error: 'An error occurred while processing your bet',
+      error: 'That bet did not go through. Nothing was taken; try again.',
     };
   }
 }
@@ -139,15 +175,15 @@ function validateBetAmount(amount, balance, minBet = 1, maxBet = Infinity) {
   }
 
   if (amount < minBet) {
-    return { valid: false, error: `Minimum bet is $${minBet}` };
+    return { valid: false, error: `The minimum bet is ${money(minBet)}.` };
   }
 
   if (amount > maxBet) {
-    return { valid: false, error: `Maximum bet is $${maxBet}` };
+    return { valid: false, error: `The maximum bet is ${money(maxBet)}.` };
   }
 
   if (amount > balance) {
-    return { valid: false, error: `You only have $${balance}` };
+    return { valid: false, error: `You have ${money(balance)}.` };
   }
 
   return { valid: true };
@@ -174,7 +210,7 @@ async function createPlayAgainCollector(message, userId, callback, options = {})
     // Verify button interaction is from the original user
     if (i.user.id !== userId) {
       return i.reply({
-        content: 'This is not your game!',
+        content: NOT_YOUR_PANEL,
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -265,6 +301,9 @@ function calculateBlackjackTotal(cards) {
 module.exports = {
   createStake,
   deductBet,
+  resolveBet,
+  notYourTable,
+  NOT_YOUR_PANEL,
   validateBetAmount,
   createPlayAgainCollector,
   createPlayAgainButtons,
