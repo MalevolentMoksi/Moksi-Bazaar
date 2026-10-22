@@ -74,11 +74,15 @@ const DEFAULTS = Object.freeze({
     escalate_enabled: false,
     escalate_after_attempts: 3,
     log_channel_id: null,
+    log_age_kick_channel_id: null,
     log_kick_channel_id: null,
+    log_lift_channel_id: null,
     log_failure_channel_id: null,
     log_preview_channel_id: null,
     log_config_channel_id: null,
+    log_age_kicks: true,
     log_kicks: true,
+    log_lifts: true,
     log_failures: true,
     log_previews: true,
     log_config: true,
@@ -184,9 +188,9 @@ const WRITABLE_COLUMNS = new Set([
     'dm_enabled', 'dm_message', 'dm_ban_message', 'dm_append_eligible', 'dm_append_invite',
     'dm_invite_url', 'dm_cooldown_minutes',
     'escalate_enabled', 'escalate_after_attempts',
-    'log_channel_id', 'log_kick_channel_id', 'log_failure_channel_id',
-    'log_preview_channel_id', 'log_config_channel_id',
-    'log_kicks', 'log_failures', 'log_previews', 'log_config',
+    'log_channel_id', 'log_age_kick_channel_id', 'log_kick_channel_id', 'log_lift_channel_id',
+    'log_failure_channel_id', 'log_preview_channel_id', 'log_config_channel_id',
+    'log_age_kicks', 'log_kicks', 'log_lifts', 'log_failures', 'log_previews', 'log_config',
     'burst_alert_enabled', 'burst_threshold', 'burst_window_seconds', 'burst_count_all_joins',
     'sweep_enabled', 'sweep_window_hours',
     'suspicion_enabled', 'suspicion_watch_at', 'suspicion_suspect_at', 'suspicion_malicious_at',
@@ -242,8 +246,26 @@ function ensureColumns() {
             ADD COLUMN IF NOT EXISTS dm_suspicion_message  TEXT,
             ADD COLUMN IF NOT EXISTS dm_watch_message      TEXT,
             ADD COLUMN IF NOT EXISTS false_positive_role_ids TEXT[],
-            ADD COLUMN IF NOT EXISTS burst_count_all_joins BOOLEAN NOT NULL DEFAULT false`
-    ).catch(error => {
+            ADD COLUMN IF NOT EXISTS burst_count_all_joins BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS log_age_kick_channel_id TEXT,
+            ADD COLUMN IF NOT EXISTS log_lift_channel_id   TEXT,
+            ADD COLUMN IF NOT EXISTS log_age_kicks         BOOLEAN,
+            ADD COLUMN IF NOT EXISTS log_lifts             BOOLEAN`
+    ).then(() => pool.query(
+        // Both used to be governed by log_kicks. Added nullable and filled
+        // from it, so a server that had kick logging off does not start
+        // getting age kicks and lifts the moment the split ships.
+        `UPDATE join_gate_settings
+            SET log_age_kicks = COALESCE(log_age_kicks, log_kicks),
+                log_lifts     = COALESCE(log_lifts, log_kicks)
+            WHERE log_age_kicks IS NULL OR log_lifts IS NULL`
+    )).then(() => pool.query(
+        `ALTER TABLE join_gate_settings
+            ALTER COLUMN log_age_kicks SET DEFAULT true,
+            ALTER COLUMN log_age_kicks SET NOT NULL,
+            ALTER COLUMN log_lifts     SET DEFAULT true,
+            ALTER COLUMN log_lifts     SET NOT NULL`
+    )).catch(error => {
         columnsEnsured = null;
         throw error;
     });

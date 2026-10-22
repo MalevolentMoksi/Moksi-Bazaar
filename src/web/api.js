@@ -34,7 +34,9 @@ const TOGGLES = Object.freeze({
     dm_append_eligible: 'DM: append eligibility date',
     dm_append_invite: 'DM: append rejoin invite',
     escalate_enabled: 'Escalate repeat rejoins to temp-ban',
-    log_kicks: 'Log kicks',
+    log_age_kicks: 'Log age kicks',
+    log_kicks: 'Log temp-bans',
+    log_lifts: 'Log ban lifts',
     log_failures: 'Log failures',
     log_previews: 'Log previews',
     log_config: 'Log config changes',
@@ -57,7 +59,9 @@ const TOGGLES = Object.freeze({
 /** Where a picked channel may land. */
 const CHANNEL_COLUMNS = Object.freeze({
     log_channel_id: 'Default log channel',
-    log_kick_channel_id: 'Kick log channel',
+    log_age_kick_channel_id: 'Age kick log channel',
+    log_kick_channel_id: 'Temp-ban log channel',
+    log_lift_channel_id: 'Ban lift log channel',
     log_failure_channel_id: 'Failure log channel',
     log_preview_channel_id: 'Preview log channel',
     log_config_channel_id: 'Config log channel',

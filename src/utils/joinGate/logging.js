@@ -2,11 +2,16 @@
 /**
  * Join Gate: log routing.
  *
- * Four independent categories, each with its own optional channel and its own
+ * Independent categories, each with its own optional channel and its own
  * on/off switch. A category with no channel of its own falls back to the
  * default log channel, so "kicks and failures in the same place" is just
  * leaving both overrides unset, while "failures to staff, kicks to audit"
  * is setting two overrides.
+ *
+ * Age kicks and ban lifts were split out of what used to be "Kicks & bans"
+ * because they arrive several a day and buried the temp-bans. Unset, each
+ * still follows the temp-ban channel before the default one, so the split
+ * moved nothing until somebody picked a channel for it.
  *
  * Nothing in here is allowed to throw. A broken log channel must never stop
  * the gate from doing its job.
@@ -21,7 +26,10 @@ const { formatDays, DAY_MS } = require('./config');
 const { PALETTE } = require('../constants');
 
 const CATEGORIES = {
-    kick: { channelKey: 'log_kick_channel_id', toggleKey: 'log_kicks', label: 'Kicks & bans' },
+    ageKick: { channelKey: 'log_age_kick_channel_id', toggleKey: 'log_age_kicks', label: 'Age kicks', fallsBackTo: 'kick' },
+    // Keyed `kick` (and stored as log_kick_*) from when it held every removal.
+    kick: { channelKey: 'log_kick_channel_id', toggleKey: 'log_kicks', label: 'Temp-bans' },
+    lift: { channelKey: 'log_lift_channel_id', toggleKey: 'log_lifts', label: 'Ban lifts', fallsBackTo: 'kick' },
     failure: { channelKey: 'log_failure_channel_id', toggleKey: 'log_failures', label: 'Failures' },
     preview: { channelKey: 'log_preview_channel_id', toggleKey: 'log_previews', label: 'Dry-run previews' },
     config: { channelKey: 'log_config_channel_id', toggleKey: 'log_config', label: 'Config changes' },
@@ -105,6 +113,24 @@ function isAside(field) {
 }
 
 /**
+ * Where a category's entries land before permissions are checked: its own
+ * override, then the override of the category it falls back to, then the
+ * default channel. `inheritedFrom` names the middle case, so the panel can
+ * say why an unset category is not going to the default.
+ */
+function routeOf(settings, category) {
+    const meta = CATEGORIES[category] ?? CATEGORIES.failure;
+    const overrideId = settings[meta.channelKey] || null;
+    if (overrideId) return { overrideId, effectiveId: overrideId, inheritedFrom: null };
+
+    const parent = meta.fallsBackTo ? CATEGORIES[meta.fallsBackTo] : null;
+    const parentId = parent ? settings[parent.channelKey] : null;
+    if (parentId) return { overrideId: null, effectiveId: parentId, inheritedFrom: parent.label };
+
+    return { overrideId: null, effectiveId: settings.log_channel_id || null, inheritedFrom: null };
+}
+
+/**
  * Resolves the channel a category should be written to, or null.
  * Only channels inside the same guild are ever considered; a stale ID from
  * another server must not become a leak.
@@ -115,7 +141,7 @@ async function resolveChannel(guild, settings, category) {
     const meta = CATEGORIES[category] ?? CATEGORIES.failure;
     if (settings[meta.toggleKey] === false) return null;
 
-    const channelId = settings[meta.channelKey] || settings.log_channel_id;
+    const channelId = routeOf(settings, category).effectiveId;
     if (!channelId) return null;
 
     const channel = guild.channels.cache.get(channelId)
@@ -137,14 +163,11 @@ async function resolveChannel(guild, settings, category) {
 async function describeRouting(guild, settings) {
     const out = {};
     for (const [category, meta] of Object.entries(CATEGORIES)) {
-        const overrideId = settings[meta.channelKey];
-        const effectiveId = overrideId || settings.log_channel_id;
         const channel = await resolveChannel(guild, settings, category);
         out[category] = {
             label: meta.label,
             enabled: settings[meta.toggleKey] !== false,
-            overrideId,
-            effectiveId,
+            ...routeOf(settings, category),
             usable: Boolean(channel),
         };
     }
@@ -195,7 +218,7 @@ function returnLine(decision, result, dryRun) {
 /**
  * Reports the outcome of a single evaluated member.
  * Dry-run outcomes go to the preview category; everything else splits between
- * kick and failure so the two can live in different channels.
+ * age kicks, temp-bans and failures so each can live in its own channel.
  *
  * Read top to bottom it answers, in order: what happened, to whom, on what
  * grounds, what happens next, and only then the paperwork.
@@ -209,9 +232,15 @@ function outcomeEmbed(settings, entry) {
 
     // "The member already left" is not a failure worth putting in a staff
     // channel; it is the gate discovering it had nothing left to do. Route it
-    // with the normal outcomes so the failure channel stays meaningful.
+    // with the routine kicks so the failure channel stays meaningful.
+    // A temp-ban is the rare outcome staff actually read, so it is the only
+    // success that keeps a channel of its own.
     const benign = !result.ok && result.benign;
-    const category = dryRun ? 'preview' : (result.ok || benign ? 'kick' : 'failure');
+    let category;
+    if (dryRun) category = 'preview';
+    else if (result.ok && result.action === 'ban') category = 'kick';
+    else if (result.ok || benign) category = 'ageKick';
+    else category = 'failure';
 
     let headline;
     let color;
@@ -569,7 +598,7 @@ async function logUnban(guild, settings, { userId, bannedAtMs, ok, error }) {
         .addFields(aside(`banned <t:${toUnix(bannedAtMs)}:R>`))
         .setTimestamp();
 
-    return send(guild, settings, ok ? 'kick' : 'failure', ui(embed, [], { scope: 'mod' }));
+    return send(guild, settings, ok ? 'lift' : 'failure', ui(embed, [], { scope: 'mod' }));
 }
 
 /**
@@ -595,11 +624,12 @@ async function logSupersededUnban(guild, settings, { userId, cause }) {
                 + 'Nothing left to schedule.')
         .setTimestamp();
 
-    return send(guild, settings, 'kick', ui(embed, [], { scope: 'mod' }));
+    return send(guild, settings, 'lift', ui(embed, [], { scope: 'mod' }));
 }
 
 module.exports = {
     CATEGORIES,
+    routeOf,
     resolveChannel,
     describeRouting,
     logOutcome,

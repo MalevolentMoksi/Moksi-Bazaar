@@ -34,7 +34,7 @@ const { describeShape } = require('../../utils/joinGate/cohorts');
 const { sendSnapshot, resolveChannel: resolveSnapshotChannel } = require('../../utils/joinGate/snapshot');
 const { stats: phishingStats, startAutoRefresh: startPhishingRefresh } = require('../../utils/joinGate/phishing');
 const { syncGuild: syncInvites, canRead: canReadInvites } = require('../../utils/joinGate/invites');
-const { describeRouting, logConfigChange, logTest, CATEGORIES } = require('../../utils/joinGate/logging');
+const { describeRouting, logConfigChange, logTest, CATEGORIES, routeOf } = require('../../utils/joinGate/logging');
 const { getPendingUnbans, deletePendingUnban, recomputePendingUnbans, scheduleNext } =
     require('../../utils/joinGate/unbanScheduler');
 const { checkGuildHealth } = require('../../utils/joinGate/diagnostics');
@@ -370,6 +370,14 @@ function logCategoryMeta(activeCategory) {
     return { ...CATEGORIES[activeCategory], isDefault: false };
 }
 
+/** The "Currently" line for a real category: its own channel, or what it borrows. */
+function currentTarget(settings, category) {
+    const route = routeOf(settings, category);
+    if (route.overrideId) return channelRef(route.overrideId);
+    if (route.inheritedFrom) return `*same as ${route.inheritedFrom}* (${channelRef(route.effectiveId)})`;
+    return '*default channel*';
+}
+
 function renderSuspicion(settings) {
     const actionLabel = a => ({
         log: '📝 log only', timeout: '🔇 timeout', kick: '👢 kick',
@@ -688,9 +696,10 @@ function renderLogging(settings, routing, activeCategory, guild) {
     const markRolesLive = markRoles.filter(id => guild?.roles?.cache?.has(id));
 
     const lines = Object.values(routing).map((info) => {
-        const target = info.overrideId
-            ? channelRef(info.overrideId)
-            : (settings.log_channel_id ? `${channelRef(settings.log_channel_id)} *(default)*` : '*nowhere*');
+        let target;
+        if (info.overrideId) target = channelRef(info.overrideId);
+        else if (info.inheritedFrom) target = `${channelRef(info.effectiveId)} *(same as ${info.inheritedFrom})*`;
+        else target = settings.log_channel_id ? `${channelRef(settings.log_channel_id)} *(default)*` : '*nowhere*';
         const state = !info.enabled ? '⚪ off' : info.usable ? '🟢' : '⚠️ unreachable';
         return `${state} **${info.label}** → ${target}`;
     });
@@ -712,7 +721,7 @@ function renderLogging(settings, routing, activeCategory, guild) {
                 value: meta.isDefault
                     ? `Fallback for every category without its own channel → ${channelRef(settings.log_channel_id)}`
                     : `${settings[meta.toggleKey] ? '🟢 logged' : '⚪ not logged'} → `
-                      + `${settings[meta.channelKey] ? channelRef(settings[meta.channelKey]) : '*default channel*'}`,
+                      + currentTarget(settings, activeCategory),
                 inline: false,
             },
             {

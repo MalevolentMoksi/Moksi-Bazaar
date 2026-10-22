@@ -297,14 +297,18 @@ function renderLogging(s, channels) {
     return card({
         title: 'Logging',
         body: html`
-            ${toggle('log_kicks', 'Log kicks', s.log_kicks)}
+            ${toggle('log_age_kicks', 'Log age kicks', s.log_age_kicks)}
+            ${toggle('log_kicks', 'Log temp-bans', s.log_kicks)}
+            ${toggle('log_lifts', 'Log ban lifts', s.log_lifts)}
             ${toggle('log_failures', 'Log failures', s.log_failures)}
             ${toggle('log_previews', 'Log previews', s.log_previews)}
             ${toggle('log_config', 'Log config changes', s.log_config)}
             ${toggle('invite_tracking_enabled', 'Invite attribution', s.invite_tracking_enabled, 'record which invite each joiner arrived through')}
             <div class="field-row">
                 ${channelForm('log_channel_id', 'Default log channel', s.log_channel_id, channels)}
-                ${channelForm('log_kick_channel_id', 'Kick log', s.log_kick_channel_id, channels)}
+                ${channelForm('log_age_kick_channel_id', 'Age kick log', s.log_age_kick_channel_id, channels)}
+                ${channelForm('log_kick_channel_id', 'Temp-ban log', s.log_kick_channel_id, channels)}
+                ${channelForm('log_lift_channel_id', 'Ban lift log', s.log_lift_channel_id, channels)}
                 ${channelForm('log_failure_channel_id', 'Failure log', s.log_failure_channel_id, channels)}
                 ${channelForm('log_preview_channel_id', 'Preview log', s.log_preview_channel_id, channels)}
                 ${channelForm('log_config_channel_id', 'Config log', s.log_config_channel_id, channels)}
