@@ -57,8 +57,8 @@ async function restoreGuild(guild, settings, { now = Date.now() } = {}) {
     try {
         // One fetch per guild per boot. There is no "members who joined
         // recently" endpoint, so the whole list is the only way to ask, and
-        // the catch-up sweep already pays the same price when it is enabled.
-        members = await guild.members.fetch();
+        // the catch-up sweep right after reuses what this fills.
+        members = await enforcement.fetchAllMembers(guild);
     } catch (error) {
         logger.warn('[JOIN-GATE] Restore could not read the member list', {
             guildId: guild.id, error: error.message,

@@ -331,3 +331,42 @@ describe('a boot that goes wrong', () => {
         expect(totals.guilds).toBe(2);
     });
 });
+
+describe('the member list at boot', () => {
+    // Discord answers one full member request per guild every 30 seconds.
+    // Restore and the catch-up sweep both asked, back to back, so on
+    // 2026-10-23 the sweep was refused ("opcode 8 was rate limited") and
+    // anyone who joined while the bot was down went unswept.
+    const { Collection } = require('discord.js');
+    const { fetchAllMembers } = require('../src/utils/joinGate/enforcement');
+
+    const guildCaching = (cached, memberCount) => ({
+        memberCount,
+        members: {
+            cache: new Collection(cached.map(m => [m.id, m])),
+            fetch: jest.fn(async () => new Collection()),
+        },
+    });
+
+    test('a cache already holding everyone answers without asking Discord', async () => {
+        const guild = guildCaching([member('u1', 1), member('u2', 2)], 2);
+        const members = await fetchAllMembers(guild);
+
+        expect(guild.members.fetch).not.toHaveBeenCalled();
+        expect([...members.keys()]).toEqual(['u1', 'u2']);
+        // A copy, so a kick mid-sweep cannot reshape the list being walked.
+        expect(members).not.toBe(guild.members.cache);
+    });
+
+    test('a partial cache still fetches', async () => {
+        const guild = guildCaching([member('u1', 1)], 40);
+        await fetchAllMembers(guild);
+        expect(guild.members.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('an unknown member count never trusts the cache', async () => {
+        const guild = guildCaching([], 0);
+        await fetchAllMembers(guild);
+        expect(guild.members.fetch).toHaveBeenCalledTimes(1);
+    });
+});

@@ -34,10 +34,11 @@ RUN corepack enable && corepack prepare pnpm@9 --activate
 # Copy lockfile + manifest first for better layer caching
 COPY package.json pnpm-lock.yaml .npmrc ./
 
-# Install production dependencies.
-# --no-frozen-lockfile is intentional: pnpm-lock.yaml was generated on Windows,
-# so platform-specific packages (sharp) must be resolved for Linux at build time.
-RUN pnpm install --prod --no-frozen-lockfile
+# Install production dependencies, exactly as locked. The lockfile already
+# lists sharp's Linux binaries next to the Windows ones, so nothing needs
+# resolving here; re-resolving would ship whatever was published since the
+# last local install, unreviewed.
+RUN pnpm install --prod --frozen-lockfile
 
 # Copy the rest of the source
 COPY . .

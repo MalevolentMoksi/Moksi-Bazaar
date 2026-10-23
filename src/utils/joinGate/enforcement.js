@@ -1407,6 +1407,22 @@ async function handleAutoModAction(execution) {
  *
  * @returns {Promise<{scanned: number, gated: number, skipped?: string}>}
  */
+/**
+ * The whole member list, fetched at most once while the cache can answer.
+ *
+ * Discord allows one full member request per guild every 30 seconds, and boot
+ * asks twice in a row (restore, then sweep), so the second ask used to be
+ * refused. Once a fetch has filled the cache, the GuildMembers intent keeps it
+ * current, and a cache as large as the member count is the list itself.
+ */
+async function fetchAllMembers(guild) {
+    const cache = guild.members.cache;
+    if (cache && guild.memberCount > 0 && cache.size >= guild.memberCount) {
+        return cache.clone();
+    }
+    return guild.members.fetch();
+}
+
 async function sweepGuild(client, guildId) {
     const settings = await getSettings(guildId, { fresh: true });
     if (!settings.enabled || !settings.sweep_enabled) {
@@ -1424,10 +1440,13 @@ async function sweepGuild(client, guildId) {
 
     let members;
     try {
-        members = await guild.members.fetch();
+        members = await fetchAllMembers(guild);
     } catch (error) {
         logger.error('[JOIN-GATE] Sweep member fetch failed', { guildId, error: error.message });
-        return { scanned: 0, gated: 0, skipped: 'member fetch failed (is the GuildMembers intent on?)' };
+        const skipped = error.name === 'GatewayRateLimitError'
+            ? 'member fetch rate limited by Discord'
+            : 'member fetch failed (is the GuildMembers intent on?)';
+        return { scanned: 0, gated: 0, skipped };
     }
 
     const cutoff = Date.now() - Number(settings.sweep_window_hours) * 3_600_000;
@@ -1463,7 +1482,7 @@ async function sweepGuild(client, guildId) {
 async function backtestGuild(guild, settings, { limit = 25, applyTenure = false } = {}) {
     let members;
     try {
-        members = await guild.members.fetch();
+        members = await fetchAllMembers(guild);
     } catch (error) {
         return { scanned: 0, distribution: {}, flagged: [], skipped: `member fetch failed: ${error.message}` };
     }
@@ -1576,6 +1595,7 @@ module.exports = {
     handleAutoModAction,
     sweepGuild,
     backtestGuild,
+    fetchAllMembers,
     collectProtectedNames,
     // Exported for /lookup, which reads the counter without touching it.
     peekAttempt,
